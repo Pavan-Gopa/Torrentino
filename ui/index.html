@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Torrentino</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⛆</span>
+      <span class="title">Torrentino</span>
+    </div>
+    <div class="folder-row">
+      <span id="folder-label" class="folder-label">Saving to: …</span>
+      <button id="change-folder" class="btn ghost" title="Choose download folder">Change…</button>
+    </div>
+  </header>
+
+  <section class="addbar">
+    <input id="input" type="text" spellcheck="false"
+           placeholder="Paste a magnet link or torrent URL…" />
+    <button id="add" class="btn primary">Add</button>
+    <button id="add-file" class="btn ghost" title="Pick a .torrent file">File…</button>
+  </section>
+
+  <main id="list" class="list">
+    <div id="empty" class="empty">No torrents yet — add one above.</div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

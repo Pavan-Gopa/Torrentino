@@ -1,0 +1,36 @@
+[package]
+name = "torrentino"
+version = "0.1.0"
+edition = "2021"
+description = "A small, fast and customizable BitTorrent client (powered by librqbit)"
+license = "MIT OR Apache-2.0"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Torrent engine (DHT, PEX, uTP, magnet, encryption, streaming)
+librqbit = "8.1"
+# GUI framework (native window + webview)
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+# Async runtime (sync primitives used to bridge native dialogs)
+tokio = { version = "1", features = ["sync"] }
+# Config / serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Errors
+anyhow = "1"
+# Paths (~, config dir)
+dirs = "5"
+# Logging
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
