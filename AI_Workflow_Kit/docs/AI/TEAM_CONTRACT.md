@@ -57,22 +57,24 @@ Human ↔ Orchestrator only (control plane)
 
 ## Hard rules
 
-1. Keep project **buildable/testable** every step (`xcodebuild build` / `xcodebuild test`).
-2. **One WP at a time.** No skipping stop-gates.
-3. Diff **only** in `STATE.yaml` → `target_files`.
-4. Communication between agents **via files only**.
-5. No silent architecture redesign by Coder.
-6. No fake data / fake states in production code.
-7. Legacy code (`Legacy/Tauri/`) is **frozen** — never modify.
-8. **Never** `git add -A` on a parent directory outside Torrentino.
-9. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
-10. **Readable, well-commented code** — see § Comments below.
-11. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
-12. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
-13. Swift 6 strict concurrency: `Complete` с первого пакета.
-14. Никаких disk/network/DB/hash operations на `MainActor`.
-15. C++ pointer не пересекает actor boundary.
-16. UI не является источником истины.
+1. **Graphify first.** Каждый агент ПЕРЕД началом работы выполняет `graphify query` для получения контекста. Не читать файлы вслепую.
+2. **Graphify update.** Оркестратор обновляет граф (`/graphify . --update`) в конце каждого цикла (после POST-чекпоинта, до PRE следующего WP).
+3. Keep project **buildable/testable** every step (`xcodebuild build` / `xcodebuild test`).
+4. **One WP at a time.** No skipping stop-gates.
+5. Diff **only** in `STATE.yaml` → `target_files`.
+6. Communication between agents **via files only**.
+7. No silent architecture redesign by Coder.
+8. No fake data / fake states in production code.
+9. Legacy code (`Legacy/Tauri/`) is **frozen** — never modify.
+10. **Never** `git add -A` on a parent directory outside Torrentino.
+11. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
+12. **Readable, well-commented code** — see § Comments below.
+13. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
+14. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
+15. Swift 6 strict concurrency: `Complete` с первого пакета.
+16. Никаких disk/network/DB/hash operations на `MainActor`.
+17. C++ pointer не пересекает actor boundary.
+18. UI не является источником истины.
 
 ## Comments (mandatory quality bar)
 

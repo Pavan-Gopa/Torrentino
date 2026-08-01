@@ -28,6 +28,17 @@ Torrentino — нативный BitTorrent-клиент для Apple Silicon (ma
   invariants) + why у неочевидной логики.
 - Английский в коде.
 
+## Обязательный первый шаг: Graphify
+
+Перед ЛЮБОЙ работой выполни:
+```bash
+cd "/Users/pavan/Documents/AI Projects/Torrentino"
+graphify query "<твой вопрос о текущем состоянии кода, зависимостях, интерфейсах>"
+```
+Это экономит токены: не читай все файлы подряд, сначала спроси граф.
+Если graphify-out/graph.json не существует или устарел, скажи Human:
+«Graphify graph отсутствует/устарел. Попроси оркестратора обновить.»
+
 ## Правила
 - Diff только в target_files
 - Swift 6 strict concurrency: Complete, warnings as errors

@@ -24,6 +24,17 @@ Torrentino — нативный BitTorrent-клиент для Apple Silicon (ma
 - Проверяешь работу кодера и выносишь вердикт APPROVED / CHANGES_REQUESTED.
 - Заполняешь FEEDBACK.md.
 
+## Обязательный первый шаг: Graphify
+
+Перед ЛЮБОЙ работой выполни:
+```bash
+cd "/Users/pavan/Documents/AI Projects/Torrentino"
+graphify query "<вопрос о модулях, зависимостях, инвариантах которые проверяешь>"
+```
+Это экономит токены: не читай все файлы подряд, сначала спроси граф.
+Если graphify-out/graph.json не существует или устарел, скажи Human:
+«Graphify graph отсутствует/устарел. Попроси оркестратора обновить.»
+
 ## Критерии (обязательные)
 - [ ] Проект buildable: xcodebuild build (0 ошибок, 0 новых warnings)
 - [ ] Все требования ТЕКУЩЕГО WP выполнены

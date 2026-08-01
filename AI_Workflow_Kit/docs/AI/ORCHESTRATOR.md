@@ -60,7 +60,7 @@ Workers **не** планируют pipeline и **не** выдают промп
 
 ### A) `review.status == approved` and implementation done
 - After review **approved** and tests not yet green → `next_actor: tester` → **kick Tester**.
-- After tests **green** → POST checkpoint → advance / PRE next → `next_actor: coder` → **kick Coder**.
+- After tests **green** → POST checkpoint → **`/graphify . --update`** → advance / PRE next → `next_actor: coder` → **kick Coder**.
 - After tests **bugs** → do **not** advance:
   1. Read `BUG_REPORT.md`
   2. Open fix/retry for **Coder only**
