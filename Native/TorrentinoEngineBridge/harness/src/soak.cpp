@@ -86,13 +86,16 @@ std::int64_t run_cycle(LocalSwarm& swarm, const fs::path& root, std::uint64_t it
 		throw AssertionFailure(cat("iteration ", iteration, ": downloaded ", finished.total_done,
 			" of ", torrent.total_size));
 	}
+	// Resume round-trip on live data: this is the operation the agent performs on
+	// every checkpoint, so it is the one most likely to leak or corrupt.
+	// `save_resume_data` issues `lt::torrent_handle::flush_disk_cache`, forcing libtorrent's
+	// async disk thread to flush all written piece blocks from memory/queue to disk before
+	// returning save_resume_data_alert. We must save resume data BEFORE verifying
+	// sha256_file_hex so that standard C++ file I/O does not race with un-flushed disk writes.
+	const std::vector<char> resume = save_resume_data(swarm.leecher(), leech, timeout);
 	if (sha256_file_hex(leech_dir / torrent.name) != torrent.payload_sha256) {
 		throw AssertionFailure(cat("iteration ", iteration, ": payload digest mismatch"));
 	}
-
-	// Resume round-trip on live data: this is the operation the agent performs on
-	// every checkpoint, so it is the one most likely to leak or corrupt.
-	const std::vector<char> resume = save_resume_data(swarm.leecher(), leech, timeout);
 	remove_torrent_keep_files(swarm.leecher(), leech, timeout);
 	lt::error_code parse_ec;
 	lt::add_torrent_params restored = lt::read_resume_data(resume, parse_ec);

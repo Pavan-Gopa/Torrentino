@@ -8,20 +8,20 @@ target_files:
 completed_steps:
 - WP-00
 implementation:
-  status: done
-  attempts: 1
+  status: fix
+  attempts: 2
 review:
-  status: pending
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: 'Coder: 11/11 tests, ASan clean, no Homebrew, soak running (24h)'
+  verdict: WAITING_REVIEW
+  note: 'Soak race condition fixed, soak running, unit + sanitizer suites pass.'
 qa:
   status: pending
   last_report: null
   suite: null
   bugs_open: 0
   note: ''
-next_actor: reviewer
+next_actor: orchestrator
 track: FOUNDATION
 prior_track: null
 working_roots:

@@ -59,9 +59,8 @@ start)
 		echo "soak already running (pid $(cat "${PID_FILE}"))"
 		exit 0
 	fi
-	if [[ ! -x "${BINARY}" ]]; then
-		bash "${SCRIPT_DIR}/build_harness.sh" --flavor "${FLAVOR}" --lt-version "${LT_VERSION}"
-	fi
+	# Always build/rebuild harness to ensure latest code changes are compiled
+	bash "${SCRIPT_DIR}/build_harness.sh" --flavor "${FLAVOR}" --lt-version "${LT_VERSION}"
 	mkdir -p "${SOAK_DIR}/work"
 	: > "${LOG_FILE}"
 	# Detach fully: the soak has to survive the terminal that started it.
