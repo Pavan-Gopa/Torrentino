@@ -88,6 +88,6 @@ xcodebuild clean archive \
 ## Git conventions
 
 - Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`
-- Branch: `codex/native-macos` for all native work
+- Branch: `native-macos` for all native work
 - Legacy frozen: never modify `Legacy/Tauri/`
 - One WP per commit series, atomic commits within WP

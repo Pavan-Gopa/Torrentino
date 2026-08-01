@@ -33,4 +33,4 @@ git checkout backup/pre-native-macos-20260801  # полный откат до na
 
 ## Branch
 
-Вся native-работа на ветке `codex/native-macos`.
+Вся native-работа на ветке `native-macos`.

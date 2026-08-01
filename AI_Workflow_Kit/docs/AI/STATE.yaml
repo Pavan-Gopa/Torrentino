@@ -1,14 +1,15 @@
-current_step: WP-00
+current_step: WP-01
 step_description: >-
-  Recovery checkpoint and clean working branch. Commit current state,
-  create backup tag, push off-site, create working branch.
+  libtorrent arm64 bakeoff. Select stable 2.x release, build headless harness,
+  verify core operations, run 24h soak, ASan/UBSan clean.
 target_files:
-- .gitignore
-- AI_Workflow_Kit/docs/AI/STATE.yaml
-completed_steps: []
+- Native/ThirdParty/
+- Native/TorrentinoEngineBridge/
+completed_steps:
+- WP-00
 implementation:
-  status: in_progress
-  attempts: 1
+  status: pending
+  attempts: 0
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -26,13 +27,15 @@ prior_track: null
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: backup/pre-native-macos-20260801
-  last_post_tag: null
-  last_commit: 83ae603
+  last_pre_tag: backup/pre-native-macos-20260801-183912
+  last_post_tag: torrentino/WP-00-done
+  last_commit: null
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-00: Recovery checkpoint. Commit dirty state, create backup tag/branch,
-  add GitHub remote (with owner), push off-site, create codex/native-macos branch.
-  Do NOT fix Tauri code. Do NOT start Native target before off-site backup.
+  WP-01: libtorrent arm64 bakeoff. Select stable libtorrent 2.x, pin exact
+  tag/commit/SHA-256. Build minimal headless arm64 harness proving: add .torrent,
+  magnet metadata, pause/resume, v1/v2/hybrid IDs, save/load resume, session state,
+  clean shutdown, crash restore, torrent creation. Run ASan/UBSan. Verify no
+  Homebrew runtime links. Document license/SBOM draft.
