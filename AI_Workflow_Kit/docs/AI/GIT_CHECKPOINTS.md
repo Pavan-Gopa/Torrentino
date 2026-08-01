@@ -1,30 +1,36 @@
-# Git Checkpoints — DialGent
+# Git Checkpoints — Torrentino
 
 ## Правила
 
 1. **Idempotent** — существующий тег не перезаписывается.
-2. **Scope-guard** — git root должен совпадать с product root (`DialGent/`).
+2. **Scope-guard** — git root = `Torrentino/`.
    `git add -A` на родительскую директорию **запрещён**.
 3. **Push local by default** — только если remote настроен.
 4. **Commit convention:**
-   - PRE: `chore(dialgent): checkpoint before <step>`
-   - POST: `feat(dialgent): <step> — <summary>`
+   - PRE: `chore(torrentino): checkpoint before <WP>`
+   - POST: `feat(torrentino): <WP> — <summary>`
 5. **Full project checkout** — `git add -A` только в product root.
 6. **Tags:**
-   - PRE: `dialgent/pre-<step>` (e.g. `dialgent/pre-F0`)
-   - POST: `dialgent/<step>-done` (e.g. `dialgent/F0-done`)
+   - PRE: `torrentino/pre-<WP>` (e.g. `torrentino/pre-WP-01`)
+   - POST: `torrentino/<WP>-done` (e.g. `torrentino/WP-01-done`)
+   - Backup: `backup/pre-native-macos-<timestamp>`
 
 ## Использование
 
 ```bash
-./AI_Workflow_Kit/script/checkpoint.sh pre F0
-./AI_Workflow_Kit/script/checkpoint.sh post F0 "kit bootstrap complete"
+./AI_Workflow_Kit/script/checkpoint.sh pre WP-01
+./AI_Workflow_Kit/script/checkpoint.sh post WP-01 "libtorrent bakeoff complete"
 ./AI_Workflow_Kit/script/checkpoint.sh list
 ```
 
 ## Восстановление
 
 ```bash
-git checkout dialgent/pre-F0    # откат к началу шага
-git checkout dialgent/F0-done   # откат к концу шага
+git checkout torrentino/pre-WP-01    # откат к началу WP
+git checkout torrentino/WP-01-done   # откат к концу WP
+git checkout backup/pre-native-macos-20260801  # полный откат до native
 ```
+
+## Branch
+
+Вся native-работа на ветке `codex/native-macos`.

@@ -1,9 +1,9 @@
-# Verification Template — DialGent
+# Verification Template — Torrentino
 
 Verification Engineer fills this into `FEEDBACK.md`.
 
-Step: see `STATE.yaml` → `current_step`
-Requirements: `DIALGENT_STEPS.md` (same step)
+WP: see `STATE.yaml` → `current_step`
+Requirements: `TORRENTINO_STEPS.md` (same WP) + plan §WP
 
 ---
 
@@ -12,24 +12,27 @@ Requirements: `DIALGENT_STEPS.md` (same step)
 - Commands run:
 *Comment:*
 
-### 2. Step compliance
-- All requirements of **current** step met?
-- No work from future steps?
+### 2. WP compliance
+- All requirements of **current** WP met?
+- No work from future WPs?
 - `target_files` only?
 *Comment:*
 
-### 3. Product invariants
-- No fake telemetry / fake agent states?
-- Event-log integrity maintained?
-- Packet protocol respected?
-- Frontend prototype not rewritten (only extended)?
+### 3. Architecture invariants
+- Swift 6 strict concurrency Complete?
+- No disk/network/DB/hash on MainActor?
+- C++ types hidden behind PIMPL?
+- DTO immutable/Sendable?
+- UI not source of truth?
+- Legacy/Tauri/ untouched?
+- No Homebrew runtime links?
 *Comment:*
 
 ### 4. Comments & readability
 - New modules/types have a short role header?
 - Non-obvious logic explained with **why** (not restating code)?
-- Async/ownership notes where relevant?
-- Public API types/invariants clear?
+- Actor/concurrency notes where relevant?
+- XPC protocol documented (message format, error handling)?
 - No noisy or outdated comments?
 *Comment:*
 
