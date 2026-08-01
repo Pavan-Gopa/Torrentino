@@ -5,6 +5,7 @@
 #include "torrentino/harness/engine_ops.hpp"
 
 #include <libtorrent/address.hpp>
+#include <libtorrent/alert_types.hpp>
 #include <libtorrent/load_torrent.hpp>
 #include <libtorrent/read_resume_data.hpp>
 #include <libtorrent/torrent_flags.hpp>
@@ -53,6 +54,21 @@ std::int64_t payload_size_for(std::uint64_t iteration) noexcept
 	return sizes[iteration % 4];
 }
 
+// Deterministic disk-I/O barrier: wait until libtorrent has flushed every
+// outstanding write for `handle` to the operating system. See the call site in
+// run_cycle for why this — not save_resume_data(flush_disk_cache) — is what
+// makes the subsequent sha256_file_hex read race-free. cache_flushed_alert is in
+// alert_category::storage, which the session fixture already enables.
+void flush_torrent_to_disk(Session& session, const lt::torrent_handle& handle, Millis timeout)
+{
+	handle.flush_cache();
+	session.wait_for_alert(timeout, "cache_flushed_alert (disk I/O drained)",
+		[&handle](const lt::alert& alert) {
+			const auto* flushed = lt::alert_cast<lt::cache_flushed_alert>(&alert);
+			return flushed != nullptr && flushed->handle == handle;
+		});
+}
+
 // One full lifecycle: create → seed → download → verify → resume round-trip →
 // pause/resume → remove. Any deviation throws and fails the soak.
 std::int64_t run_cycle(LocalSwarm& swarm, const fs::path& root, std::uint64_t iteration,
@@ -86,15 +102,44 @@ std::int64_t run_cycle(LocalSwarm& swarm, const fs::path& root, std::uint64_t it
 		throw AssertionFailure(cat("iteration ", iteration, ": downloaded ", finished.total_done,
 			" of ", torrent.total_size));
 	}
+	// Deterministic disk-I/O barrier. `wait_until_finished` only proves the piece
+	// picker holds every piece (received + hash-checked); the final pwrite() jobs
+	// can still be queued on libtorrent's async disk thread when it returns.
+	// Reading the file with plain std::ifstream at that instant races the disk
+	// thread and, under sustained soak load, occasionally sees incomplete bytes —
+	// the root cause of the intermittent "payload digest mismatch". flush_cache()
+	// + cache_flushed_alert is libtorrent's documented guarantee that "whatever
+	// cached data libtorrent had by the time you called flush_cache() has been
+	// written to disk", i.e. the exact barrier the digest comparison needs.
+	// (The previous fix — save_resume_data(flush_disk_cache) — did NOT provide it:
+	// that flag only corrects resume-data timestamps, and save_resume_data_alert
+	// fires when the resume buffer is built, not when the torrent's writes land.)
+	flush_torrent_to_disk(swarm.leecher(), leech, timeout);
+
 	// Resume round-trip on live data: this is the operation the agent performs on
 	// every checkpoint, so it is the one most likely to leak or corrupt.
-	// `save_resume_data` issues `lt::torrent_handle::flush_disk_cache`, forcing libtorrent's
-	// async disk thread to flush all written piece blocks from memory/queue to disk before
-	// returning save_resume_data_alert. We must save resume data BEFORE verifying
-	// sha256_file_hex so that standard C++ file I/O does not race with un-flushed disk writes.
 	const std::vector<char> resume = save_resume_data(swarm.leecher(), leech, timeout);
-	if (sha256_file_hex(leech_dir / torrent.name) != torrent.payload_sha256) {
-		throw AssertionFailure(cat("iteration ", iteration, ": payload digest mismatch"));
+
+	const fs::path leech_file = leech_dir / torrent.name;
+	const std::string actual_sha256 = sha256_file_hex(leech_file);
+	if (actual_sha256 != torrent.payload_sha256) {
+		// A mismatch AFTER the disk barrier would mean genuine data corruption, not
+		// a read-before-flush race, so capture everything needed to tell the two
+		// apart in a post-mortem: expected vs actual hash, on-disk size vs expected
+		// size, and when the file was last written.
+		std::error_code stat_ec;
+		const std::uintmax_t file_size = fs::file_size(leech_file, stat_ec);
+		const fs::file_time_type last_write = fs::last_write_time(leech_file, stat_ec);
+		const auto last_write_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			last_write.time_since_epoch()).count();
+		log_error(cat("iteration ", iteration, ": payload digest mismatch | expected=",
+			torrent.payload_sha256, " actual=", actual_sha256, " file=", leech_file.string(),
+			" size=", (stat_ec ? std::string("<unavailable>")
+				: std::to_string(static_cast<unsigned long long>(file_size))),
+			" expected_size=", torrent.total_size,
+			" last_write_ms_since_epoch=", last_write_ms));
+		throw AssertionFailure(cat("iteration ", iteration, ": payload digest mismatch (expected ",
+			torrent.payload_sha256, ", got ", actual_sha256, ')'));
 	}
 	remove_torrent_keep_files(swarm.leecher(), leech, timeout);
 	lt::error_code parse_ec;

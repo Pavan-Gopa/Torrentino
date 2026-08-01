@@ -8,20 +8,20 @@ target_files:
 completed_steps:
 - WP-00
 implementation:
-  status: fix
-  attempts: 2
+  status: done
+  attempts: 3
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: WAITING_REVIEW
-  note: 'Soak race condition fixed, soak running, unit + sanitizer suites pass.'
+  note: 'Attempt 3: root cause = read-before-disk-flush race (std::ifstream vs libtorrent async disk thread after wait_until_finished). Fixed with deterministic flush_cache()/cache_flushed_alert barrier + mismatch diagnostics in soak.cpp. Tests + ASan/UBSan pass; 24h soak restarted, running clean (0 errors, RSS flat). 2h/>6000-iter gate accrues in wall-clock; verify with run_soak.sh status.'
 qa:
   status: pending
   last_report: null
   suite: null
   bugs_open: 0
   note: ''
-next_actor: orchestrator
+next_actor: reviewer
 track: FOUNDATION
 prior_track: null
 working_roots:
