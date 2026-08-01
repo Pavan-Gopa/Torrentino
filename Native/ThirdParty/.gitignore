@@ -1,0 +1,3 @@
+# Build artifacts of the third-party bakeoff (sources, prefixes, logs).
+# Everything here is reproducible from versions.lock + build.sh.
+.build/

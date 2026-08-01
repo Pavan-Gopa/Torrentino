@@ -1,0 +1,5 @@
+# Harness build output, run workspaces, soak logs — all reproducible.
+.build/
+runs/
+.build/
+runs/
