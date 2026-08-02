@@ -1,41 +1,42 @@
-current_step: WP-01
+current_step: WP-02
 step_description: >-
-  libtorrent arm64 bakeoff. Select stable 2.x release, build headless harness,
-  verify core operations, run 24h soak, ASan/UBSan clean.
+  Signed SMAppService lifecycle spike. Create minimal signed app + agent,
+  register via SMAppService, prove Mach XPC lifecycle (kill, reconnect,
+  reboot, update N-1→N).
 target_files:
-- Native/ThirdParty/
-- Native/TorrentinoEngineBridge/
+- Native/TorrentinoApp/
+- Native/TorrentinoEngineAgent/
+- Native/Config/
 completed_steps:
 - WP-00
+- WP-01
 implementation:
-  status: done
-  attempts: 3
-review:
-  status: waiting_review
-  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: WAITING_REVIEW
-  note: 'Attempt 3: root cause = read-before-disk-flush race (std::ifstream vs libtorrent async disk thread after wait_until_finished). Fixed with deterministic flush_cache()/cache_flushed_alert barrier + mismatch diagnostics in soak.cpp. Tests + ASan/UBSan pass; 24h soak restarted, running clean (0 errors, RSS flat). 2h/>6000-iter gate accrues in wall-clock; verify with run_soak.sh status.'
-qa:
   status: pending
-  last_report: null
-  suite: null
-  bugs_open: 0
+  attempts: 0
+review:
+  status: pending
+  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
+  verdict: null
   note: ''
-next_actor: reviewer
+qa:
+  status: green
+  last_report: AI_Workflow_Kit/docs/AI/REPORT.md
+  suite: WP-01
+  bugs_open: 0
+  note: 'WP-01 GREEN. Soak 24h on track (completes ~2026-08-02 18:51 UTC).'
+next_actor: coder
 track: FOUNDATION
 prior_track: null
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: backup/pre-native-macos-20260801-183912
-  last_post_tag: torrentino/WP-00-done
-  last_commit: null
+  last_pre_tag: torrentino/pre-WP-01
+  last_post_tag: torrentino/WP-01-done
+  last_commit: 4fb2def
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-01: libtorrent arm64 bakeoff. Select stable libtorrent 2.x, pin exact
-  tag/commit/SHA-256. Build minimal headless arm64 harness proving: add .torrent,
-  magnet metadata, pause/resume, v1/v2/hybrid IDs, save/load resume, session state,
-  clean shutdown, crash restore, torrent creation. Run ASan/UBSan. Verify no
-  Homebrew runtime links. Document license/SBOM draft.
+  WP-02: Signed SMAppService lifecycle spike. Create minimal Swift app +
+  LaunchAgent, register via SMAppService, prove Mach XPC hello/health/counter,
+  test kill/reconnect/reboot/update/denial flows. Developer ID config.
