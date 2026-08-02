@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		Frozen launchAgent contract for the WP-02 spike.
+		Registered via SMAppService.agent(plistName: "com.torrentino.app.engine-agent.plist")
+		from Contents/Library/LaunchAgents/ inside Torrentino.app.
+		Full semantics: Native/Config/LIFECYCLE_CONTRACT.md
+	-->
+
+	<!-- Unique job identity in the user's GUI launchd domain. -->
+	<key>Label</key>
+	<string>com.torrentino.app.engine-agent</string>
+
+	<!-- Executable, relative to the .app bundle root (launchd.plist(5):
+	     "app-bundle relative path"; only valid for SMAppService plists). -->
+	<key>BundleProgram</key>
+	<string>Contents/Library/LaunchAgents/TorrentinoEngineAgent</string>
+
+	<!-- Mach service the agent checks into with NSXPCListener(machServiceName:).
+	     launchd owns the port: the job is respawned on demand when a client
+	     messages the service and no instance is running. -->
+	<key>MachServices</key>
+	<dict>
+		<key>com.torrentino.app.engine-agent.mach</key>
+		<true/>
+	</dict>
+
+	<!-- Start as soon as the job is registered / the user logs in. -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart policy:
+	     SuccessfulExit=false => restart only after a NON-zero exit (crash);
+	     a clean exit(0) (Cmd+Q ack, SIGTERM, duplicate-instance bail-out)
+	     is final until the next on-demand Mach message or re-login.
+	     Static KeepAlive=true is deliberately NOT used: it would fight
+	     graceful stop (ADR-004). -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<!-- Bounded termination: launchd sends SIGTERM on unload/logout/shutdown,
+	     waits 30s, then SIGKILL. The agent flushes its counter and exits 0
+	     well inside this window. -->
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+
+	<!-- Crash-restart throttle, made explicit (launchd default is 10s).
+	     A crash-looping agent is respawned at most once per 10s. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<!-- Shows the job under Torrentino in System Settings > Login Items. -->
+	<key>AssociatedBundleIdentifiers</key>
+	<string>com.torrentino.app</string>
+</dict>
+</plist>

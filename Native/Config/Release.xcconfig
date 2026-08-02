@@ -1,0 +1,11 @@
+// Layer: Build configuration (Release)
+// Role: optimized build used by the update N-1 -> N spike.
+// Must-not: relax signing/concurrency settings inherited from Shared.xcconfig.
+// Invariants: whole-module optimization, dSYM for evidence symbolication.
+
+#include "Shared.xcconfig"
+
+GCC_OPTIMIZATION_LEVEL = s
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym

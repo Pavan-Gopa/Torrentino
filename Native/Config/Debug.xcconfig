@@ -1,0 +1,12 @@
+// Layer: Build configuration (Debug)
+// Role: unoptimized build for local lifecycle evidence collection.
+// Must-not: relax signing/concurrency settings inherited from Shared.xcconfig.
+// Invariants: signing posture identical to Release (see CODE_SIGN_INJECT_BASE_ENTITLEMENTS).
+
+#include "Shared.xcconfig"
+
+GCC_OPTIMIZATION_LEVEL = 0
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG
+GCC_PREPROCESSOR_DEFINITIONS = DEBUG=1
+DEBUG_INFORMATION_FORMAT = dwarf

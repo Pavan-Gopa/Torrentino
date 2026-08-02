@@ -1,0 +1,445 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4A0000000000000000000501 /* TorrentinoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000101 /* TorrentinoApp.swift */; };
+		4A0000000000000000000502 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000102 /* AppDelegate.swift */; };
+		4A0000000000000000000503 /* CLIDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000103 /* CLIDispatcher.swift */; };
+		4A0000000000000000000504 /* EngineClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000104 /* EngineClient.swift */; };
+		4A0000000000000000000505 /* EngineClientTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000105 /* EngineClientTypes.swift */; };
+		4A0000000000000000000506 /* EngineViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000106 /* EngineViewModel.swift */; };
+		4A0000000000000000000507 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000107 /* ContentView.swift */; };
+		4A0000000000000000000508 /* AgentMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000108 /* AgentMain.swift */; };
+		4A0000000000000000000509 /* AgentRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000109 /* AgentRuntime.swift */; };
+		4A000000000000000000050A /* AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010A /* AgentService.swift */; };
+		4A000000000000000000050B /* CounterStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010B /* CounterStore.swift */; };
+		4A000000000000000000050C /* TorrentinoEngineXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */; };
+		4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */; };
+		4A000000000000000000050E /* ServiceRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010E /* ServiceRegistration.swift */; };
+		4A0000000000000000000521 /* TorrentinoEngineAgent in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000202 /* TorrentinoEngineAgent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		4A0000000000000000000522 /* com.torrentino.app.engine-agent.plist in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4A0000000000000000000602 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A0000000000000000000302;
+			remoteInfo = TorrentinoEngineAgent;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4A0000000000000000000403 /* Embed LaunchAgent */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "Contents/Library/LaunchAgents";
+			dstSubfolderSpec = 1;
+			files = (
+				4A0000000000000000000521 /* TorrentinoEngineAgent in Embed LaunchAgent */,
+				4A0000000000000000000522 /* com.torrentino.app.engine-agent.plist in Embed LaunchAgent */,
+			);
+			name = "Embed LaunchAgent";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4A0000000000000000000101 /* TorrentinoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoApp.swift; sourceTree = "<group>"; };
+		4A0000000000000000000102 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		4A0000000000000000000103 /* CLIDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIDispatcher.swift; sourceTree = "<group>"; };
+		4A0000000000000000000104 /* EngineClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineClient.swift; sourceTree = "<group>"; };
+		4A0000000000000000000105 /* EngineClientTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineClientTypes.swift; sourceTree = "<group>"; };
+		4A0000000000000000000106 /* EngineViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineViewModel.swift; sourceTree = "<group>"; };
+		4A0000000000000000000107 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		4A0000000000000000000108 /* AgentMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMain.swift; sourceTree = "<group>"; };
+		4A0000000000000000000109 /* AgentRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntime.swift; sourceTree = "<group>"; };
+		4A000000000000000000010A /* AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentService.swift; sourceTree = "<group>"; };
+		4A000000000000000000010B /* CounterStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounterStore.swift; sourceTree = "<group>"; };
+		4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoEngineXPCProtocol.swift; sourceTree = "<group>"; };
+		4A000000000000000000010E /* ServiceRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceRegistration.swift; sourceTree = "<group>"; };
+		4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "com.torrentino.app.engine-agent.plist"; sourceTree = "<group>"; };
+		4A0000000000000000000121 /* Torrentino.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Torrentino.entitlements; sourceTree = "<group>"; };
+		4A0000000000000000000122 /* TorrentinoEngineAgent.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TorrentinoEngineAgent.entitlements; sourceTree = "<group>"; };
+		4A0000000000000000000123 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		4A0000000000000000000124 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		4A0000000000000000000125 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		4A0000000000000000000126 /* lifecycle_test.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = lifecycle_test.sh; sourceTree = "<group>"; };
+		4A0000000000000000000127 /* update_test.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = update_test.sh; sourceTree = "<group>"; };
+		4A0000000000000000000128 /* LIFECYCLE_CONTRACT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = LIFECYCLE_CONTRACT.md; sourceTree = "<group>"; };
+		4A0000000000000000000201 /* Torrentino.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Torrentino.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A0000000000000000000202 /* TorrentinoEngineAgent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.tool"; includeInIndex = 0; path = TorrentinoEngineAgent; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4A0000000000000000000402 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A0000000000000000000412 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4A0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000010 /* TorrentinoApp */,
+				4A0000000000000000000014 /* TorrentinoEngineAgent */,
+				4A0000000000000000000018 /* Config */,
+				4A0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000201 /* Torrentino.app */,
+				4A0000000000000000000202 /* TorrentinoEngineAgent */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000010 /* TorrentinoApp */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000011 /* App */,
+				4A0000000000000000000012 /* EngineClient */,
+				4A0000000000000000000013 /* Features */,
+			);
+			path = TorrentinoApp;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000011 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000101 /* TorrentinoApp.swift */,
+				4A0000000000000000000102 /* AppDelegate.swift */,
+				4A0000000000000000000103 /* CLIDispatcher.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000012 /* EngineClient */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000104 /* EngineClient.swift */,
+				4A0000000000000000000105 /* EngineClientTypes.swift */,
+				4A000000000000000000010E /* ServiceRegistration.swift */,
+			);
+			path = EngineClient;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000013 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000106 /* EngineViewModel.swift */,
+				4A0000000000000000000107 /* ContentView.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000014 /* TorrentinoEngineAgent */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000015 /* Agent */,
+				4A0000000000000000000016 /* Persistence */,
+				4A0000000000000000000017 /* XPC */,
+			);
+			path = TorrentinoEngineAgent;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000015 /* Agent */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000108 /* AgentMain.swift */,
+				4A0000000000000000000109 /* AgentRuntime.swift */,
+				4A000000000000000000010A /* AgentService.swift */,
+			);
+			path = Agent;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000016 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				4A000000000000000000010B /* CounterStore.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000017 /* XPC */ = {
+			isa = PBXGroup;
+			children = (
+				4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */,
+			);
+			path = XPC;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000018 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */,
+				4A0000000000000000000019 /* Entitlements */,
+				4A0000000000000000000123 /* Shared.xcconfig */,
+				4A0000000000000000000124 /* Debug.xcconfig */,
+				4A0000000000000000000125 /* Release.xcconfig */,
+				4A0000000000000000000126 /* lifecycle_test.sh */,
+				4A0000000000000000000127 /* update_test.sh */,
+				4A0000000000000000000128 /* LIFECYCLE_CONTRACT.md */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000019 /* Entitlements */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000121 /* Torrentino.entitlements */,
+				4A0000000000000000000122 /* TorrentinoEngineAgent.entitlements */,
+			);
+			path = Entitlements;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4A0000000000000000000301 /* Torrentino */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A0000000000000000000702 /* Build configuration list for PBXNativeTarget "Torrentino" */;
+			buildPhases = (
+				4A0000000000000000000401 /* Sources */,
+				4A0000000000000000000402 /* Frameworks */,
+				4A0000000000000000000403 /* Embed LaunchAgent */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4A0000000000000000000601 /* PBXTargetDependency */,
+			);
+			name = Torrentino;
+			productName = Torrentino;
+			productReference = 4A0000000000000000000201 /* Torrentino.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4A0000000000000000000302 /* TorrentinoEngineAgent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A0000000000000000000703 /* Build configuration list for PBXNativeTarget "TorrentinoEngineAgent" */;
+			buildPhases = (
+				4A0000000000000000000411 /* Sources */,
+				4A0000000000000000000412 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TorrentinoEngineAgent;
+			productName = TorrentinoEngineAgent;
+			productReference = 4A0000000000000000000202 /* TorrentinoEngineAgent */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4A0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 1540;
+				TargetAttributes = {
+					4A0000000000000000000301 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+					4A0000000000000000000302 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+				};
+			};
+			buildConfigurationList = 4A0000000000000000000701 /* Build configuration list for PBXProject "Torrentino" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4A0000000000000000000002;
+			productRefGroup = 4A0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4A0000000000000000000301 /* Torrentino */,
+				4A0000000000000000000302 /* TorrentinoEngineAgent */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4A0000000000000000000401 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A0000000000000000000501 /* TorrentinoApp.swift in Sources */,
+				4A0000000000000000000502 /* AppDelegate.swift in Sources */,
+				4A0000000000000000000503 /* CLIDispatcher.swift in Sources */,
+				4A0000000000000000000504 /* EngineClient.swift in Sources */,
+				4A0000000000000000000505 /* EngineClientTypes.swift in Sources */,
+				4A0000000000000000000506 /* EngineViewModel.swift in Sources */,
+				4A0000000000000000000507 /* ContentView.swift in Sources */,
+				4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */,
+				4A000000000000000000050E /* ServiceRegistration.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A0000000000000000000411 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A0000000000000000000508 /* AgentMain.swift in Sources */,
+				4A0000000000000000000509 /* AgentRuntime.swift in Sources */,
+				4A000000000000000000050A /* AgentService.swift in Sources */,
+				4A000000000000000000050B /* CounterStore.swift in Sources */,
+				4A000000000000000000050C /* TorrentinoEngineXPCProtocol.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4A0000000000000000000601 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A0000000000000000000302 /* TorrentinoEngineAgent */;
+			targetProxy = 4A0000000000000000000602 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4A0000000000000000000711 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000124 /* Debug.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		4A0000000000000000000712 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000125 /* Release.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		4A0000000000000000000713 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000124 /* Debug.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Torrentino.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Stichting Kadamba Foundation";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app;
+				PRODUCT_NAME = Torrentino;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		4A0000000000000000000714 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000125 /* Release.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Torrentino.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Stichting Kadamba Foundation";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app;
+				PRODUCT_NAME = Torrentino;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		4A0000000000000000000715 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000124 /* Debug.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/TorrentinoEngineAgent.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
+				PRODUCT_NAME = TorrentinoEngineAgent;
+			};
+			name = Debug;
+		};
+		4A0000000000000000000716 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000125 /* Release.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/TorrentinoEngineAgent.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
+				PRODUCT_NAME = TorrentinoEngineAgent;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4A0000000000000000000701 /* Build configuration list for PBXProject "Torrentino" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A0000000000000000000711 /* Debug */,
+				4A0000000000000000000712 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A0000000000000000000702 /* Build configuration list for PBXNativeTarget "Torrentino" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A0000000000000000000713 /* Debug */,
+				4A0000000000000000000714 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A0000000000000000000703 /* Build configuration list for PBXNativeTarget "TorrentinoEngineAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A0000000000000000000715 /* Debug */,
+				4A0000000000000000000716 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 4A0000000000000000000001 /* Project object */;
+}

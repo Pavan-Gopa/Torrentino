@@ -1,0 +1,28 @@
+// Layer: Build configuration (shared base for all WP-02 targets)
+// Role: deterministic Developer ID build settings for the lifecycle spike.
+// Must-not: enable App Sandbox, inject get-task-allow, add Homebrew search paths.
+// Invariants: arm64 only, macOS 13+, Swift 6 strict concurrency = Complete,
+// warnings are errors, hardened runtime on every signed product.
+
+DEVELOPMENT_TEAM = 438UQRF7JV
+CODE_SIGN_IDENTITY = Developer ID Application
+CODE_SIGN_STYLE = Manual
+PROVISIONING_PROFILE_SPECIFIER =
+
+SDKROOT = macosx
+MACOSX_DEPLOYMENT_TARGET = 13.0
+ARCHS = arm64
+ONLY_ACTIVE_ARCH = NO
+
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+
+ENABLE_HARDENED_RUNTIME = YES
+// Release-equivalent entitlements in every configuration: the lifecycle spike
+// must behave like a notarizable Developer ID build (no debugger attach).
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+
+ENABLE_DEFAULT_SEARCH_PATHS = YES
+ALWAYS_SEARCH_USER_PATHS = NO

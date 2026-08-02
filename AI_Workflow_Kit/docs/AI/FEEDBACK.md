@@ -1,3 +1,83 @@
+# FEEDBACK — WP-02: signed SMAppService lifecycle spike
+
+**Role:** Implementation + verification (lifecycle & update evidence)  
+**Date:** 2026-08-02
+
+### 1. Verification results
+- `Native/Config/lifecycle_test.sh` → **30 PASS / 0 FAIL**, exit code **0**.
+  Evidence: `Native/test-results/lifecycle-20260802-100703/` (`EVIDENCE.md` + `evidence.log`).
+  Covers: signing + hardened-runtime requirement checks, SMAppService
+  register/unregister, RunAtLoad spawn, on-demand Mach respawn after SIGKILL,
+  XPC round-trips (hello/health/increment/get/shutdown), counter durability
+  across `kill -9`, KeepAlive crash-respawn, graceful-stop exit codes (XPC
+  shutdown and SIGTERM → `last exit code = 0`), duplicate-instance flock
+  bail-out.
+- `Native/Config/update_test.sh` → **26 PASS / 0 FAIL**, exit code **0**.
+  Evidence: `Native/test-results/update-20260802-100559/`.
+  Covers: v1 (`COUNTER_FORMAT_V1`) writes `TTC1`; v2 loads + migrates the v1
+  store transparently preserving the value (counter=2 → `TTC2` on next
+  persist); downgrade block (v1 binary on v2 file → exit `78` + fatal log, no
+  listener started); checksum corruption (flipped byte → exit `1` + "counter
+  store corrupt"); SIGTERM → `last exit code = 0` for both versions.
+- Post-test state clean: no loaded `com.torrentino.app.engine-agent` job, no
+  stray agent process, engine dir removed.
+
+### 2. Root causes found during verification (and fixes)
+1. **SMAppService agent plist location — registration `Code=108`.**
+   `SMAppService.agent(plistName:).register()` threw `SMAppServiceErrorDomain
+   Code=108` ("Unable to read plist…") although the plist was embedded and
+   readable. Root cause: SMAppService resolves agent plists ONLY under
+   `Contents/Library/LaunchAgents/`; the project embedded under
+   `Contents/Library/LaunchServices/`. Fix: embed phase, `BundleProgram`, and
+   all references moved to `LaunchAgents` (`project.pbxproj`,
+   `com.torrentino.app.engine-agent.plist`, `ServiceRegistration.swift`,
+   `LIFECYCLE_CONTRACT.md`). Verified empirically on macOS 26.5.
+2. **XPC health reply decode failure.** `--cli health` failed with "not
+   allowed class" although every value was `NSString`/`NSNumber`. Root cause:
+   `NSXPCInterface` secure decoding validates the TOP-LEVEL reply container;
+   `NSDictionary` itself was missing from the allowlist. Fix: added
+   `NSDictionary` to `TorrentinoXPCSecurity.healthReplyClasses`
+   (`TorrentinoEngineXPCProtocol.swift`).
+3. **Mach check-in is launchd-only (update_test design flaw).** Directly
+   launched agents ran and exited cleanly but no XPC call could reach them
+   (lookup error 3 / ESRCH); unified log: `listener failed to activate:
+   xpc_error=[1: Operation not permitted]`. Root cause: macOS 26.5 rejects
+   legacy bootstrap registration of named Mach services from non-launchd
+   processes; the agent silently became a zombie. Fix: (a)
+   `AgentRuntime.beginServing()` now exits `1` with a fatal stderr message
+   when `XPC_SERVICE_NAME` is unset (launchd always sets it to the job label)
+   — fail loud instead of silent zombie; (b) `update_test.sh` serving phases
+   now run v1/v2 through temporary `launchctl bootstrap gui/$UID` jobs
+   mirroring the production plist (same label, MachServices, RunAtLoad,
+   KeepAlive.SuccessfulExit), bootout between phases and at exit. Fault phases
+   (downgrade/corruption) still run the binary directly — they exit during
+   bootstrap BEFORE the Mach check-in.
+4. **Test-harness verdict masking.** The `EXIT` cleanup traps exited with the
+   cleanup status, clobbering the verdict. Fix: both scripts capture `$?` at
+   trap entry and re-exit with it. Additionally `lifecycle_test.sh` accepts
+   launchd's `last terminating signal = Killed: 9` as SIGKILL evidence
+   (launchd does not always record a non-zero `last exit code` for
+   signal-kills) and runs single-instance lock checks before agent shutdown.
+
+### 3. Files changed this round
+- `Native/TorrentinoEngineAgent/XPC/TorrentinoEngineXPCProtocol.swift` — `NSDictionary` in health reply allowlist.
+- `Native/TorrentinoEngineAgent/Agent/AgentRuntime.swift` — launchd-only serving guard (`XPC_SERVICE_NAME`).
+- `Native/Config/lifecycle_test.sh`, `Native/Config/update_test.sh` — verdict preservation, SIGKILL evidence, temporary-launchd-job redesign.
+- `Native/Config/LIFECYCLE_CONTRACT.md` — LaunchAgents discovery note, NSDictionary note, launchd-only Mach check-in constraint, verification matrix.
+- `LaunchServices` → `LaunchAgents`: `project.pbxproj`, `com.torrentino.app.engine-agent.plist`, `ServiceRegistration.swift`.
+
+### 4. Checklist
+- [x] lifecycle_test.sh 30/30, exit 0
+- [x] update_test.sh 26/26, exit 0
+- [x] No residual launchd job / agent process / engine dir after tests
+- [x] Contract doc updated with the three empirically-proven OS constraints
+- [x] Legacy/ untouched
+
+---
+**RESULT:** [WP-02 VERIFIED]
+
+---
+
 # FEEDBACK — WP-01: arm64 macOS libtorrent proof-of-build
 
 **Reviewer:** Verification Engineer (attempt 3 re-review)  
