@@ -5,3 +5,5 @@ node_modules/
 node_modules/
 graphify-out/
 Native/test-results/
+Native/build/
+default.profraw
