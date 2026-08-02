@@ -1,3 +1,102 @@
+# FEEDBACK — WP-02 Review
+
+**Reviewer:** Verification Engineer  
+**Date:** 2026-08-02  
+**Reviewed commit:** `f9936e9` — `feat(torrentino): WP-02 — signed SMAppService lifecycle spike`  
+**RESULT:** APPROVED
+
+### 1. Build & tests
+
+**Graphify (mandatory first step):**
+```
+graphify query "WP-02 SMAppService lifecycle, XPC protocol, agent registration, EngineClient, CounterStore"
+```
+Traversal loaded architecture context (110 nodes; bridge/harness communities dominate the existing graph — WP-02 product symbols still reviewed directly from commit sources).
+
+**xcodebuild (reviewer re-run, Developer ID):**
+| Scheme | Destination | Identity / Team | Result |
+| --- | --- | --- | --- |
+| `Torrentino` | `platform=macOS,arch=arm64` | `Developer ID Application` / `438UQRF7JV` | **BUILD SUCCEEDED** |
+| `TorrentinoEngineAgent` | `platform=macOS,arch=arm64` | `Developer ID Application` / `438UQRF7JV` | **BUILD SUCCEEDED** |
+
+Observed in build log:
+- `swift-version 6`, `-warnings-as-errors`
+- Signing Identity: `Developer ID Application: Stichting Kadamba Foundation (438UQRF7JV)`
+- Hardened runtime: `flags=0x10000(runtime)` on app + embedded agent
+- Agent identifier forced: `--identifier=com.torrentino.app.engine-agent`
+- Embed path: `Contents/Library/LaunchAgents/` (agent binary + plist)
+
+**Signed product layout (post-build):**
+- `Torrentino.app` id `com.torrentino.app`, Team `438UQRF7JV`, runtime hardened
+- Agent at `Contents/Library/LaunchAgents/TorrentinoEngineAgent`, id `com.torrentino.app.engine-agent`
+- Plist keys match contract: `Label`, `BundleProgram`, `MachServices`, `RunAtLoad=true`, `KeepAlive.SuccessfulExit=false`, `ExitTimeOut=30`, `ThrottleInterval=10`, `AssociatedBundleIdentifiers`
+- Entitlements empty (no App Sandbox, no `get-task-allow`)
+
+**Lifecycle / update evidence (Coder artifacts under `Native/test-results/`, accepted as gate proof):**
+| Script | Evidence dir | Result |
+| --- | --- | --- |
+| `lifecycle_test.sh` | `lifecycle-20260802-100703/` | **30 PASS / 0 FAIL**, exit 0 |
+| `update_test.sh` | `update-20260802-100559/` | **26 PASS / 0 FAIL**, exit 0 |
+
+Earlier intermediate runs show root-cause iteration (health allowlist, SIGKILL signal evidence, launchd-only Mach for update phases) and are consistent with the Coder narrative; final evidence is clean.
+
+### 2. Gate checklist
+
+| Gate | Verdict | Evidence |
+| --- | --- | --- |
+| UI/agent lifecycle proven on signed build | **PASS** | Developer ID signed app embeds agent+plist; `lifecycle_test.sh` register → RunAtLoad spawn → XPC hello/health/increment/get → shutdown → on-demand hello → unregister (30/30). Reviewer re-build green. |
+| Agent does not require root | **PASS** | User-domain LaunchAgent (`gui/$UID`); state under `~/Library/Application Support/com.torrentino.app/Engine` (0700); empty entitlements; no setuid/privilege elevation in code or scripts (`lifecycle_test.sh` must-not root). |
+| No second instance | **PASS** | `flock(LOCK_EX\|LOCK_NB)` on engine dir lock (`AgentRuntime.takeInstanceLock`); duplicate direct launch exits 0 while original stays (`lock.duplicate_instance_exit0`, `lock.original_still_running`). |
+| Reconnect returns authoritative state | **PASS** | After `kill -9`, counter remains 3 via XPC get (`crash.counter_survived_sigkill`); `EngineClient` max 5 attempts + backoff; agent is SoT (client must-not cache engine state). |
+| Helper correctly unregisters | **PASS** | `--cli unregister` → `status=notRegistered`; `launchctl print` fails (job removed) — `unregister.not_registered`, `unregister.job_removed_from_launchd`. |
+| KeepAlive, exit codes, idle policy confirmed | **PASS** | Plist: `KeepAlive.SuccessfulExit=false`, `ExitTimeOut=30`, `ThrottleInterval=10`. XPC shutdown & SIGTERM → `last exit code = 0`; SIGKILL records terminating signal / non-zero; clean exit does not auto-restart until on-demand Mach (`ondemand.hello_after_clean_exit`). |
+| Denial does not include in-process fallback | **PASS** | `ServiceRegistration` / `TorrentinoApp` / `EngineViewModel` / `ContentView`: denied or non-enabled → `degraded` banner only; no in-process engine path anywhere in WP-02 surface. Contract §10. |
+| N-1 / N / downgrade semantics proven | **PASS** | `update_test.sh` 26/26: v1 writes `TTC1`; v2 preserves value and migrates to `TTC2`; v1 on v2 store exits **78** + “Downgrade blocked”; corrupt checksum exits **1** + “counter store corrupt”; no listener on fault paths. |
+
+### 3. Code quality
+
+**Swift 6 / concurrency:**  
+`SWIFT_STRICT_CONCURRENCY = complete`, warnings-as-errors in `Shared.xcconfig`; both targets compile clean. `EngineClient` is an actor; `CounterStore` is an actor; UI view model is `@MainActor` with async-only XPC/launchd work. No MainActor abuse for IO. XPC reply bridges use `ResumeGuard` for exactly-once continuation resume.
+
+**XPC security:**  
+`@objc` protocol, reply-block style; `setCodeSigningRequirement` before `resume` on both sides; `healthReplyClasses` allowlist includes **`NSDictionary` + `NSString` + `NSNumber`** (documented why-comment — top-level container validation). Frozen identifiers in `TorrentinoXPCSecurity` (single file membership in both targets).
+
+**Atomic writes:**  
+`AtomicFile.write`: write-tmp → `fsync(file)` → `rename` → `fsync(dir)`; mode 0600; FNV-1a64 on v2; downgrade/corrupt never silent-overwrite.
+
+**EngineClient:**  
+Bounded reconnect (5 attempts, backoff `[0.25,0.5,1,2,4]` s); interruption/invalidation handlers use `[weak self]` → actor Task; no retain cycle on connection.
+
+**AgentRuntime:**  
+`XPC_SERVICE_NAME` launchd-only guard (fail loud exit 1); SIGTERM/SIGINT → shared `initiateStop` (flush + exit 0); dual-instance clean exit 0; ListenerDelegate holds strong ref while `NSXPCListener.delegate` is weak.
+
+**Comments / role headers:**  
+Present on all product files (Layer / Role / Must-not / Invariants). Why-comments at non-obvious sites: LaunchAgents path, NSDictionary allowlist, launchd-only Mach, KeepAlive.SuccessfulExit, shutdown ack-before-exit, atomic rename, ResumeGuard.
+
+**Minor non-blocking nits (do not block APPROVED):**
+1. **Contract vs code lock filename:** `LIFECYCLE_CONTRACT.md` documents `<engine dir>/agent.lock`; implementation uses `instance.lock` (`AgentRuntime.swift` ~L159). Behavior is proven; doc should align in a follow-up.
+2. **Migration timing wording:** contract §8 says v1→v2 rewrite “on the next persist”; `CounterStore.loadOrMigrate` rewrites on load. Functional tests pass; wording could match code.
+
+### 4. Architecture compliance
+
+| Check | Verdict |
+| --- | --- |
+| Target scope (WP-02 only) | **PASS** — app, agent, Config, xcodeproj; no libtorrent facade, no WP-03+ surfaces |
+| `Legacy/` untouched | **PASS** — no Legacy paths in `f9936e9` file list |
+| No root requirement | **PASS** |
+| No App Sandbox / no get-task-allow | **PASS** — empty entitlements, `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO` |
+| No in-process engine fallback | **PASS** |
+| Contract complete vs evidence | **PASS** — verification matrix rows map to script checks; three empirical OS constraints documented (LaunchAgents path, NSDictionary allowlist, launchd-only Mach) |
+| Test harness quality | **PASS** — cleanup traps preserve `$?`; verdict not masked; deterministic OUT_DIR evidence |
+
+### 5. If CHANGES_REQUESTED — concrete list
+
+None. **APPROVED.**
+
+Optional follow-ups (non-blocking): rename contract lock file to `instance.lock` (or code to `agent.lock`); align “migrate on load” wording in §8.
+
+---
+
 # FEEDBACK — WP-02: signed SMAppService lifecycle spike
 
 **Role:** Implementation + verification (lifecycle & update evidence)  
