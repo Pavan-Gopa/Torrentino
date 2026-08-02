@@ -1,0 +1,486 @@
+// Torrentino engine bridge — ObjC-compatible adapter implementation (WP-04).
+//
+// Role: translate between the ObjC NSData/JSON/NSError world and the C++
+//       EngineBridge facade. All DTOs cross the boundary as JSON envelopes so
+//       the Swift actor never imports a C++ type; all failures cross as NSError
+//       so no exception (C++ or ObjC) can escape to Swift.
+// Must not: let an exception escape any method (the trampolines below catch
+//       C++ exceptions and NSExceptions), or hand a libtorrent type to ObjC.
+
+#import "EngineBridgeAdapter.h"
+
+#include "EngineBridge.h"
+
+#import <Foundation/Foundation.h>
+
+using torrentino::bridge::AddResult;
+using torrentino::bridge::AddSpecification;
+using torrentino::bridge::BootReport;
+using torrentino::bridge::BridgeError;
+using torrentino::bridge::EngineAlertDTO;
+using torrentino::bridge::EngineAlertKind;
+using torrentino::bridge::EngineBridge;
+using torrentino::bridge::HealthDTO;
+using torrentino::bridge::RemovalResult;
+using torrentino::bridge::RemovalToken;
+using torrentino::bridge::ResumeDataDTO;
+using torrentino::bridge::SessionConfiguration;
+using torrentino::bridge::TorrentRecordID;
+
+NSErrorDomain const TorrentinoEngineBridgeErrorDomain = @"com.torrentino.engine-bridge";
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Objective-C / C++ bridge helpers (kebab-case JSON wire schema, frozen).
+// ---------------------------------------------------------------------------
+
+NSString* jsonKey(const char* key)
+{
+	return [NSString stringWithUTF8String:key];
+}
+
+NSDictionary* toJSON(NSData* data, NSError** error)
+{
+	if (data == nil || data.length == 0) {
+		if (error != nil) {
+			*error = [NSError errorWithDomain:TorrentinoEngineBridgeErrorDomain
+										 code:TorrentinoEngineBridgeErrorInvalidArgument
+									 userInfo:@{NSLocalizedDescriptionKey : @"empty JSON payload"}];
+		}
+		return nil;
+	}
+	id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
+	if (object == nil) {
+		return nil;
+	}
+	if (![object isKindOfClass:[NSDictionary class]]) {
+		if (error != nil) {
+			*error = [NSError errorWithDomain:TorrentinoEngineBridgeErrorDomain
+										 code:TorrentinoEngineBridgeErrorInvalidArgument
+									 userInfo:@{NSLocalizedDescriptionKey : @"JSON payload is not a dictionary"}];
+		}
+		return nil;
+	}
+	return object;
+}
+
+NSData* fromJSON(id object)
+{
+	if (object == nil) {
+		return nil;
+	}
+	NSError* error = nil;
+	NSData* data = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
+	if (data == nil) {
+		// JSON serialization of a dictionary built from literals cannot fail in
+		// practice; guard anyway so the boundary stays total.
+		NSLog(@"TorrentinoEngineBridgeAdapter: JSON serialization failed: %@", error);
+		return nil;
+	}
+	return data;
+}
+
+NSString* stringValue(NSDictionary* dict, const char* key, NSString* fallback)
+{
+	id value = dict[jsonKey(key)];
+	return [value isKindOfClass:[NSString class]] ? value : fallback;
+}
+
+int64_t int64Value(NSDictionary* dict, const char* key, int64_t fallback)
+{
+	id value = dict[jsonKey(key)];
+	return [value isKindOfClass:[NSNumber class]] ? [value longLongValue] : fallback;
+}
+
+bool boolValue(NSDictionary* dict, const char* key, bool fallback)
+{
+	id value = dict[jsonKey(key)];
+	return [value isKindOfClass:[NSNumber class]] ? [value boolValue] : fallback;
+}
+
+uint32_t uint32Value(NSDictionary* dict, const char* key, uint32_t fallback)
+{
+	int64_t value = int64Value(dict, key, fallback);
+	if (value < 0) {
+		return fallback;
+	}
+	return static_cast<uint32_t>(value);
+}
+
+// The torrent-file field travels base64 because JSON strings are not a safe
+// byte container; the C++ side receives the raw bytes back.
+std::vector<char> base64ToBytes(NSDictionary* dict, const char* key)
+{
+	NSData* data = [[NSData alloc] initWithBase64EncodedString:stringValue(dict, key, @"")
+													options:0];
+	std::vector<char> bytes;
+	if (data.length > 0) {
+		bytes.assign(static_cast<const char*>(data.bytes),
+			static_cast<const char*>(data.bytes) + data.length);
+	}
+	return bytes;
+}
+
+NSString* bytesToBase64(const std::vector<char>& bytes)
+{
+	if (bytes.empty()) {
+		return @"";
+	}
+	return [[NSData alloc] initWithBytes:bytes.data() length:bytes.size()].base64EncodedStringWithOptions:0;
+}
+
+NSError* toNSError(BridgeError code, const std::string& message)
+{
+	return [NSError errorWithDomain:TorrentinoEngineBridgeErrorDomain
+							   code:static_cast<NSInteger>(code)
+						   userInfo:@{
+							   NSLocalizedDescriptionKey :
+								   [NSString stringWithUTF8String:message.empty() ? "engine error" : message.c_str()],
+						   }];
+}
+
+// ---------------------------------------------------------------------------
+// DTO <-> JSON conversions.
+// ---------------------------------------------------------------------------
+
+SessionConfiguration configurationFromJSON(NSDictionary* dict)
+{
+	SessionConfiguration config;
+	config.listen_port = static_cast<int>(int64Value(dict, "listen-port", 0));
+	config.download_dir = std::string(stringValue(dict, "download-dir", @"").UTF8String);
+	config.enable_dht = boolValue(dict, "enable-dht", false);
+	config.max_connections = static_cast<int>(int64Value(dict, "max-connections", 120));
+	config.peer_id_prefix = std::string(stringValue(dict, "peer-id-prefix", @"-TT0400-").UTF8String);
+	config.operation_timeout_ms = uint32Value(dict, "operation-timeout-ms", 10000);
+	config.alert_queue_size = uint32Value(dict, "alert-queue-size", 8000);
+	return config;
+}
+
+AddSpecification addSpecificationFromJSON(NSDictionary* dict)
+{
+	AddSpecification spec;
+	spec.torrent_file = base64ToBytes(dict, "torrent-file");
+	spec.magnet_uri = std::string(stringValue(dict, "magnet-uri", @"").UTF8String);
+	spec.save_path = std::string(stringValue(dict, "save-path", @"").UTF8String);
+	spec.paused = boolValue(dict, "paused", false);
+	return spec;
+}
+
+NSDictionary* bootReportToJSON(const BootReport& report)
+{
+	return @{
+		jsonKey("version") : [NSString stringWithUTF8String:report.version.c_str()],
+		jsonKey("peer-id") : [NSString stringWithUTF8String:report.peer_id.c_str()],
+		jsonKey("listen-port") : @(report.listen_port),
+	};
+}
+
+NSDictionary* addResultToJSON(const AddResult& result)
+{
+	return @{
+		jsonKey("torrent-id") : [NSString stringWithUTF8String:result.torrent_id.c_str()],
+		jsonKey("info-hash") : [NSString stringWithUTF8String:result.info_hash.c_str()],
+		jsonKey("name") : [NSString stringWithUTF8String:result.name.c_str()],
+		jsonKey("total-size") : @(result.total_size),
+	};
+}
+
+NSDictionary* alertToJSON(const EngineAlertDTO& alert)
+{
+	return @{
+		jsonKey("kind") : @(torrentino::bridge::engine_alert_kind_name(alert.kind)),
+		jsonKey("torrent-id") : [NSString stringWithUTF8String:alert.torrent_id.c_str()],
+		jsonKey("progress") : @(alert.progress),
+		jsonKey("state") : @(alert.state),
+		jsonKey("error") : [NSString stringWithUTF8String:alert.error.c_str()],
+		jsonKey("message") : [NSString stringWithUTF8String:alert.message.c_str()],
+	};
+}
+
+NSDictionary* healthToJSON(const HealthDTO& health)
+{
+	return @{
+		jsonKey("uptime-seconds") : @(health.uptime_seconds),
+		jsonKey("active-torrents") : @(health.active_torrents),
+		jsonKey("download-rate") : @(health.download_rate),
+		jsonKey("upload-rate") : @(health.upload_rate),
+		jsonKey("alerts-seen") : @(health.alerts_seen),
+		jsonKey("running") : @(health.running),
+	};
+}
+
+RemovalToken removalTokenFromJSON(NSDictionary* dict)
+{
+	RemovalToken token;
+	token.torrent_id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+	token.delete_files = boolValue(dict, "delete-files", false);
+	token.nonce = static_cast<uint64_t>(int64Value(dict, "nonce", 0));
+	return token;
+}
+
+NSDictionary* removalTokenToJSON(const RemovalToken& token)
+{
+	return @{
+		jsonKey("torrent-id") : [NSString stringWithUTF8String:token.torrent_id.c_str()],
+		jsonKey("delete-files") : @(token.delete_files),
+		jsonKey("nonce") : @(token.nonce),
+	};
+}
+
+NSDictionary* removalResultToJSON(const RemovalResult& result)
+{
+	return @{
+		jsonKey("torrent-id") : [NSString stringWithUTF8String:result.torrent_id.c_str()],
+		jsonKey("files-deleted") : @(result.files_deleted),
+	};
+}
+
+NSDictionary* resumeDataToJSON(const ResumeDataDTO& resume)
+{
+	return @{
+		jsonKey("torrent-id") : [NSString stringWithUTF8String:resume.torrent_id.c_str()],
+		jsonKey("resume-data") : bytesToBase64(resume.resume_data),
+	};
+}
+
+// Generic trampoline: runs `body`, converts any C++/ObjC exception into an
+// NSError in `outError` and returns nil. Without this no engine call can crash
+// or throw into Swift.
+template <class Fn>
+NSData* runBridge(Fn&& body, NSError* __autoreleasing* error)
+{
+	@try {
+		return body();
+	} @catch (const std::exception& e) {
+		if (error != nil) {
+			*error = toNSError(BridgeError::internal,
+				std::string("bridge adapter exception: ") + e.what());
+		}
+		return nil;
+	} @catch (...) {
+		if (error != nil) {
+			*error = toNSError(BridgeError::internal, "bridge adapter exception: unknown");
+		}
+		return nil;
+	}
+}
+
+// Converts a C++ Result into (NSData|NSError). The engine methods never throw;
+// the trampoline above covers the adapter translation itself.
+template <class T, class ToJSON>
+NSData* resultToData(const torrentino::bridge::Result<T>& result, ToJSON&& toJSON,
+	NSError* __autoreleasing* error, bool* ok = nullptr)
+{
+	if (result.is_ok()) {
+		if (ok != nullptr) {
+			*ok = true;
+		}
+		return fromJSON(toJSON(result.value()));
+	}
+	if (ok != nullptr) {
+		*ok = false;
+	}
+	if (error != nil) {
+		*error = toNSError(result.error_code(), result.error_message());
+	}
+	return nil;
+}
+
+NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
+	NSError* __autoreleasing* error)
+{
+	if (result.is_ok()) {
+		return fromJSON(@{});
+	}
+	if (error != nil) {
+		*error = toNSError(result.error_code(), result.error_message());
+	}
+	return nil;
+}
+
+} // namespace
+
+@implementation TorrentinoEngineBridgeAdapter {
+	std::unique_ptr<EngineBridge> _engine;
+}
+
+- (instancetype)init
+{
+	self = [super init];
+	if (self != nil) {
+		_engine = std::make_unique<EngineBridge>();
+	}
+	return self;
+}
+
+- (void)dealloc
+{
+	// Deterministic teardown: the C++ session must be shut down before the
+	// facade is destroyed so libtorrent's network thread is joined cleanly.
+	if (_engine) {
+		_engine->shutdown();
+	}
+}
+
+- (nullable NSData *)startEngineWithConfigurationData:(NSData *)configurationData
+												error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(configurationData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const SessionConfiguration config = configurationFromJSON(dict);
+		auto result = _engine->start(config);
+		return resultToData(result, bootReportToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)addTorrentWithSpecificationData:(NSData *)specificationData
+											   error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(specificationData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const AddSpecification spec = addSpecificationFromJSON(dict);
+		auto result = _engine->add(spec);
+		return resultToData(result, addResultToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)pauseWithPayloadData:(NSData *)payloadData
+									error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->pause(id), error);
+	}, error);
+}
+
+- (nullable NSData *)resumeWithPayloadData:(NSData *)payloadData
+									 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->resume(id), error);
+	}, error);
+}
+
+- (nullable NSData *)recheckWithPayloadData:(NSData *)payloadData
+									  error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->requestRecheck(id), error);
+	}, error);
+}
+
+- (nullable NSData *)prepareRemovalWithPayloadData:(NSData *)payloadData
+											 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		const bool deleteFiles = boolValue(dict, "delete-files", false);
+		auto result = _engine->prepareRemoval(id, deleteFiles);
+		return resultToData(result, removalTokenToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)commitRemovalWithTokenData:(NSData *)tokenData
+										  error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(tokenData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const RemovalToken token = removalTokenFromJSON(dict);
+		auto result = _engine->commitRemoval(token);
+		return resultToData(result, removalResultToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)drainAlertsWithPayloadData:(NSData *)payloadData
+										  error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		std::size_t maxCount = 0;
+		if (payloadData.length > 0) {
+			NSDictionary* dict = toJSON(payloadData, error);
+			if (dict == nil) {
+				return nil;
+			}
+			const int64_t raw = int64Value(dict, "max-count", 0);
+			maxCount = raw > 0 ? static_cast<std::size_t>(raw) : 0;
+		}
+		const std::vector<EngineAlertDTO> alerts = _engine->drainAlerts(maxCount);
+		NSMutableArray* array = [NSMutableArray arrayWithCapacity:alerts.size()];
+		for (const EngineAlertDTO& alert : alerts) {
+			[array addObject:alertToJSON(alert)];
+		}
+		return fromJSON(array);
+	}, error);
+}
+
+- (nullable NSData *)requestResumeDataWithPayloadData:(NSData *)payloadData
+												error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		auto result = _engine->requestResumeData(id);
+		return resultToData(result, resumeDataToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)healthWithError:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		const HealthDTO health = _engine->health();
+		return fromJSON(healthToJSON(health));
+	}, error);
+}
+
+- (nullable NSData *)setOperationTimeoutWithPayloadData:(NSData *)payloadData
+												  error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const uint32_t millis = uint32Value(dict, "millis", 0);
+		return voidResultToData(_engine->setOperationTimeout(millis), error);
+	}, error);
+}
+
+- (void)shutdown
+{
+	if (_engine) {
+		_engine->shutdown();
+	}
+}
+
+@end

@@ -1,0 +1,246 @@
+// Torrentino engine bridge — public C++ facade (WP-04).
+//
+// Role:     the single C++ surface the ObjC++ adapter — and through it the
+//           Swift agent — may touch. Owns the libtorrent 2.x session, the
+//           torrent primitives (add/pause/resume/recheck/remove), aggregated
+//           alert batching and deterministic shutdown.
+// Must not: let a libtorrent, Boost or OpenSSL type appear in this header.
+//           The PIMPL boundary is what keeps Swift free of C++ types and the
+//           exception firewall catches everything before it leaves a call.
+// Threading: every public call is internally serialized and bounded by an
+//           operation deadline; shutdown() unblocks in-flight waits so a
+//           cancelled operation can never hang the agent.
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace torrentino::bridge {
+
+// Registry identity of a torrent record: the v1 info-hash hex when present,
+// otherwise the v2 hex (the identity rule established by the WP-01 bakeoff).
+using TorrentRecordID = std::string;
+
+// Structured error taxonomy mirroring the Swift EngineCoordinatorError cases.
+// Every public method converts a C++/libtorrent exception into one of these
+// codes plus a human-readable message (the exception firewall).
+enum class BridgeError : std::int32_t {
+	none = 0,
+	not_started = 1,     // engine never started (or already shut down)
+	already_started = 2, // start() called twice
+	not_found = 3,       // torrent id unknown to the engine
+	timeout = 4,         // bounded wait expired (deadline enforced)
+	invalid_argument = 5,
+	engine_failure = 6,  // libtorrent/system_error surfaced by an operation
+	io = 7,              // filesystem-level failure
+	stopped = 8,         // operation aborted because shutdown was requested
+	internal = 9,        // unknown exception at the firewall
+};
+
+// Text form used by the ObjC adapter for NSError diagnostics.
+const char* bridge_error_name(BridgeError code) noexcept;
+
+// ---------------------------------------------------------------------------
+// Value DTOs — plain structs, no third-party types (ADR-005).
+// ---------------------------------------------------------------------------
+
+struct SessionConfiguration {
+	int listen_port = 0; // 0 = ephemeral loopback port (hermetic, WP-01 rule)
+	std::string download_dir;
+	bool enable_dht = false;
+	int max_connections = 120;
+	// Stable prefix libtorrent expands into the 20-byte wire peer ID. The full
+	// wire ID is synthesized inside libtorrent and not exposed by any
+	// non-deprecated API in 2.x, so the boot report reports this configured,
+	// deterministic prefix rather than calling the removed session.id().
+	std::string peer_id_prefix = "-TT0400-";
+	// Bounded-wait budget for every engine operation. A hanging libtorrent
+	// call becomes a timeout Result, never a stuck actor.
+	std::uint32_t operation_timeout_ms = 10000;
+	std::uint32_t alert_queue_size = 8000;
+};
+
+struct AddSpecification {
+	// Exactly one of torrent_file / magnet_uri must be non-empty.
+	std::vector<char> torrent_file;
+	std::string magnet_uri;
+	std::string save_path; // required
+	bool paused = false;   // add paused (the coordinator owns the state machine)
+};
+
+struct BootReport {
+	std::string version;   // bridge + libtorrent versions
+	std::string peer_id;   // configured wire peer-id prefix (see above)
+	int listen_port = 0;
+};
+
+struct AddResult {
+	TorrentRecordID torrent_id;
+	std::string info_hash;  // "v1=... v2=..." description for diagnostics
+	std::string name;
+	std::int64_t total_size = 0; // -1 while metadata is unknown (magnet)
+};
+
+enum class EngineAlertKind : std::int32_t {
+	state_changed = 0,
+	checked = 1,
+	finished = 2,
+	paused = 3,
+	resumed = 4,
+	metadata_received = 5,
+	error = 6,
+	removed = 7,
+	session = 8, // session-level notice (e.g. listen succeeded/failed)
+	unknown = 9,
+};
+
+// Stable kebab-case names shared with the Swift DTO (plist keys).
+const char* engine_alert_kind_name(EngineAlertKind kind) noexcept;
+
+struct EngineAlertDTO {
+	EngineAlertKind kind = EngineAlertKind::unknown;
+	TorrentRecordID torrent_id; // empty for session-level alerts
+	double progress = -1.0;     // -1 when not applicable
+	int state = -1;             // raw libtorrent state code when available
+	std::string error;          // message for error alerts
+	std::string message;        // human-readable summary for logging
+};
+
+struct HealthDTO {
+	std::uint64_t uptime_seconds = 0;
+	std::size_t active_torrents = 0;
+	int download_rate = 0; // bytes/s, aggregate across torrents
+	int upload_rate = 0;   // bytes/s, aggregate across torrents
+	std::uint64_t alerts_seen = 0;
+	bool running = false;
+};
+
+struct ResumeDataDTO {
+	TorrentRecordID torrent_id;
+	std::vector<char> resume_data; // bencoded, write_resume_data_buf output
+};
+
+// Two-phase removal (ADR-010): prepareRemoval validates the record exists and
+// freezes keep/delete semantics into an opaque token; commitRemoval performs
+// the actual removal. Nothing is deleted at prepare time, so a never-committed
+// token is harmless (the torrent simply stays).
+struct RemovalToken {
+	TorrentRecordID torrent_id;
+	bool delete_files = false;
+	std::uint64_t nonce = 0;
+};
+
+struct RemovalResult {
+	TorrentRecordID torrent_id;
+	bool files_deleted = false;
+};
+
+struct SessionStateDTO {
+	std::vector<char> session_state; // bencoded session_params buffer
+};
+
+// ---------------------------------------------------------------------------
+// Result<T> — value or structured failure. Never throws to the caller.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+const char* internal_message(const char* fallback) noexcept;
+
+} // namespace detail
+
+template <class T>
+class Result final {
+public:
+	static Result ok(T value) { return Result(std::move(value)); }
+	static Result failed(BridgeError code, std::string message)
+	{
+		return Result(code, std::move(message));
+	}
+
+	Result(Result&&) noexcept = default;
+	Result& operator=(Result&&) noexcept = default;
+	Result(const Result&) = delete;
+	Result& operator=(const Result&) = delete;
+
+	[[nodiscard]] bool is_ok() const noexcept { return error_code_ == BridgeError::none; }
+	[[nodiscard]] BridgeError error_code() const noexcept { return error_code_; }
+	[[nodiscard]] const std::string& error_message() const noexcept { return message_; }
+	[[nodiscard]] const T& value() const noexcept { return value_; }
+
+private:
+	Result(T value) : value_(std::move(value)) {}
+	Result(BridgeError code, std::string message)
+		: error_code_(code), message_(std::move(message))
+	{
+	}
+	T value_;
+	BridgeError error_code_{BridgeError::none};
+	std::string message_;
+};
+
+template <>
+class Result<void> final {
+public:
+	// `ok` as a static factory name is shadowed by the non-static member below;
+	// the template specialization therefore uses a named success factory.
+	static Result success() { return Result(); }
+	static Result failed(BridgeError code, std::string message)
+	{
+		return Result(code, std::move(message));
+	}
+
+	// The compiler resolves this member by name lookup inside the class, which
+	// is unaffected by the static factory: only the return type differs.
+	[[nodiscard]] bool is_ok() const noexcept { return error_code_ == BridgeError::none; }
+	[[nodiscard]] BridgeError error_code() const noexcept { return error_code_; }
+	[[nodiscard]] const std::string& error_message() const noexcept { return message_; }
+
+private:
+	Result() = default;
+	Result(BridgeError code, std::string message)
+		: error_code_(code), message_(std::move(message))
+	{
+	}
+	BridgeError error_code_{BridgeError::none};
+	std::string message_;
+};
+
+// ---------------------------------------------------------------------------
+// EngineBridge — PIMPL facade over libtorrent (ADR-005).
+// ---------------------------------------------------------------------------
+
+class EngineBridge final {
+public:
+	EngineBridge();
+	~EngineBridge();
+
+	EngineBridge(const EngineBridge&) = delete;
+	EngineBridge& operator=(const EngineBridge&) = delete;
+
+	Result<BootReport> start(const SessionConfiguration& config) noexcept;
+	Result<AddResult> add(const AddSpecification& spec) noexcept;
+	Result<void> pause(const TorrentRecordID& id) noexcept;
+	Result<void> resume(const TorrentRecordID& id) noexcept;
+	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
+	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id, bool delete_files) noexcept;
+	Result<RemovalResult> commitRemoval(const RemovalToken& token) noexcept;
+	// Aggregated alert batch (never one alert per peer/piece). Returns an
+	// empty batch when the engine is not running or has been shut down.
+	std::vector<EngineAlertDTO> drainAlerts(std::size_t max_count) noexcept;
+	Result<ResumeDataDTO> requestResumeData(const TorrentRecordID& id) noexcept;
+	Result<SessionStateDTO> saveSessionState() noexcept;
+	HealthDTO health() const noexcept;
+	// Re-bounds the operation deadline (deadline/cancellation control).
+	Result<void> setOperationTimeout(std::uint32_t millis) noexcept;
+	// Deterministic shutdown: idempotent, noexcept, unblocks in-flight waits.
+	void shutdown() noexcept;
+
+private:
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
+};
+
+} // namespace torrentino::bridge
