@@ -1,18 +1,20 @@
-current_step: WP-05
+current_step: WP-06
 step_description: >-
-  XPC protocol v1. Codable envelopes, hello/version, request IDs/idempotency,
-  event batches, snapshots, revisions, backpressure, reconnect, peer code-signing,
-  paginated reads, transactional Settings.
+  Durable persistence/recovery. SQLite schema/migrations/WAL, atomic
+  resume/metainfo/session generations, checksums, operation journal,
+  clean/unclean shutdown, startup reconciliation, quarantine/rebuild,
+  deterministic failpoints, advisory-lock single-writer.
 target_files:
-- Native/TorrentinoIPC/
+- Native/TorrentinoEngineAgent/Persistence/
 - Native/TorrentinoEngineAgent/Agent/
-- Native/TorrentinoApp/EngineClient/
+- Native/Tests/TorrentinoEngineAgentTests/
 completed_steps:
 - WP-00
 - WP-01
 - WP-02
 - WP-03
 - WP-04
+- WP-05
 implementation:
   status: pending
   attempts: 0
@@ -24,23 +26,24 @@ review:
 qa:
   status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-04
+  suite: WP-05
   bugs_open: 0
-  note: 'WP-04 GREEN. 45/45 scripts. Soak 24h on track.'
+  note: 'WP-05 GREEN. 57/57 scripts + 102/102 contract tests. Soak 24h GREEN.'
 next_actor: coder
 track: ENGINE
 prior_track: ENGINE
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-05
-  last_post_tag: torrentino/WP-04-done
-  last_commit: 82de59b
+  last_pre_tag: torrentino/pre-WP-06
+  last_post_tag: torrentino/WP-05-done
+  last_commit: f6b7f15
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-05: XPC protocol v1. Codable envelopes, hello/version range, request
-  IDs/idempotency, reverse event batches, full/incremental snapshots,
-  revisions/instance IDs, backpressure/coalescing, reconnect, peer code-signing,
-  paginated inspector reads, transactional Settings protocol.
+  WP-06: Durable persistence/recovery. SQLite schema/migrations/WAL, atomic
+  resume/metainfo/session generations, checksums, operation/recent-command
+  journal, clean/unclean shutdown, startup reconciliation, quarantine/rebuild,
+  50-100 record fixture, advisory-lock single-writer tests, deterministic
+  persistence failpoints (8 injection points), forensic group preservation.
