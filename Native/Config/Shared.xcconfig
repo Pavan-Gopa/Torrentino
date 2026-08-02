@@ -1,5 +1,5 @@
-// Layer: Build configuration (shared base for all WP-02 targets)
-// Role: deterministic Developer ID build settings for the lifecycle spike.
+// Layer: Build configuration (shared base for all native targets).
+// Role: deterministic Developer ID settings for app, agent, frameworks, tests.
 // Must-not: enable App Sandbox, inject get-task-allow, add Homebrew search paths.
 // Invariants: arm64 only, macOS 13+, Swift 6 strict concurrency = Complete,
 // warnings are errors, hardened runtime on every signed product.
@@ -26,3 +26,6 @@ CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
 
 ENABLE_DEFAULT_SEARCH_PATHS = YES
 ALWAYS_SEARCH_USER_PATHS = NO
+
+COPY_PHASE_STRIP = NO
+STRIP_INSTALLED_PRODUCT = NO

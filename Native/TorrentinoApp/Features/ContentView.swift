@@ -1,9 +1,7 @@
-// Layer: UI (SwiftUI).
-// Role: lifecycle spike control panel — one button per XPC/registration
-// action, live status banner, event log.
-// Must-not: edit engine state directly, or hide degraded mode.
-// Invariants: renders EngineViewModel only; all actions are user-initiated;
-// degraded banner is shown whenever SMAppService status != enabled.
+// Layer: UI (SwiftUI main window).
+// Role: native empty state when the authoritative torrent list is empty.
+// Must-not: invent torrents, edit engine state, or hide degraded agent status.
+// Invariants: UI is not source of truth; empty copy comes from String Catalog.
 
 import SwiftUI
 
@@ -11,82 +9,45 @@ struct ContentView: View {
     @EnvironmentObject private var viewModel: EngineViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
+        VStack(spacing: 0) {
             if viewModel.degraded {
                 degradedBanner
             }
-            controls
-            logPane
+            emptyState
         }
-        .padding(16)
-        .frame(minWidth: 720, minHeight: 500)
+        .frame(minWidth: 720, minHeight: 480)
         .task { viewModel.refreshServiceStatus() }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Torrentino Engine Lifecycle (WP-02 spike)")
-                .font(.title2.bold())
-            Text("Agent: \(AgentServiceRegistration.label) · Mach: \(TorrentinoXPCSecurity.machServiceName)")
-                .font(.caption)
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "square.stack.3d.up.slash")
+                .font(.system(size: 48, weight: .light))
                 .foregroundStyle(.secondary)
-                .textSelection(.enabled)
+                .accessibilityHidden(true)
+            Text(String(localized: "empty.no_torrents"))
+                .font(.title2.weight(.semibold))
+            Text(String(localized: "empty.subtitle"))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private var degradedBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-            Text("Engine service degraded — SMAppService status: \(viewModel.statusText). " +
-                 "Register the agent (and approve it in System Settings > Login Items if asked).")
+            Text(String(localized: "error.xpc_unavailable"))
                 .font(.callout)
+            Text("· \(viewModel.statusText)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Service").font(.headline).frame(width: 70, alignment: .leading)
-                Button("Register") { viewModel.register() }
-                Button("Unregister") { viewModel.unregister() }
-                Button("Refresh Status") { viewModel.refreshServiceStatus() }
-            }
-            HStack(spacing: 8) {
-                Text("Engine").font(.headline).frame(width: 70, alignment: .leading)
-                Button("Hello") { viewModel.hello() }
-                Button("Health") { viewModel.health() }
-                Button("Increment") { viewModel.increment() }
-                Button("Get Counter") { viewModel.getCounter() }
-                Button("Shutdown Agent", role: .destructive) { viewModel.shutdownAgent() }
-            }
-        }
-        .disabled(viewModel.busy)
-    }
-
-    private var logPane: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(viewModel.logLines.enumerated()), id: \.offset) { index, line in
-                        Text(line)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .id(index)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-            }
-            .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-            .onChange(of: viewModel.logLines.count) { count in
-                if count > 0 {
-                    proxy.scrollTo(count - 1, anchor: .bottom)
-                }
-            }
-        }
+        .background(Color.yellow.opacity(0.18))
     }
 }

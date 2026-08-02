@@ -8,8 +8,11 @@
 
 import Foundation
 import OSLog
+import TorrentinoIPC
 
 final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Sendable {
+    /// IPC command catalog version for diagnostics (wire schema lives in TorrentinoIPC).
+    private static let ipcSchemaVersion = IPCVersion.current
     private let store: CounterStore
     /// Wired by AgentRuntime immediately after construction and never replaced
     /// (set-once). Kept settable so the runtime can inject a [weak self] hook
@@ -36,6 +39,7 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         Task {
             let counter = await store.current()
             let uptime = Date().timeIntervalSince(started)
+            // Extra keys (e.g. ipcVersion) are ignored by AgentHealth; keep required keys stable.
             reply([
                 "agentVersion": AgentRuntime.agentVersion,
                 "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier),
@@ -43,6 +47,7 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
                 "counter": NSNumber(value: counter),
                 "counterFormat": format,
                 "machService": TorrentinoXPCSecurity.machServiceName,
+                "ipcVersion": Self.ipcSchemaVersion.description,
             ])
         }
     }

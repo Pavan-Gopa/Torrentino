@@ -4,6 +4,7 @@
 // Invariants: Sendable + value semantics; safe to publish on the main actor.
 
 import Foundation
+import TorrentinoDomain
 
 struct AgentHello: Sendable, Equatable {
     let agentVersion: String
@@ -55,6 +56,15 @@ enum EngineClientError: Error, CustomStringConvertible, Sendable {
         case .unavailable(let reason): return "engine unavailable: \(reason)"
         case .interrupted(let underlying): return "connection interrupted: \(underlying)"
         case .protocolMismatch(let details): return "protocol mismatch: \(details)"
+        }
+    }
+
+    /// Maps transport-layer failures onto the shared domain error taxonomy.
+    var domainError: EngineError {
+        switch self {
+        case .unavailable: return .xpcUnavailable
+        case .interrupted: return .xpcUnavailable
+        case .protocolMismatch: return .internalError
         }
     }
 }

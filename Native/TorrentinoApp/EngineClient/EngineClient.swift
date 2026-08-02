@@ -9,14 +9,17 @@
 
 import Foundation
 import OSLog
+import TorrentinoIPC
 
 actor EngineClient {
     private static let maxAttempts = 5
     private static let backoffNanoseconds: [UInt64] = [
         250_000_000, 500_000_000, 1_000_000_000, 2_000_000_000, 4_000_000_000,
     ]
-
     private var connection: NSXPCConnection?
+
+    /// IPC command surface from TorrentinoIPC (schema identity; transport is still ObjC XPC).
+    nonisolated var supportedCommands: [EngineCommand] { EngineCommand.allCases }
     /// Non-nil only if expectedAgentExpression parses as a valid requirement
     /// (validated once via SecRequirementCreateWithString). The NSXPCConnection
     /// API takes the requirement-language string itself.
