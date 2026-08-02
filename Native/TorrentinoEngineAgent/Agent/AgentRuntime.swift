@@ -5,7 +5,9 @@
 // clean stop (launchd would treat it as a crash and restart).
 // Invariants: all mutable state is serialized on `stateQueue`; the durable
 // counter is flushed before any clean exit; SIGTERM and the XPC shutdown
-// method share one stop path (ADR-004).
+// method share one stop path (ADR-004); WP-06 persistence is opened in
+// background after bootstrap and closed through the clean-shutdown pipeline
+// (WAL checkpoint, journal truncation, clean flag) before exit.
 
 import Foundation
 import OSLog
@@ -30,22 +32,36 @@ final class AgentRuntime: @unchecked Sendable {
     private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "runtime")
     private let stateQueue = DispatchQueue(label: "com.torrentino.app.engine-agent.runtime")
     private let store: CounterStore
+    private let persistence: PersistenceStore
     private let service: AgentService
     private var listener: NSXPCListener?
     private var listenerDelegate: ListenerDelegate? // strong: NSXPCListener.delegate is weak
     private var signalSources: [DispatchSourceSignal] = []
     private var lockDescriptor: CInt = -1
+    private var advisoryLock: AdvisoryLockHandle?
     private var stopInitiated = false
 
-    /// Creates the engine directory, takes the single-instance lock, and loads
-    /// the durable counter. Throws CounterStoreError on state problems.
+    /// Creates the engine directory, takes the single-instance lock, acquires
+    /// the persistence single-writer advisory lock, and loads the durable
+    /// counter. Throws CounterStoreError on state problems.
     init() throws {
         let engineDirectory = try Self.makeEngineDirectory()
         var descriptor: CInt = -1
         try Self.takeInstanceLock(engineDirectory: engineDirectory, descriptor: &descriptor)
         self.lockDescriptor = descriptor
+        // WP-06: one writer per data directory. A second agent holding the
+        // lock is a bootstrap fault — exit 1 with a clear message.
+        do {
+            self.advisoryLock = try AdvisoryLock.acquire(dataDirectory: engineDirectory)
+        } catch {
+            FileHandle.standardError.write(Data(
+                ("FATAL: persistence data directory is locked by another writer: " +
+                 "\(String(describing: error))\n").utf8))
+            exit(AgentRuntime.exitCodeFault)
+        }
         self.store = try CounterStore(engineDirectory: engineDirectory)
-        self.service = AgentService(store: store)
+        self.persistence = PersistenceStore(dataDirectory: engineDirectory)
+        self.service = AgentService(store: store, persistence: persistence)
         // Phase 1 is complete: capturing self weakly is now legal.
         service.shutdownHook = { [weak self] in
             self?.initiateStop(reason: "xpc-shutdown", exitDelayNanoseconds: 250_000_000)
@@ -75,6 +91,18 @@ final class AgentRuntime: @unchecked Sendable {
 
         installSignalHandlers()
 
+        // WP-06: open the durable store in the background (schema/migrations,
+        // WAL recovery, startup reconciliation). A corrupt database degrades
+        // to a rebuilt/limited store — the agent never fails to serve.
+        Task {
+            do {
+                let report = try await persistence.open()
+                log.notice("persistence ready: \(report.message, privacy: .public)")
+            } catch {
+                log.error("persistence open failed, serving degraded: \(String(describing: error), privacy: .public)")
+            }
+        }
+
         let delegate = ListenerDelegate(service: service)
         let machListener = NSXPCListener(machServiceName: TorrentinoXPCSecurity.machServiceName)
         machListener.delegate = delegate
@@ -95,6 +123,7 @@ final class AgentRuntime: @unchecked Sendable {
             stopInitiated = true
             log.notice("graceful shutdown initiated reason=\(reason, privacy: .public)")
             let store = store
+            let persistence = persistence
             Task {
                 do {
                     try await store.flush()
@@ -103,6 +132,15 @@ final class AgentRuntime: @unchecked Sendable {
                     // Still exit 0: the in-memory value was already persisted
                     // on every increment; flush is a belt-and-braces checkpoint.
                     log.error("final flush failed: \(String(describing: error), privacy: .public)")
+                }
+                // WP-06 clean shutdown: WAL flush -> TRUNCATE checkpoint ->
+                // journal truncation -> clean flag -> close. Any failure here
+                // still exits 0; the next boot runs startup reconciliation.
+                do {
+                    try await persistence.close(clean: true)
+                    log.notice("persistence clean shutdown complete")
+                } catch {
+                    log.error("persistence clean shutdown failed, WAL left for replay: \(String(describing: error), privacy: .public)")
                 }
                 // Short delay lets the XPC shutdown ack drain to the client.
                 try? await Task.sleep(nanoseconds: exitDelayNanoseconds)

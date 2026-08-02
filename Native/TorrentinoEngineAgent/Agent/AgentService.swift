@@ -4,7 +4,9 @@
 // Must-not: block XPC queues with file IO, hold mutable state, or touch
 // libtorrent (WP-04 replaces the counter with the real engine).
 // Invariants: all state access goes through the CounterStore actor; each reply
-// block is invoked exactly once; the shutdown ack is sent BEFORE exit begins.
+// block is invoked exactly once; the shutdown ack is sent BEFORE exit begins;
+// WP-06 persistence health (state/clean flag/degraded/quarantine) is exposed
+// as extra plist-only keys in health() and never blocks the XPC queue.
 
 import Foundation
 import OSLog
@@ -14,6 +16,7 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     /// IPC command catalog version for diagnostics (wire schema lives in TorrentinoIPC).
     private static let ipcSchemaVersion = IPCVersion.current
     private let store: CounterStore
+    private let persistence: PersistenceStore
     /// Wired by AgentRuntime immediately after construction and never replaced
     /// (set-once). Kept settable so the runtime can inject a [weak self] hook
     /// AFTER its own stored properties are fully initialized (Swift phase-1
@@ -22,8 +25,9 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     private let startDate = Date()
     private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
 
-    init(store: CounterStore) {
+    init(store: CounterStore, persistence: PersistenceStore) {
         self.store = store
+        self.persistence = persistence
     }
 
     func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
@@ -38,12 +42,14 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
 
     func health(reply: @escaping @Sendable ([String: Any]) -> Void) {
         let store = store
+        let persistence = persistence
         let started = startDate
         let format = store.formatName
         let serverRange = Handshake.serverSupportedRange
         Task {
             let counter = await store.current()
             let uptime = Date().timeIntervalSince(started)
+            let health = await persistence.healthSnapshot()
             // Extra keys (e.g. protocolRange) are ignored by AgentHealth; keep
             // required keys stable. protocolRange advertises the agent's
             // supported protocol for the WP-05 handshake negotiation.
@@ -56,6 +62,12 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
                 "machService": TorrentinoXPCSecurity.machServiceName,
                 "ipcVersion": Self.ipcSchemaVersion.description,
                 "protocolRange": "\(serverRange.lowerBound)...\(serverRange.upperBound)",
+                // WP-06 persistence health (plist types only).
+                "persistenceState": health.state,
+                "cleanShutdown": NSNumber(value: health.cleanShutdown),
+                "degraded": NSNumber(value: health.degraded),
+                "quarantined": NSNumber(value: health.quarantinedCount),
+                "reconciliation": health.reconciliation,
             ])
         }
     }

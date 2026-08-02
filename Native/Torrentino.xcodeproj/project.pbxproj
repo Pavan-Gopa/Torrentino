@@ -68,6 +68,29 @@
 		4A0000000000000000000586 /* libtorrent-rasterbar.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000168 /* libtorrent-rasterbar.a */; };
 		4A0000000000000000000587 /* libssl.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000169 /* libssl.a */; };
 		4A0000000000000000000588 /* libcrypto.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000016A /* libcrypto.a */; };
+		4A00000000000000000005A1 /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A1 /* PersistenceStore.swift */; };
+		4A00000000000000000005A2 /* AtomicGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A2 /* AtomicGeneration.swift */; };
+		4A00000000000000000005A3 /* OperationJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A3 /* OperationJournal.swift */; };
+		4A00000000000000000005A4 /* ShutdownCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A4 /* ShutdownCoordinator.swift */; };
+		4A00000000000000000005A5 /* StartupReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A5 /* StartupReconciler.swift */; };
+		4A00000000000000000005A6 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A6 /* QuarantineManager.swift */; };
+		4A00000000000000000005A7 /* FailpointInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A7 /* FailpointInjector.swift */; };
+		4A00000000000000000005A8 /* AdvisoryLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A8 /* AdvisoryLock.swift */; };
+		4A00000000000000000005A9 /* PersistenceError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A9 /* PersistenceError.swift */; };
+		4A00000000000000000005AA /* SQLiteConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AA /* SQLiteConnection.swift */; };
+		4A0000000000000000000567 /* TestProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000151 /* TestProfile.swift */; };
+		4A00000000000000000005B1 /* PersistenceFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AB /* PersistenceFixture.swift */; };
+		4A00000000000000000005B2 /* TorrentinoEngineAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AC /* TorrentinoEngineAgentTests.swift */; };
+		4A00000000000000000005C1 /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A1 /* PersistenceStore.swift */; };
+		4A00000000000000000005C2 /* AtomicGeneration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A2 /* AtomicGeneration.swift */; };
+		4A00000000000000000005C3 /* OperationJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A3 /* OperationJournal.swift */; };
+		4A00000000000000000005C4 /* ShutdownCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A4 /* ShutdownCoordinator.swift */; };
+		4A00000000000000000005C5 /* StartupReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A5 /* StartupReconciler.swift */; };
+		4A00000000000000000005C6 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A6 /* QuarantineManager.swift */; };
+		4A00000000000000000005C7 /* FailpointInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A7 /* FailpointInjector.swift */; };
+		4A00000000000000000005C8 /* AdvisoryLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A8 /* AdvisoryLock.swift */; };
+		4A00000000000000000005C9 /* PersistenceError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A9 /* PersistenceError.swift */; };
+		4A00000000000000000005CA /* SQLiteConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AA /* SQLiteConnection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -217,6 +240,19 @@
 		4A0000000000000000000168 /* libtorrent-rasterbar.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libtorrent-rasterbar.a; path = "ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib/libtorrent-rasterbar.a"; sourceTree = "<group>"; };
 		4A0000000000000000000169 /* libssl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libssl.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libssl.a"; sourceTree = "<group>"; };
 		4A000000000000000000016A /* libcrypto.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcrypto.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libcrypto.a"; sourceTree = "<group>"; };
+		4A00000000000000000001A1 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A2 /* AtomicGeneration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtomicGeneration.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A3 /* OperationJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationJournal.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A4 /* ShutdownCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutdownCoordinator.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A5 /* StartupReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupReconciler.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A6 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarantineManager.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A7 /* FailpointInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailpointInjector.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A8 /* AdvisoryLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvisoryLock.swift; sourceTree = "<group>"; };
+		4A00000000000000000001A9 /* PersistenceError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceError.swift; sourceTree = "<group>"; };
+		4A00000000000000000001AA /* SQLiteConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteConnection.swift; sourceTree = "<group>"; };
+		4A00000000000000000001AB /* PersistenceFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceFixture.swift; sourceTree = "<group>"; };
+		4A00000000000000000001AC /* TorrentinoEngineAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoEngineAgentTests.swift; sourceTree = "<group>"; };
+		4A0000000000000000000215 /* TorrentinoEngineAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoEngineAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -280,6 +316,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4A0000000000000000000482 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -330,6 +373,7 @@
 				4A0000000000000000000212 /* TorrentinoDomainTests.xctest */,
 				4A0000000000000000000213 /* TorrentinoIPCTests.xctest */,
 				4A0000000000000000000214 /* TorrentinoAppTests.xctest */,
+				4A0000000000000000000215 /* TorrentinoEngineAgentTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -402,6 +446,16 @@
 			isa = PBXGroup;
 			children = (
 				4A000000000000000000010B /* CounterStore.swift */,
+				4A00000000000000000001A1 /* PersistenceStore.swift */,
+				4A00000000000000000001A2 /* AtomicGeneration.swift */,
+				4A00000000000000000001A3 /* OperationJournal.swift */,
+				4A00000000000000000001A4 /* ShutdownCoordinator.swift */,
+				4A00000000000000000001A5 /* StartupReconciler.swift */,
+				4A00000000000000000001A6 /* QuarantineManager.swift */,
+				4A00000000000000000001A7 /* FailpointInjector.swift */,
+				4A00000000000000000001A8 /* AdvisoryLock.swift */,
+				4A00000000000000000001A9 /* PersistenceError.swift */,
+				4A00000000000000000001AA /* SQLiteConnection.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -494,6 +548,7 @@
 				4A0000000000000000000024 /* TorrentinoDomainTests */,
 				4A0000000000000000000025 /* TorrentinoIPCTests */,
 				4A0000000000000000000026 /* TorrentinoAppTests */,
+				4A0000000000000000000027 /* TorrentinoEngineAgentTests */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -528,6 +583,15 @@
 				4A0000000000000000000154 /* TorrentinoAppTests.swift */,
 			);
 			path = TorrentinoAppTests;
+			sourceTree = "<group>";
+		};
+		4A0000000000000000000027 /* TorrentinoEngineAgentTests */ = {
+			isa = PBXGroup;
+			children = (
+				4A00000000000000000001AB /* PersistenceFixture.swift */,
+				4A00000000000000000001AC /* TorrentinoEngineAgentTests.swift */,
+			);
+			path = TorrentinoEngineAgentTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -675,6 +739,22 @@
 			productReference = 4A0000000000000000000214 /* TorrentinoAppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		4A0000000000000000000315 /* TorrentinoEngineAgentTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A0000000000000000000709 /* Build configuration list for PBXNativeTarget "TorrentinoEngineAgentTests" */;
+			buildPhases = (
+				4A0000000000000000000481 /* Sources */,
+				4A0000000000000000000482 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TorrentinoEngineAgentTests;
+			productName = TorrentinoEngineAgentTests;
+			productReference = 4A0000000000000000000215 /* TorrentinoEngineAgentTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -703,10 +783,13 @@
 					4A0000000000000000000313 = {
 						CreatedOnToolsVersion = 15.4;
 					};
-					4A0000000000000000000314 = {
-						CreatedOnToolsVersion = 15.4;
-					};
+				4A0000000000000000000314 = {
+					CreatedOnToolsVersion = 15.4;
 				};
+				4A0000000000000000000315 = {
+					CreatedOnToolsVersion = 15.4;
+				};
+			};
 			};
 			buildConfigurationList = 4A0000000000000000000701 /* Build configuration list for PBXProject "Torrentino" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -729,6 +812,7 @@
 				4A0000000000000000000312 /* TorrentinoDomainTests */,
 				4A0000000000000000000313 /* TorrentinoIPCTests */,
 				4A0000000000000000000314 /* TorrentinoAppTests */,
+				4A0000000000000000000315 /* TorrentinoEngineAgentTests */,
 			);
 		};
 /* End PBXProject section */
@@ -771,6 +855,16 @@
 				4A0000000000000000000509 /* AgentRuntime.swift in Sources */,
 				4A000000000000000000050A /* AgentService.swift in Sources */,
 				4A000000000000000000050B /* CounterStore.swift in Sources */,
+				4A00000000000000000005A1 /* PersistenceStore.swift in Sources */,
+				4A00000000000000000005A2 /* AtomicGeneration.swift in Sources */,
+				4A00000000000000000005A3 /* OperationJournal.swift in Sources */,
+				4A00000000000000000005A4 /* ShutdownCoordinator.swift in Sources */,
+				4A00000000000000000005A5 /* StartupReconciler.swift in Sources */,
+				4A00000000000000000005A6 /* QuarantineManager.swift in Sources */,
+				4A00000000000000000005A7 /* FailpointInjector.swift in Sources */,
+				4A00000000000000000005A8 /* AdvisoryLock.swift in Sources */,
+				4A00000000000000000005A9 /* PersistenceError.swift in Sources */,
+				4A00000000000000000005AA /* SQLiteConnection.swift in Sources */,
 				4A000000000000000000050C /* TorrentinoEngineXPCProtocol.swift in Sources */,
 				4A0000000000000000000585 /* EngineBridge.cpp in Sources */,
 				4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */,
@@ -838,6 +932,26 @@
 				4A0000000000000000000563 /* TestProfile.swift in Sources */,
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
 				4A000000000000000000055B /* PeerValidation.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A0000000000000000000481 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A0000000000000000000567 /* TestProfile.swift in Sources */,
+				4A00000000000000000005B1 /* PersistenceFixture.swift in Sources */,
+				4A00000000000000000005B2 /* TorrentinoEngineAgentTests.swift in Sources */,
+				4A00000000000000000005C1 /* PersistenceStore.swift in Sources */,
+				4A00000000000000000005C2 /* AtomicGeneration.swift in Sources */,
+				4A00000000000000000005C3 /* OperationJournal.swift in Sources */,
+				4A00000000000000000005C4 /* ShutdownCoordinator.swift in Sources */,
+				4A00000000000000000005C5 /* StartupReconciler.swift in Sources */,
+				4A00000000000000000005C6 /* QuarantineManager.swift in Sources */,
+				4A00000000000000000005C7 /* FailpointInjector.swift in Sources */,
+				4A00000000000000000005C8 /* AdvisoryLock.swift in Sources */,
+				4A00000000000000000005C9 /* PersistenceError.swift in Sources */,
+				4A00000000000000000005CA /* SQLiteConnection.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -994,6 +1108,7 @@
 					"$(inherited)",
 					"-framework CoreFoundation",
 					"-framework SystemConfiguration",
+					"-lsqlite3",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1041,6 +1156,7 @@
 					"$(inherited)",
 					"-framework CoreFoundation",
 					"-framework SystemConfiguration",
+					"-lsqlite3",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1240,6 +1356,50 @@
 			};
 			name = Release;
 		};
+		4A0000000000000000000721 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000124 /* Debug.xcconfig */;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lsqlite3",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.tests.engineagent;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		4A0000000000000000000722 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A0000000000000000000125 /* Release.xcconfig */;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lsqlite3",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.tests.engineagent;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1311,6 +1471,15 @@
 			buildConfigurations = (
 				4A000000000000000000071F /* Debug */,
 				4A0000000000000000000720 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A0000000000000000000709 /* Build configuration list for PBXNativeTarget "TorrentinoEngineAgentTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A0000000000000000000721 /* Debug */,
+				4A0000000000000000000722 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

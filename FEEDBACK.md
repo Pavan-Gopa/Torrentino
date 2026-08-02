@@ -1,89 +1,59 @@
-# WP-05 Implementation Feedback
+# WP-06 Implementation Feedback
 
 ## RESULT: waiting_review
 
-## WP-05 Reviewer CHANGES_REQUESTED — 3 fixes applied
-
-1. **HIGH — PeerValidation without automated tests**
-   - Added 5 tests in `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`: nonexistent path → `.agentBinaryNotFound`; unsigned/dummy file → rejected (`.unsignedPeer` or `.codeSigningUnavailable`, OS-dependent); frozen `expectedAgentRequirement` pins `identifier "com.torrentino.app.engine-agent"` + `certificate leaf[subject.OU] = "438UQRF7JV"` and still compiles; invalid requirement expressions rejected (the `.requirementInvalid` guard); `isEnforcementActive` false in Debug / true in Release.
-   - `PeerValidation.swift` registered in the TorrentinoAppTests target Sources (pbxproj) so the tests exercise the real production code.
-2. **LOW — Handshake.negotiate comment/behavior mismatch**
-   - `Handshake.swift`: negotiation now returns the floor (smallest overlapping version = most conservative), matching the documented invariant; new test `testHandshakePicksMostConservativeOverlap` pins the behavior.
-3. **LOW — testEnvelopeEventKindValidation incomplete**
-   - Added case: event envelope carrying a command payload → `.unexpectedPayload`.
-
-Verification: `xcodebuild test ... -only-testing:TorrentinoIPCTests -only-testing:TorrentinoAppTests` → ** TEST SUCCEEDED ** (82/82).
-
 ## Summary
-Torrentino XPC protocol v1 (WP-05) implemented: versioned IPC contract framework `TorrentinoIPC` (16 files, 32 commands / 11 events / discriminated-union envelopes), agent handshake negotiation, UI-side peer code-signing policy, and a 73-test contract suite. Full scheme builds clean (0 warnings), contract tests 73/73 green, QA regression 45/45 GREEN.
+Durable persistence + crash recovery (WP-06) implemented in `Native/TorrentinoEngineAgent/Persistence/` (10 files): SQLite (system C API, zero deps) in WAL mode, schema v1 migrations, atomic generations with SHA-256 checksums and a durability-correct sidecar write path (temp → fsync → rename → dir fsync), operation journal (cap 1000), clean/unclean shutdown coordination (clean flag written LAST), startup reconciliation (checksum verify → orphan sweep → journal replay), quarantine/rebuild controlled recovery with forensic-trio preservation, 8 deterministic failpoints, and a single-writer advisory lock. Integrated into AgentRuntime/AgentService (background open, clean close on stop, persistence keys in health()). New `TorrentinoEngineAgentTests` target: 16 smoke tests covering the full gate. Full scheme builds clean; 118/118 tests green.
 
 ## Files Created/Modified
 
-### Native/TorrentinoIPC/ (new contract framework, versioned)
-- **Identity.swift** — TorrentRecordID, ContentIdentity, AddOperationID, OperationID, RequestID, IdempotencyKey (UUID-based, Codable+Sendable)
-- **State.swift** — DesiredTorrentState, TorrentActivity, TorrentHealth, TransferProgress/Rates, PeerSummary, FileSelectionItem, PersistedLocation, TransferLimits, AddSource, ProxyConfiguration, EngineLifecycleState
-- **Snapshot.swift** — TorrentSnapshot, EngineSnapshot, TorrentDelta (+ revision/sequence model)
-- **ErrorContract.swift** — EngineErrorCode (24 frozen codes), FaultSeverity, EngineFault (stable localizationKey `fault.<rawValue>`, recovery actions, redacted context) + factories
-- **Pagination.swift** — PageCursor/FileCursor, Page<T>, FileEntry/PeerEntry/TrackerEntry/ActivityEntry/RemovalManifestEntry/CreatorManifestEntry, PageSize.maximum=200
-- **Settings.swift** — EngineSettings, SettingsRules (pure validation), SettingsTransaction (validate → revision check → persist → apply → rollback, injected side effects)
-- **Handshake.swift** — HelloRequest/HelloResponse, HandshakeResult, negotiation + response validation, IPCVersion (in IPCVersion.swift, current=1.0)
-- **Commands.swift** — EngineCommandV1: 32-case enum (all payload structs, success payloads, requestID/idempotencyKey, manual allCases)
-- **Events.swift** — EngineEventV1: 11-case enum + payload structs (manual allCases)
-- **Idempotency.swift** — IdempotencyTracker actor (canonical key: requestID+command+key), replay = same outcome
-- **Reconciliation.swift** — SnapshotReconciliation (requested→delta→revision merge)
-- **ReconnectPolicy.swift** — ClientReconnectPolicy.standard (5 attempts, 250ms→4s backoff, shared budget contract)
-- **IPCEnvelope.swift** — REWRITTEN: concrete non-generic v1 discriminated union (version/kind/requestID/command/event/result), Kind, SuccessPayload, EngineCommandResult, EnvelopeValidationError (fault mapping), IPCPayloadLimit (4 MiB)
-- **IPCVersion.swift** — wire version 1.0 (was already present; now used by envelope)
-- **EngineCommand.swift / EngineEvent.swift** — UNTOUCHED (legacy WP-03 surface, kept for QA compatibility)
+### Native/TorrentinoEngineAgent/Persistence/ (new, 10 files)
+- **PersistenceError.swift** — Sendable error vocabulary (corruptDatabase, sqlite, ioFailure, unknownTorrent, notOpen, injectedFailpoint, downgradeBlocked, alreadyOpen, alreadyLocked)
+- **SQLiteConnection.swift** — minimal `SQLiteConnection`/`SQLiteStatement`/`SQLiteError` wrappers over libsqlite3 (open_v2, exec, prepare/bind/step, close_v2; `SQLITE_TRANSIENT` via `unsafeBitCast(-1, to: sqlite3_destructor_type.self)` since the macro is not visible from Swift)
+- **FailpointInjector.swift** — `FailpointID` (8 cases: beforeTemporaryWrite, afterWriteBeforeFileFsync, afterFileFsync, afterRenameBeforeParentFsync, afterRenameBeforeSQLiteTransaction, afterDBCommitBeforePreviousGenerationDelete, duringWALCheckpoint, eachCleanShutdownStep), `FailpointHook` (static), thread-safe registry, production no-op when unarmed
+- **AtomicGeneration.swift** — `GenerationClock` (monotonic per kind, restored at open; confined to the store actor), `AtomicGeneration.sha256`, `PersistenceSidecar` (failpoints 1–4 at exact phase boundaries; temp write → fsync → rename → parent-dir fsync; superseded-sidecar cleanup; sidecar listing for the reconciler)
+- **PersistenceStore.swift** — `actor PersistenceStore`: schema v1 (torrents, resume_data, metainfo, session_state, operation_journal, quarantine, schema_version), pragmas (WAL, synchronous=NORMAL, foreign_keys=ON, busy_timeout=5000), generation CRUD with journal append/commit/trim, verify checksums + quarantine + mark-for-recheck on read, integrity_check + foreign_key_check, forensic group status/move, salvage + rebuild recovery (fresh DB written durably, degraded mode), `open()` routes corruption into controlled recovery, `close(clean:)` (clean = ShutdownCoordinator; unclean = kill -9 semantics, connection + WAL frames left untouched)
+- **OperationJournal.swift** — pending → committed/replayed lifecycle, cap 1000 via trim, replay surface for the reconciler
+- **StartupReconciler.swift** — checksum verification of all kinds, orphan-sidecar sweep, pending-journal replay (conservatively marks torrents needs-recheck), one-shot (never replays twice)
+- **QuarantineManager.swift** — quarantine + rebuild entry points
+- **ShutdownCoordinator.swift** — fixed pipeline: PASSIVE flush → TRUNCATE checkpoint → truncate journal → set clean_shutdown=true (LAST durable write) → close; failpoint 8 before every step, failpoint 7 during the checkpoint; any interruption leaves the flag false
+- **AdvisoryLock.swift** — flock(LOCK_EX|LOCK_NB) on `persistence.lock`, single-writer rejection
 
-### Native/TorrentinoApp/EngineClient/
-- **PeerValidation.swift** (NEW) — five frozen identities (app `com.torrentino.app`, agent `com.torrentino.app.engine-agent`, LaunchAgent label, Mach service `com.torrentino.app.engine-agent.mach`, plist filename), team `438UQRF7JV`, expectedAgentRequirement expression, SecStaticCode designated-requirement validation of the embedded agent binary; `isEnforcementActive` gate (Release/Developer ID enforces, Debug skips — dev builds are unsigned and have no embedded agent)
-- **EngineClient.swift** (REWRITTEN) — bounded reconnect (ClientReconnectPolicy), ResumeGuard exactly-once continuation resume, peer validation + `setCodeSigningRequirement` before payload decode, hello() performs §7.4 negotiation against agent-advertised ipcVersion, health() requires ipcVersion key
-- **EngineClientTypes.swift** (REWRITTEN) — AgentHello now carries negotiatedProtocol: IPCVersion; new EngineClientError cases peerValidationFailed/fault/protocolMismatch; domainError mapper
-- **ServiceRegistration.swift** — now reads identities from PeerValidation.identity (frozen constants)
+### Native/TorrentinoEngineAgent/Agent/ (modified)
+- **AgentRuntime.swift** — acquires the advisory lock at startup (exit(1) on contention), opens persistence on a background Task after signal handlers, closes with `close(clean: true)` in the stop path
+- **AgentService.swift** — `init(store: CounterStore, persistence: PersistenceStore)`; `health()` now reports `persistenceState` / `cleanShutdown` / `degraded` / `quarantined` / `reconciliation` (plist-only keys)
 
-### Native/TorrentinoEngineAgent/Agent/AgentService.swift
-- health() reply now advertises `ipcVersion` + `protocolRange` (server range frozen to 1.0...1.0)
+### Native/Tests/TorrentinoEngineAgentTests/ (new target, 16 tests)
+- **PersistenceFixture.swift** — torrent/payload builders + 75-record fixture writer
+- **TorrentinoEngineAgentTests.swift** — `TorrentinoEngineAgentPersistenceTests: TestProfileCase`: schema+WAL pragmas+idempotent reopen; 3 clean restore cycles; 4× kill -9 restore with no duplicate/lost records; generation monotonicity across crashes; desired states; corrupt resume → quarantine + needs-recheck; corrupt DB → controlled recovery (forensic trio preserved, degraded mode usable); WAL-only record restored after crash (main-file copy proves record lives only in WAL); forensic group preserved (unclean = WAL keeps frames, clean = WAL checkpointed to empty); clean flag stays false at every interrupted write phase (failpoints 1–6) and shutdown phase (7–8); payload byte-integrity across 20 rewrites + crash; journal cap 1000 + clean truncation + replay-once; single-writer advisory lock; failpoint lifecycle; 75-record fixture
 
-### Native/Tests/TorrentinoIPCTests/TorrentinoIPCTests.swift
-- Fully rewritten: 73 tests — IPCVersion, identity model, state round-trips, snapshots + reconciliation, all 32 command round-trips, all 11 event round-trips, error contract (stable keys, factories), envelope validation/fuzz/truncation/concurrent stress/oversized payload, pagination bounds + entry round-trips, settings rules + transaction (applied/validationFailed/revisionConflict/rollback), handshake negotiation/mismatch/response validation, idempotency replay semantics, reconnect policy contract, TestProfile isolation
-
-### Native/Torrentino.xcodeproj/project.pbxproj
-- 16 new file references + 17 build files registered; TorrentinoIPC and EngineClient groups; Sources phases updated (TorrentinoIPC + TorrentinoApp targets)
+### Native/Torrentino.xcodeproj/project.pbxproj (+ scheme)
+- 10 persistence files registered in the TorrentinoEngineAgent target (Sources) and the new TorrentinoEngineAgentTests target; TestProfile + fixture + tests registered; `-lsqlite3` added to agent Debug/Release OTHER_LDFLAGS and test configs; new unit-test target with Debug/Release configs; scheme TestAction extended with TorrentinoEngineAgentTests
 
 ## Gates Verified
 
 | Gate | Status |
 |------|--------|
-| TorrentinoIPC framework builds, 0 warnings | ✅ BUILD SUCCEEDED |
 | Full scheme `Torrentino` (Developer ID signed) builds | ✅ BUILD SUCCEEDED, 0 warnings |
-| Contract tests (TorrentinoIPCTests) | ✅ 73/73 pass |
-| QA regression | ✅ run_qa_suite.sh SUITE RESULT: GREEN (45/45) |
-| Swift 6 strict concurrency (Complete) | ✅ no warnings |
+| WP-06 smoke tests (TorrentinoEngineAgentTests) | ✅ 16/16 pass |
+| Full scheme test suite | ✅ 118/118 pass (102 existing + 16 WP-06) |
+| Swift 6 strict concurrency (Complete), warnings-as-errors | ✅ no warnings |
 
 ## Test Results
 
 ```
-# Contract tests
 xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
-  -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoIPCTests
-** TEST SUCCEEDED ** (73 test cases passed)
+  -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoEngineAgentTests
+** TEST SUCCEEDED ** (16 test cases passed)
 
-# QA Regression
-bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh
-SUITE RESULT: GREEN (45/45 pass — wp01: 11, wp02: 13, wp03: 8, wp04: 13)
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64'
+** TEST SUCCEEDED ** (118/118)
 ```
 
 ## Implementation Notes
-- **Debug vs Release peer validation**: `SecStaticCode` designated-requirement checks are enforced only in Release (Developer ID) builds. Debug builds cannot satisfy them (no embedded agent, unsigned binaries) — enforced via `PeerValidation.isEnforcementActive` (Debug → skip binary check + skip `setCodeSigningRequirement`). WP-02 QA runs against the Debug app and stays green.
-- **Removed `SecStaticCodeCopyDesignatedRequirement`** (not in the current SDK's public headers): team/identifier verification now compiles the frozen requirement expression (`identifier "<agent>" and anchor apple generic and certificate leaf[subject.OU] = "<team>"`) and passes it directly to `SecStaticCodeCheckValidity`.
-- **Enums with associated values cannot synthesize `CaseIterable`** → manual allCases for EngineCommandV1 (32) and EngineEventV1 (11).
-- **localizationKey convention**: `"fault." + rawValue` (camelCase, e.g. `fault.insufficientSpace`), frozen with the raw values.
-- Envelope validation rejects: incompatible version (fatal protocolVersionMismatch fault), missing requestID/command/event/result, requestID mismatch, unexpected payload; >4 MiB payloads rejected (oversizedPayload).
-
-## Architecture Compliance
-- ✅ ADR-010: negative/fuzz tests for parsers (envelope truncation/fuzz), concurrency stress (concurrent encode/decode, idempotency)
-- ✅ Swift 6 strict concurrency: actors (IdempotencyTracker, EngineClient), Sendable DTOs, immutable contract types
-- ✅ TestProfile isolation: tests never touch production Application Support or open XPC connections
-- ✅ Peer code-signing (plan §23): validation strictly before any payload decode; transport requirement + static binary check
-- ✅ No fake data paths, no App Sandbox, no Homebrew runtime dependencies
+- **kill -9 semantics**: `close(clean: false)` leaves the sqlite connection and WAL frames untouched (a real close lets SQLite auto-checkpoint the WAL into the main file on this platform). Tests that need the crashed process fully dead call `rawClose()` explicitly.
+- **WAL file lifecycle**: this platform's SQLite does not delete `-wal`/`-shm` after a TRUNCATE checkpoint + last-connection close (leaves 0-byte files). The tests therefore assert the meaningful invariant: unclean close → WAL non-empty; clean close → WAL checkpointed to 0 bytes.
+- **foreign_keys is per-connection**: verified via the store's own connection (`foreignKeysEnabled()`), not a second probe connection.
+- **SQLITE_TRANSIENT**: not visible from Swift (C macro); replaced with `unsafeBitCast(-1, to: sqlite3_destructor_type.self)`.
+- **GenerationClock**: plain `@unchecked Sendable` class confined to the PersistenceStore actor (an actor would force async hops in the sync write path).

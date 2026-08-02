@@ -93,18 +93,29 @@
                ReferencedContainer = "container:Torrentino.xcodeproj">
             </BuildableReference>
          </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4A0000000000000000000314"
-               BuildableName = "TorrentinoAppTests.xctest"
-               BlueprintName = "TorrentinoAppTests"
-               ReferencedContainer = "container:Torrentino.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
+          <TestableReference
+             skipped = "NO"
+             parallelizable = "YES">
+             <BuildableReference
+                BuildableIdentifier = "primary"
+                BlueprintIdentifier = "4A0000000000000000000314"
+                BuildableName = "TorrentinoAppTests.xctest"
+                BlueprintName = "TorrentinoAppTests"
+                ReferencedContainer = "container:Torrentino.xcodeproj">
+             </BuildableReference>
+          </TestableReference>
+          <TestableReference
+             skipped = "NO"
+             parallelizable = "YES">
+             <BuildableReference
+                BuildableIdentifier = "primary"
+                BlueprintIdentifier = "4A0000000000000000000315"
+                BuildableName = "TorrentinoEngineAgentTests.xctest"
+                BlueprintName = "TorrentinoEngineAgentTests"
+                ReferencedContainer = "container:Torrentino.xcodeproj">
+             </BuildableReference>
+          </TestableReference>
+       </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
