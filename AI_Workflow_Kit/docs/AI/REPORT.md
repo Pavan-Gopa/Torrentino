@@ -1,221 +1,160 @@
-# WP-01 Final Verification Report — Test Engineer
+# WP-01 QA Report — Test Engineer
 
-**Date:** 2026-08-02  
-**Branch:** `native-macos`  
-**WP:** WP-01 — libtorrent arm64 bakeoff  
-**Role:** Test Engineer (final verification; product code not modified)  
-**Graphify:** `graphify query "WP-01 test scenarios, harness architecture, soak test, sanitizer suite"` — OK (BFS; soak/No Homebrew/Test Engineer nodes present)
-
----
-
-## Verdict: **GREEN**
-
-All mandatory verification steps passed. Soak is healthy mid-run toward the 24h gate (not yet finished; no failures).
+**Date:** 2026-08-02
+**WP:** WP-01 — libtorrent arm64 bakeoff
+**Role:** Test Engineer (test code & QA scripts only; **no product code modified**)
+**Graphify:** `graphify query "WP-01 test scenarios, harness architecture, soak test, sanitizer suite, build scripts"` — OK (graph fresh, 2026-08-02 08:02)
+**Suite:** `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 
 ---
 
-## 1. Suite results
+## Verdict: **GREEN (tests green)**
 
-| # | Check | Command / evidence | Result |
-|---|--------|-------------------|--------|
-| 1 | Unit/Integration | `bash Native/TorrentinoEngineBridge/scripts/run_tests.sh` | **11/11 PASS** (2.397s) |
-| 2 | ASan + UBSan | `bash Native/TorrentinoEngineBridge/scripts/run_sanitizers.sh` | **11/11 PASS**, **0 sanitizer reports** |
-| 3 | Soak status | `bash Native/TorrentinoEngineBridge/scripts/run_soak.sh status` | **RUNNING**, 0 errors, 26086+ iters, RSS stable |
-| 4 | No Homebrew links | `verify_no_homebrew.sh …/harness-2.1.0-release/torrentino-harness` | **CLEAN** (system libs only) |
-| 5 | Dependency lock | `Native/ThirdParty/versions.lock` | **PASS** — pins + SHA-256 |
-| 6 | Build reproducibility | `bash Native/ThirdParty/libtorrent/build.sh --flavor release` | **PASS** — `libtorrent-rasterbar.a` arm64 |
-| 7 | Fallback 2.0.13 | `run_tests.sh --lt-version 2.0.13` | **11/11 PASS** (2.427s) |
-| 8 | Crash restore | `crash_restore` in scenarios.log | **PASS** (SIGKILL + restore) |
-| 9 | C-ABI firewall | `harness_api.h` + `harness_api.cpp` / `support.cpp` | **PASS** |
-| 10 | Legacy untouched | `git diff --name-only HEAD~5 -- Legacy/` | **empty** (0 files) |
+All 11 dedicated QA scripts pass; full regression suite is green. No blocking bugs
+found. Two non-blocking observations recorded (§4). The 24h soak burn-in is healthy
+mid-run and already far past the 2h / >6000-iteration gate.
 
-### 1.1 Unit/Integration (2.1.0/release)
+---
 
-Log: `Native/TorrentinoEngineBridge/runs/tests-2.1.0-release-20260802T022719Z/scenarios.log`
+## 1. Suite results — old scripts vs new scripts
 
-| Scenario | Result |
-|----------|--------|
-| `session_lifecycle` | PASS |
-| `torrent_creation` | PASS |
-| `add_torrent_file` | PASS |
-| `info_hash_recognition` | PASS |
-| `pause_resume` | PASS |
-| `resume_data` | PASS |
-| `session_state` | PASS |
-| `exception_containment` | PASS |
-| `magnet_metadata` | PASS |
-| `data_transfer` | PASS |
-| `crash_restore` | PASS |
+This is the **first WP with a QA suite**, so there were **no pre-existing test
+scripts**. All scripts below are **new this run** and become the regression base
+for WP-02+ (coverage grows monotonically; nothing is deleted).
 
-**Summary:** `11 passed, 0 failed, total 2.397s` → `RESULT: PASS`
+| Category | Count | Result |
+|----------|-------|--------|
+| Old (regression) scripts | **0** | n/a — first WP with tests |
+| New scripts this run | **11** (+ `run_qa_suite.sh` runner + `qa_common.sh`) | **11/11 PASS** |
+| **Full suite** | **11** | **GREEN, exit 0** |
 
-### 1.2 Sanitizer suite (ASan + UBSan, 2.1.0)
+### 1.1 Per-script results (final full-suite run)
 
-Log: `Native/TorrentinoEngineBridge/runs/sanitizers-2.1.0-20260802T022728Z/sanitizers.log`
+| # | Script (new this run) | Feature / gate covered | Result |
+|---|-----------------------|------------------------|--------|
+| 1 | `test_wp01_build_idempotent.sh` | build.sh rebuild idempotent; arm64 artifact; SHA-256 == lock | **PASS** |
+| 2 | `test_wp01_versions_lock_valid.sh` | versions.lock format, pins, SHA-256/commit formats, reality match | **PASS** |
+| 3 | `test_wp01_harness_all_scenarios.sh` | run_tests.sh — all 11 scenarios PASS | **PASS** |
+| 4 | `test_wp01_fallback_2013.sh` | run_tests.sh --lt-version 2.0.13 — 11/11 PASS | **PASS** |
+| 5 | `test_wp01_sanitizers_clean.sh` | run_sanitizers.sh — 0 ASan/UBSan reports | **PASS** |
+| 6 | `test_wp01_soak_smoke.sh` | run_soak.sh status parses; 25s smoke errors=0; report JSON valid | **PASS** |
+| 7 | `test_wp01_no_homebrew_positive.sh` | verify_no_homebrew CLEAN on default + fallback binaries | **PASS** |
+| 8 | `test_wp01_no_homebrew_negative.sh` | poisoned binary (Homebrew dylib + rpath) rejected — negative test | **PASS** |
+| 9 | `test_wp01_exception_firewall.sh` | C-ABI containment; set_terminate; misuse → exit 6, no terminate | **PASS** |
+| 10 | `test_wp01_crash_restore.sh` | SIGKILL child + partial-data restore; registry survival | **PASS** |
+| 11 | `test_wp01_flush_barrier_smoke.sh` | flush_cache barrier; 25s soak, 0 payload digest mismatch | **PASS** |
 
-- All 11 scenarios PASS (total 2.665s)
-- `sanitizer reports: 0`
-- `RESULT: PASS — ASan/UBSan clean`
+```
+total: 11  pass: 11  fail: 0
+SUITE RESULT: GREEN   (exit 0)
+```
 
-### 1.3 Soak (live)
+### 1.2 Underlying production-script evidence
 
-At verification time:
+| Check | Command | Result |
+|-------|---------|--------|
+| Scenarios 2.1.0 | `run_tests.sh` | 11 passed, 0 failed |
+| Scenarios 2.0.13 | `run_tests.sh --lt-version 2.0.13` | 11 passed, 0 failed |
+| Sanitizers | `run_sanitizers.sh` | `sanitizer reports: 0`, ASan/UBSan clean |
+| No Homebrew | `verify_no_homebrew.sh …/harness-2.1.0-release/torrentino-harness` | OK: arm64, macOS 13.0+, system libs only |
+
+---
+
+## 2. Gate coverage (WP-01 gate bullets)
+
+| Gate | Test(s) | Status | Evidence |
+|------|---------|--------|----------|
+| Restore без потери registry/partial data | `test_wp01_crash_restore.sh` | **PASS** | child SIGKILLed; `restored 2097152/4194304 bytes after kill -9` (genuinely partial); registry/session/resume/torrent survival enforced by in-scenario `TH_REQUIRE(fs::exists(...))` before PASS |
+| Нет Homebrew runtime links | `test_wp01_no_homebrew_positive.sh` + `_negative.sh` | **PASS** | positive CLEAN; negative proves the gate actually fails a poisoned binary (dylib-link + rpath diagnostics both fire) |
+| Точный dependency lock (versions.lock) | `test_wp01_versions_lock_valid.sh` + `test_wp01_build_idempotent.sh` | **PASS** | all pins present; SHA-256=64hex / commit=40hex; cached archives == pins; arm64/13.0 contract |
+| Все C++ exceptions остаются внутри harness | `test_wp01_exception_firewall.sh` | **PASS** | `exception_containment` PASS; `std::set_terminate` + `catch(...)` + `run_guarded` present; misuse → exit 6, never a terminate |
+| ASan/UBSan clean | `test_wp01_sanitizers_clean.sh` | **PASS** | 11/11, 0 reports |
+| 24h soak без crash/hang (smoke 30s, errors=0) | `test_wp01_soak_smoke.sh` + `test_wp01_flush_barrier_smoke.sh` | **PASS (smoke) / ON TRACK (full 24h)** | two isolated 25s soaks: exit 0, errors=0, 0 digest mismatch, valid JSON; live burn-in §3 |
+
+---
+
+## 3. Live 24h soak burn-in (observed, not blocking)
+
+At verification time (the long burn-in runs concurrently; my smoke soaks used
+isolated disposable workspaces and never touched it):
 
 | Metric | Value |
 |--------|-------|
 | Status | **RUNNING** (pid 34809) |
-| Elapsed | **~7h36m** |
-| Iterations | **26086+** (>> 6000) |
-| Bytes transferred | **~102.6 GB** |
+| Elapsed | **~8h10m** |
+| Iterations | **27816** (≫ 6000 gate) |
+| Bytes transferred | **~109.4 GB** |
 | Errors | **0** |
-| RSS (sampled) | **26–29 MiB** |
-| Peak RSS | **29 MiB** (stable across run) |
+| RSS | **27–29 MiB** (stable, non-monotonic) |
 | Slowest iteration | 5.006s |
 
-RSS distribution across progress samples (not monotonic growth):
-
-- early: rss=28–29 MiB
-- mid/late: predominantly rss=26 MiB (73 samples), peak capped at 29 MiB
-- late sample: `rss=27MiB peak=29MiB` at 7h35m
-
-**RSS does not grow monotonically** — memory is stable within a 26–29 MiB band for 7.5+ hours.
-
-**Note:** `Native/TorrentinoEngineBridge/runs/soak/soak-report.json` still holds a **stale** prior run (`status: assertion_failed`, iteration 2594, ~45 min, timestamp 2026-08-01T18:29). That artifact is **not** from the current process. Live `run_soak.sh status` reports **0 errors**. Recommend orchestrator/coder treat report.json as last-finished-run only; live status is authoritative while RUNNING.
-
-**24h gate:** **ON TRACK, not yet complete** (~7.5h / 24h). Acceptance for this verification pass matches the stated criteria (RUNNING, 0 errors, >6000 iters, RSS stable). Full gate closure requires soak to finish 24h with the same invariants.
-
-### 1.4 No Homebrew runtime links
-
-Binary: `Native/TorrentinoEngineBridge/.build/harness-2.1.0-release/torrentino-harness`
-
-- Mach-O arm64, minOS 13.0
-- Linked: CoreFoundation, SystemConfiguration, `libc++.1.dylib`, `libSystem.B.dylib` — all under `/System` or `/usr/lib`
-- rpaths: none
-- Result: `OK: arm64, macOS 13.0+, system libraries only`
-
-### 1.5 Dependency lock (`Native/ThirdParty/versions.lock`)
-
-| Dep | Version | SHA-256 present |
-|-----|---------|-----------------|
-| libtorrent primary | **2.1.0** (tag v2.1.0, commit `578e068…`) | yes |
-| libtorrent fallback | **2.0.13** (tag v2.0.13, commit `7d7fc38…`) | yes |
-| Boost | **1.91.0** | yes |
-| OpenSSL | **3.5.7** | yes |
-| Platform | arm64, minOS 13.0, C++17 | yes |
-
-### 1.6 Build reproducibility
-
-`bash Native/ThirdParty/libtorrent/build.sh --flavor release` completed without error:
-
-- Archive SHA-256 checks OK (openssl, boost, libtorrent)
-- Install prefix: `…/prefix/libtorrent-2.1.0-release`
-- Artifact: `lib/libtorrent-rasterbar.a` — **arm64** ar archive
-- Linked static deps: libcrypto.a / libssl.a arm64, minOS 13.0
-- `artifact verification passed`
-
-### 1.7 Fallback version 2.0.13
-
-Log: `Native/TorrentinoEngineBridge/runs/tests-2.0.13-release-20260802T022728Z/scenarios.log`
-
-- Flag supported: `--lt-version 2.0.13`
-- **11 passed, 0 failed**, including `crash_restore` and `exception_containment`
-- `RESULT: PASS`
-
-### 1.8 Crash restore scenario
-
-From 2.1.0 scenarios.log:
-
-```
-=== crash_restore: kill -9 a child mid-flight and restore registry + partial data
-spawned crash child pid=66668
-child: state persisted (2097152 bytes verified), killing self
-child terminated by SIGKILL as expected
-restored 2097152/4194304 bytes after kill -9 (id=e5af4f7afc6ef3a69c32fd0669ffa756f41e6f95)
---- PASS crash_restore (0.143s)
-```
-
-Asserts covered: registry, session state, resume data, torrent metadata survive SIGKILL; partial verified bytes restored without loss.
-
-### 1.9 C-ABI exception firewall
-
-**Header contract** (`harness/include/torrentino/harness/harness_api.h`):
-
-- Documents exception firewall: C ABI, no throw through boundary, status codes only
-- `torrentino_harness_main` is the single entry point
-
-**Implementation** (verified in source; not only header):
-
-| Layer | Location | Behavior |
-|-------|----------|----------|
-| Per-scenario | `support.cpp` → `run_guarded` | catch chain incl. `catch (...)`; maps to `Outcome` / status |
-| C ABI boundary | `harness_api.cpp` → `torrentino_harness_main` | outer `try/catch` incl. `catch (...)` |
-| Last resort | `harness_api.cpp` → `std::set_terminate(&on_terminate)` | logs FATAL if unwind escapes; `_Exit` with unknown_exception |
-| Scenario proof | `exception_containment` | injects garbage bdecode, empty magnet, `throw 42` — all contained |
-
-### 1.10 Legacy untouched
-
-```
-git diff --name-only HEAD~5 -- Legacy/
-```
-
-Empty output → **no Legacy/ changes** in last 5 commits.
+The 2h / >6000-iteration gate is **already satisfied** (8h+, 27816 iters, 0 errors).
+Full 24h completion remains a wall-clock item for the orchestrator to re-confirm at
+T+24h; no failures so far.
 
 ---
 
-## 2. Gap hunt — WP-01 gates (`TORRENTINO_STEPS.md`)
+## 4. Observations (non-blocking)
 
-| Gate | Covered by | Status | Evidence |
-|------|------------|--------|----------|
-| Restore без потери registry/partial data | `crash_restore` scenario in `run_tests.sh` | **PASS** | SIGKILL child; 2097152/4194304 bytes restored; registry/session/resume files present |
-| Нет Homebrew runtime links | `verify_no_homebrew.sh` | **PASS** | only `/System` + `/usr/lib`; no Homebrew paths |
-| Точный dependency lock | `Native/ThirdParty/versions.lock` | **PASS** | LT 2.1.0/2.0.13, Boost 1.91.0, OpenSSL 3.5.7 + SHA-256 |
-| Все C++ exceptions остаются внутри harness | `run_guarded` + C ABI try/catch + `set_terminate`; `exception_containment` | **PASS** | scenario PASS; firewall code present |
-| ASan/UBSan clean | `run_sanitizers.sh` | **PASS** | 11/11, 0 reports |
-| 24h soak без crash/hang | `run_soak.sh status` | **ON TRACK** | RUNNING 7.5h+, 26086+ iters, 0 errors, RSS non-monotonic 26–29 MiB; **full 24h not yet elapsed** |
-
-### Additional task coverage (WP-01 tasks, not only gate bullets)
-
-| Task | Status |
-|------|--------|
-| Stable libtorrent 2.x pin | PASS (2.1.0 default) |
-| Boost/TLS fixed | PASS (Boost 1.91.0, OpenSSL 3.5.7) |
-| Headless arm64 harness | PASS |
-| Scenario matrix (add, magnet, pause/resume, IDs, resume, session, shutdown, crash, create) | PASS (all 11) |
-| ASan/UBSan | PASS |
-| file / lipo / otool / rpaths / minOS | PASS via verify_no_homebrew |
-| License/SBOM draft | **N/A this run** — not re-audited; no regression signal from builds/tests |
-
----
-
-## 3. Observations (non-blocking)
-
-1. **Soak mid-flight:** Gate “24h without crash/hang” remains open until the process completes 86400s. Current trajectory is healthy (0 errors, stable RSS). Orchestrator should re-check at T+24h or on soak exit.
-2. **Stale `soak-report.json`:** Previous failed soak left assertion_failed report on disk; do not confuse with live run.
-3. **Firewall split:** Contract lives in `harness_api.h`; `run_guarded` / `set_terminate` live in `.cpp` — correct for C ABI. Header alone is not the full firewall; implementation confirmed.
+1. **Build idempotency nuance (not a bug):** a repeat `build.sh` run is
+   functionally idempotent — the **object content** of `libtorrent-rasterbar.a`
+   is byte-identical across rebuilds (verified by hashing every `.o` member).
+   The *raw* `.a` hash differs only because BSD `ar` re-stamps the `__.SYMDEF`
+   symbol-table member with the current time on re-archive. Bit-for-bit
+   reproducible archives are **not** a WP-01 requirement; the test therefore
+   asserts object-content stability, not raw-archive hash.
+2. **Silent-on-success digest/registry checks:** `soak.cpp` logs only on
+   `payload digest mismatch`; `crash_restore` proves registry survival via
+   silent `TH_REQUIRE`. Tests assert on the real signals (iterations + zero
+   mismatches; PASS implies the existence checks passed), not on log lines that
+   do not exist.
+3. **Two QA fixes this run (uncommitted; orchestrator to commit per rule 7):**
+   - `qa_common.sh`: temp-dir cleanup now uses a per-PID list **file** — the
+     original in-memory array was lost because `qa_mktemp` runs inside `$(...)`
+     subshells, which leaked ~46 scratch dirs. Now verified **0 leaked dirs**.
+   - `test_wp01_flush_barrier_smoke.sh`: removed an assertion on a non-existent
+     "digest ok" log line; replaced with iterations + zero-mismatch proof.
+4. **Full 24h not elapsed:** gate stays open until the process completes 86400s;
+   trajectory is healthy.
 
 ---
 
-## 4. Artifacts
+## 5. Hygiene verification
+
+| Rule | Check | Result |
+|------|-------|--------|
+| No production Application Support | harness uses only `--workspace`/`$TMPDIR` | OK |
+| Download paths only mktemp/disposable | all smoke soaks use `mktemp -d` | OK |
+| No leftover helper processes | only the intended 24h soak (pid 34809) remains | OK |
+| No leftover temp data | `qa_wp01.*` dirs: **0**, list files: **0** after full suite | OK |
+| No product code modified | `harness/src/*` mtimes predate this session; only `scripts/qa/*` + docs changed | OK |
+
+---
+
+## 6. Artifacts
 
 | Artifact | Path |
 |----------|------|
-| Tests 2.1.0 | `Native/TorrentinoEngineBridge/runs/tests-2.1.0-release-20260802T022719Z/scenarios.log` |
-| Tests 2.0.13 | `Native/TorrentinoEngineBridge/runs/tests-2.0.13-release-20260802T022728Z/scenarios.log` |
-| Sanitizers | `Native/TorrentinoEngineBridge/runs/sanitizers-2.1.0-20260802T022728Z/sanitizers.log` |
-| Soak log | `Native/TorrentinoEngineBridge/runs/soak/soak.log` |
+| QA suite (new) | `Native/TorrentinoEngineBridge/scripts/qa/` (11 tests + runner + common) |
+| Coverage matrix | `AI_Workflow_Kit/docs/AI/COVERAGE.md` |
+| Final suite run | `/tmp/qa_suite.out` (11/11 GREEN) |
 | versions.lock | `Native/ThirdParty/versions.lock` |
 | Static lib | `Native/ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib/libtorrent-rasterbar.a` |
+| Soak log | `Native/TorrentinoEngineBridge/runs/soak/soak.log` |
 
 ---
 
-## 5. Итог
+## 7. Итог
 
 | | |
 |--|--|
-| **Overall** | **GREEN** |
-| Suites | All executable gates PASS |
-| Soak | Healthy RUNNING (partial 24h) |
-| Bugs found | **None** blocking WP-01 final verification |
-| Action for Human | Return to orchestrator with GREEN status; schedule soak completion re-check at 24h |
+| **Overall** | **GREEN (tests green)** |
+| New scripts | 11 (+ runner + common), all PASS |
+| Regression base | established for WP-02+ |
+| Bugs found | **0 blocking** (2 non-blocking observations, §4) |
+| Soak | healthy RUNNING, 8h+, 27816 iters, 0 errors (2h/6000 gate met) |
+| Action for Human | Return to orchestrator with GREEN; orchestrator to commit the 2 QA fixes + COVERAGE.md and re-confirm soak at T+24h |
 
 No BUG_REPORT.md written (no FAIL).
+
+| Dependency lock | `versions.lock` | valid; SHA-256 pins match cached archives |

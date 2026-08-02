@@ -25,6 +25,7 @@ SOAK_SRC="${BRIDGE_DIR}/harness/src/soak.cpp"
 src="$(cat "${SOAK_SRC}")"
 assert_contains "${src}" "flush_cache()" "flush_cache() barrier present in soak.cpp"
 assert_contains "${src}" "cache_flushed_alert" "cache_flushed_alert wait present in soak.cpp"
+assert_contains "${src}" "sha256_file_hex" "payload digest computation present in soak.cpp"
 assert_contains "${src}" "payload digest mismatch" "digest verification present in soak.cpp"
 
 # --- dynamic: short soak, no digest mismatch -------------------------------
@@ -42,12 +43,16 @@ assert_eq "${st}" "0" "flush-barrier soak smoke exit code"
 logtext="$(cat "${log}")"
 assert_eq "$(grep -c 'payload digest mismatch' "${log}" || true)" "0" "no payload digest mismatch"
 assert_contains "${logtext}" "soak finished: status=ok" "soak finished cleanly"
-assert_ge "$(grep -c 'digest ok' "${log}" || true)" "1" "at least one verified digest"
 
 assert_file "${report}" "soak report written"
 jq -e . "${report}" >/dev/null || qa_die "soak report invalid JSON"
 assert_eq "$(jq -r .status "${report}")" "ok" "report status"
 assert_eq "$(jq -r .error_alerts "${report}")" "0" "report error_alerts"
-assert_ge "$(jq -r .iterations "${report}")" "1" "report iterations"
+iters="$(jq -r .iterations "${report}")"
+assert_ge "${iters}" "1" "report iterations"
+# Every completed iteration runs sha256_file_hex + compare after the flush
+# barrier (silent on success); with iterations>=1 and zero mismatches, that many
+# payload digests were verified clean.
+qa_ok "verified ${iters} payload digest(s) with zero mismatches"
 
 qa_pass

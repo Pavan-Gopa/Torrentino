@@ -29,18 +29,28 @@ CACHE_DIR="${THIRD_PARTY_DIR}/.build/cache"
 PREFIX_ROOT="${THIRD_PARTY_DIR}/.build/prefix"
 
 # --- isolated scratch space ------------------------------------------------
-QA_TMP_DIRS=()
+# Every qa_mktemp dir is recorded in a per-shell list FILE (not just an array):
+# qa_mktemp is normally invoked inside $(...) command substitution, which is a
+# subshell, so an in-memory array update would be lost and nothing would be
+# cleaned. $$ is stable across those subshells, so a $$-keyed file reliably
+# collects every dir for the EXIT trap to remove. This guarantees no scratch
+# data survives a run.
+QA_LIST="${TMPDIR:-/tmp}/qa_wp01.list.$$"
+: > "${QA_LIST}"
 qa_mktemp() {
 	local d
 	d="$(mktemp -d "${TMPDIR:-/tmp}/qa_wp01.XXXXXX")"
-	QA_TMP_DIRS+=("${d}")
+	printf '%s\n' "${d}" >> "${QA_LIST}"
 	printf '%s\n' "${d}"
 }
 qa_cleanup() {
 	local d
-	for d in ${QA_TMP_DIRS[@]+"${QA_TMP_DIRS[@]}"}; do
-		[[ -n "${d}" && -d "${d}" ]] && rm -rf "${d}"
-	done
+	if [[ -f "${QA_LIST}" ]]; then
+		while IFS= read -r d; do
+			[[ -n "${d}" && -d "${d}" ]] && rm -rf "${d}"
+		done < "${QA_LIST}"
+		rm -f "${QA_LIST}"
+	fi
 }
 trap qa_cleanup EXIT
 
