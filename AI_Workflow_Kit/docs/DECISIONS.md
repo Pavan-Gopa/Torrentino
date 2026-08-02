@@ -92,3 +92,33 @@
 **Status:** Proposed (pending owner approval)
 **Decision:** 24h (WP-01) → 72h (after WP-09) → 168h (WP-15). Failure at 72h restarts from last green phase, not from zero.
 **Rationale:** 168h single-shot is high-risk; phased approach catches regressions earlier.
+
+## ADR-010 — Стратегия тестирования: multi-level coverage
+
+**Дата:** 2026-08-02
+**Статус:** approved
+**Контекст:** WP-01/02 используют bash-скрипты (integration). Smoke-тесты допустимы только для wall-clock gates (24h soak). Необходима глубокая multi-level стратегия.
+
+**Решение:**
+
+Уровни покрытия (каждый WP добавляет все применимые):
+
+1. **Unit (XCTest)** — с WP-03 обязательно. Каждый публичный метод нового API: happy path, error path, edge case. Изолированные, быстрые (<1s каждый). TestProfile (не production Application Support).
+2. **Integration (bash/XCTest)** — lifecycle, XPC round-trip, persistence across kill. То, что требует launchd/SMAppService/реального IPC.
+3. **Concurrency stress** — с WP-03 обязательно для каждого actor/shared state. N параллельных клиентов, гонки при reconnect, параллельные writes.
+4. **Negative/fuzz** — мусор в XPC, обрезанный/corrupted файл, disk full, permissions denied, symlink attack. Для каждого parser/reader.
+5. **Property-based** — инварианты (counter монотонен, atomic write не оставляет partial, format version не регрессирует).
+6. **Endurance (soak)** — 24h/72h/168h. Только wall-clock, не в CI-цикле.
+
+**Правила:**
+- Smoke допустим ТОЛЬКО для wall-clock gates (soak). Всё остальное — полная глубина.
+- Каждый новый публичный API = минимум 3 unit-теста (happy/error/edge).
+- Каждый actor = минимум 1 concurrency stress test.
+- Каждый parser/reader = минимум 1 negative/fuzz test.
+- Покрытие монотонно растёт. Старые тесты не удаляются.
+- Tester kick обязан содержать секцию «Новые фичи» с явным указанием уровня тестов для каждой.
+
+**Не допускается:**
+- Объявлять WP green без unit-тестов (с WP-03).
+- Заменять integration-тест smoke-проверкой.
+- Пропускать concurrency stress для shared mutable state.
