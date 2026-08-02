@@ -28,7 +28,7 @@ qa:
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-05
   bugs_open: 0
-  note: 'WP-05 GREEN. 57/57 scripts + 102/102 contract tests. Soak 24h GREEN.'
+  note: 'WP-05 GREEN. 57/57 QA + 102/102 contract. WP-01 24h soak PASSED (82k iter, 0 errors, RSS 26MiB).'
 next_actor: coder
 track: ENGINE
 prior_track: ENGINE
