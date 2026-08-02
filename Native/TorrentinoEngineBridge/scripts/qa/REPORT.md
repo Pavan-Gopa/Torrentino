@@ -1,31 +1,26 @@
-# QA Verification Report — WP-05 XPC Protocol v1 (final run)
+# QA Verification Report — WP-06 Durable Persistence/Recovery (final run)
 
 **Date:** 2026-08-03
 **Role:** Test Engineer (QA)
-**Status:** **GREEN (ALL 57 QA SCRIPTS PASS + 102/102 CONTRACT TESTS PASS)**
+**Status:** **GREEN (ALL 71 QA SCRIPTS PASS + 118/118 TESTS PASS)**
 
 ---
 
 ## Executive Summary
 
-WP-05 (XPC protocol v1) is verified green on two levels:
+WP-06 (durable persistence/recovery — SQLite WAL, atomic generations, checksums,
+operation journal, quarantine, controlled rebuild, failpoints, advisory lock) is
+verified green on two levels:
 
-1. **Regression suite:** all **57 QA scripts** across WP-01..WP-05 pass (`SUITE RESULT: GREEN`).
-2. **Contract tests:** `TorrentinoIPCTests` (74) + `TorrentinoAppTests` (9) + `TorrentinoDomainTests` (19)
-   — **102/102 PASS** across the three targets (versioned envelopes, all 32 `EngineCommandV1` +
-   11 `EngineEventV1` round-trips, handshake, idempotency, reconciliation, reconnect policy,
-   settings transaction, pagination, envelope validation/fuzz/stress, PeerValidation).
+1. **Regression suite:** all **71 QA scripts** across WP-01..WP-06 pass
+   (`SUITE RESULT: GREEN`) — 57 previous scripts untouched (monotonic coverage)
+   plus **14 NEW `test_wp06_*.sh` scripts**, one per WP-06 feature area.
+2. **XCTest:** full scheme run — **118/118 PASS, 0 FAIL** across 4 bundles:
+   `TorrentinoIPCTests` (74) + `TorrentinoAppTests` (9) + `TorrentinoDomainTests` (19)
+   + `TorrentinoEngineAgentPersistenceTests` (**16 NEW** WP-06 cases).
 
-This cycle (vs the previous WP-05 report):
-
-- **12 NEW shell QA scripts** were added under `scripts/qa/test_wp05_*.sh` (one per feature area),
-  and `run_qa_suite.sh` was updated to pick up `test_wp05_*.sh` — the runner previously only
-  collected `test_wp0{1,2,3,4}_*.sh`, so the 12 new scripts are now part of the monotonic regression.
-- **1 NEW unit test** `testPeerValidationWrongTeamIdentifierRejected` was added to
-  `TorrentinoAppTests` (ad-hoc signed Mach-O → `.wrongTeamIdentifier`), closing the executable
-  wrong-team-rejection gap (previously design/build-level evidence only).
-- 1 defect found in QA tooling this cycle (missing test reference in
-  `test_wp05_peer_validation.sh`), fixed in-cycle — see Observations §4.
+Every gate item from the WP-06 plan is covered (see Gate table below). No product
+bugs found this cycle; one coverage nuance noted (Observation 2).
 
 ---
 
@@ -34,12 +29,12 @@ This cycle (vs the previous WP-05 report):
 ### WP-01 (Engine Headless Harness) — Regression
 | Script | Status | Duration |
 | :--- | :---: | :---: |
-| `test_wp01_build_idempotent.sh` | PASS | 2s |
-| `test_wp01_crash_restore.sh` | PASS | 0s |
+| `test_wp01_build_idempotent.sh` | PASS | 1s |
+| `test_wp01_crash_restore.sh` | PASS | 1s |
 | `test_wp01_exception_firewall.sh` | PASS | 0s |
-| `test_wp01_fallback_2013.sh` | PASS | 3s |
-| `test_wp01_flush_barrier_smoke.sh` | PASS | 26s |
-| `test_wp01_harness_all_scenarios.sh` | PASS | 3s |
+| `test_wp01_fallback_2013.sh` | PASS | 2s |
+| `test_wp01_flush_barrier_smoke.sh` | PASS | 27s |
+| `test_wp01_harness_all_scenarios.sh` | PASS | 2s |
 | `test_wp01_no_homebrew_negative.sh` | PASS | 0s |
 | `test_wp01_no_homebrew_positive.sh` | PASS | 0s |
 | `test_wp01_sanitizers_clean.sh` | PASS | 3s |
@@ -50,41 +45,41 @@ This cycle (vs the previous WP-05 report):
 | Script | Status | Duration |
 | :--- | :---: | :---: |
 | `test_wp02_counter_corruption.sh` | PASS | 4s |
-| `test_wp02_counter_downgrade_block.sh` | PASS | 14s |
+| `test_wp02_counter_downgrade_block.sh` | PASS | 13s |
 | `test_wp02_counter_durability.sh` | PASS | 13s |
 | `test_wp02_denial_degraded.sh` | PASS | 10s |
-| `test_wp02_graceful_shutdown.sh` | PASS | 23s |
-| `test_wp02_launchd_only_guard.sh` | PASS | 1s |
+| `test_wp02_graceful_shutdown.sh` | PASS | 22s |
+| `test_wp02_launchd_only_guard.sh` | PASS | 2s |
 | `test_wp02_lifecycle_contract_complete.sh` | PASS | 0s |
-| `test_wp02_lifecycle_script.sh` | PASS | 26s |
-| `test_wp02_no_duplicate_instance.sh` | PASS | 11s |
-| `test_wp02_reconnect_after_kill.sh` | PASS | 18s |
+| `test_wp02_lifecycle_script.sh` | PASS | 25s |
+| `test_wp02_no_duplicate_instance.sh` | PASS | 12s |
+| `test_wp02_reconnect_after_kill.sh` | PASS | 17s |
 | `test_wp02_smappservice_register.sh` | PASS | 2s |
-| `test_wp02_update_script.sh` | PASS | 9s |
+| `test_wp02_update_script.sh` | PASS | 8s |
 | `test_wp02_xpc_roundtrip.sh` | PASS | 20s |
 
 ### WP-03 (Native Skeleton & Strict Concurrency) — Regression
 | Script | Status | Duration |
 | :--- | :---: | :---: |
-| `test_wp03_domain_types.sh` | PASS | 3s |
-| `test_wp03_empty_state.sh` | PASS | 2s |
-| `test_wp03_ipc_envelope.sh` | PASS | 3s |
+| `test_wp03_domain_types.sh` | PASS | 2s |
+| `test_wp03_empty_state.sh` | PASS | 3s |
+| `test_wp03_ipc_envelope.sh` | PASS | 2s |
 | `test_wp03_legacy_untouched.sh` | PASS | 0s |
 | `test_wp03_strict_concurrency.sh` | PASS | 1s |
 | `test_wp03_string_catalog.sh` | PASS | 0s |
-| `test_wp03_testprofile_isolation.sh` | PASS | 3s |
-| `test_wp03_xctest_pass.sh` | PASS | 2s |
+| `test_wp03_testprofile_isolation.sh` | PASS | 2s |
+| `test_wp03_xctest_pass.sh` | PASS | 3s |
 
 ### WP-04 (Bridge & Engine Kernel) — Regression
 | Script | Status | Duration |
 | :--- | :---: | :---: |
-| `test_wp04_adapter_compile.sh` | PASS | 4s |
+| `test_wp04_adapter_compile.sh` | PASS | 3s |
 | `test_wp04_alert_batching.sh` | PASS | 3s |
 | `test_wp04_bridge_headless.sh` | PASS | 3s |
 | `test_wp04_bridge_sanitizers.sh` | PASS | 13s |
 | `test_wp04_bridge_swift.sh` | PASS | 3s |
 | `test_wp04_deadline_cancellation.sh` | PASS | 3s |
-| `test_wp04_dto_codable.sh` | PASS | 3s |
+| `test_wp04_dto_codable.sh` | PASS | 2s |
 | `test_wp04_exception_firewall.sh` | PASS | 3s |
 | `test_wp04_peer_id_config.sh` | PASS | 3s |
 | `test_wp04_pimpl_isolation.sh` | PASS | 0s |
@@ -92,73 +87,86 @@ This cycle (vs the previous WP-05 report):
 | `test_wp04_torrent_id_payload.sh` | PASS | 3s |
 | `test_wp04_xcode_integration.sh` | PASS | 0s |
 
-### WP-05 (XPC Protocol v1) — NEW this cycle
+### WP-05 (XPC Protocol v1) — Regression
+| Script | Status | Duration |
+| :--- | :---: | :---: |
+| `test_wp05_identity_types.sh` | PASS | 1s |
+| `test_wp05_commands_roundtrip.sh` | PASS | 2s |
+| `test_wp05_events_roundtrip.sh` | PASS | 2s |
+| `test_wp05_error_contract.sh` | PASS | 2s |
+| `test_wp05_envelope_limits.sh` | PASS | 2s |
+| `test_wp05_pagination.sh` | PASS | 2s |
+| `test_wp05_settings_transaction.sh` | PASS | 2s |
+| `test_wp05_handshake.sh` | PASS | 2s |
+| `test_wp05_idempotency.sh` | PASS | 2s |
+| `test_wp05_reconciliation.sh` | PASS | 2s |
+| `test_wp05_peer_validation.sh` | PASS | 2s |
+| `test_wp05_contract_tests.sh` | PASS | 8s |
+
+### WP-06 (Durable Persistence/Recovery) — NEW this cycle
 | Script | Status | Duration | Verifies |
 | :--- | :---: | :---: | :--- |
-| `test_wp05_identity_types.sh` | PASS | 1s | TorrentRecordID/ContentIdentity/AddOperationID/RequestID/IdempotencyKey round-trip |
-| `test_wp05_commands_roundtrip.sh` | PASS | 2s | All 32 EngineCommandV1 Codable, requestID on every payload, idempotencyKey on mutating |
-| `test_wp05_events_roundtrip.sh` | PASS | 2s | All 11 EngineEventV1 Codable round-trip |
-| `test_wp05_error_contract.sh` | PASS | 2s | EngineFault structure, localizationKey `fault.<code>` (no raw text), factories |
-| `test_wp05_envelope_limits.sh` | PASS | 2s | 4 MiB bound, garbage/tampered/unknown-kind decode fail, fuzz, requestID mismatch, version mismatch |
-| `test_wp05_pagination.sh` | PASS | 2s | PageCursor/FileCursor round-trip, PageSize bounded ≤ 200, 4 entry types |
-| `test_wp05_settings_transaction.sh` | PASS | 2s | validate→persist→apply→rollback, revision conflict, persist failure |
-| `test_wp05_handshake.sh` | PASS | 2s | version negotiation, most-conservative floor, mismatch → fault |
-| `test_wp05_idempotency.sh` | PASS | 2s | duplicate requestID+key → same result, no replay on different keys |
-| `test_wp05_reconciliation.sh` | PASS | 2s | dropped delta → full snapshot, instance change → full snapshot, revision monotonic |
-| `test_wp05_peer_validation.sh` | PASS | 2s | unsigned/wrong-team/nonexistent rejected, frozen requirement, enforcement gate |
-| `test_wp05_contract_tests.sh` | PASS | 9s | TorrentinoIPCTests + TorrentinoAppTests + TorrentinoDomainTests + combined run all GREEN |
+| `test_wp06_sqlite_wal.sh` | PASS | 2s | WAL mode, synchronous=NORMAL, foreign_keys=ON, WAL file with un-checkpointed frames after writes, TRUNCATE checkpoint collapses WAL to 0 |
+| `test_wp06_schema_migration.sh` | PASS | 2s | Fresh DB → v1 schema (schema_version table), 6 tables usable (75-record fixture), reopen idempotent (migrations never re-run) |
+| `test_wp06_atomic_generation.sh` | PASS | 2s | Generations strictly monotonic, read returns latest, superseded deleted, clock never reused after crash |
+| `test_wp06_checksum_integrity.sh` | PASS | 1s | Corrupt byte → checksum mismatch detected + quarantined; legit 8 KiB payload byte-identical |
+| `test_wp06_operation_journal.sh` | PASS | 2s | 1100 appends → capped at 1000; clean shutdown → 0 entries; pending → replay → never replayed twice |
+| `test_wp06_clean_shutdown.sh` | PASS | 3s | clean_shutdown=true after clean close; false after kill -9; desired states persisted |
+| `test_wp06_startup_reconciliation.sh` | PASS | 2s | Unclean boot triggers reconciliation; 80/80 records survive; WAL-only record restored; replay single-shot |
+| `test_wp06_quarantine.sh` | PASS | 1s | Corrupt resume → quarantine table (payload preserved), torrent needs-recheck, store keeps serving |
+| `test_wp06_rebuild.sh` | PASS | 2s | Garbage main DB → rebuilt=true + degraded=true, forensic trio moved aside, store usable post-rebuild |
+| `test_wp06_wal_only_recovery.sh` | PASS | 2s | WAL-only record (proven absent from main via copy) restored byte-exact after crash |
+| `test_wp06_forensic_group.sh` | PASS | 2s | Unclean → main+WAL(+SHM) preserved with frames; clean → WAL collapsed; rebuild moves trio together |
+| `test_wp06_failpoints.sh` | PASS | 2s | All 8 failpoints: write-path (1-6) + shutdown-path (7-8) → clean_shutdown=false, records intact, store serves |
+| `test_wp06_advisory_lock.sh` | PASS | 2s | flock single writer: 2nd open → alreadyLocked; release → reacquire |
+| `test_wp06_crash_cycles.sh` | PASS | 2s | 3 clean cycles × 30 → 90/90; 4 kill -9 × 20 → 80/80 no dupes; 8 KiB payload unchanged |
 
 ```
-total: 57  pass: 57  fail: 0  (wp01: 11  wp02: 13  wp03: 8  wp04: 13  wp05: 12)
+total: 71  pass: 71  fail: 0  (wp01: 11  wp02: 13  wp03: 8  wp04: 13  wp05: 12  wp06: 14)
 SUITE RESULT: GREEN
 ```
 
 ---
 
-## WP-05 Contract Tests (new this cycle)
+## WP-06 Unit Tests (TorrentinoEngineAgentPersistenceTests — 16 NEW)
 
-`TorrentinoIPCTests` — `xcodebuild test ... -only-testing:TorrentinoIPCTests` → **TEST SUCCEEDED, 74/74**.
-`TorrentinoAppTests` — **9/9** (includes new `testPeerValidationWrongTeamIdentifierRejected`).
-`TorrentinoDomainTests` — **19/19**.
+All run inside the full scheme test; each also mapped 1:1 into the 14 QA scripts.
 
-| Area | Test count | Coverage |
-| :--- | :---: | :--- |
-| IPCVersion | 6 | current=1.0, ordering, parsing, backward-compat via envelope, mismatch |
-| Identity model | 4 | RecordID, OperationID, RequestID, ContentIdentity (v1/v2/hybrid) |
-| State model | 4 | DesiredTorrentState/TorrentActivity frozen, TorrentHealth, TransferProgress/Rates, PeerSummary |
-| Snapshots | 7 | TorrentSnapshot, EngineSnapshot, revision monotonic, first-snapshot-full, dropped-delta → full, contiguous delta, instance-change → full |
-| Commands (EngineCommandV1) | 5 | 32-case surface + round-trip, unknown decode fail, requestID on every payload, mutating ⇒ idempotency key |
-| Events (EngineEventV1) | 2 | 11-case surface + round-trip |
-| Error contract | 3 | fault round-trip, stable localization keys, factories |
-| Envelope | 15 | happy round-trip (request/event/result), kind validation, tampered/garbage/truncated fuzz, requestID mismatch, unknown kind, oversized (>4 MiB) rejected, concurrent stress |
-| Pagination | 5 | PageCursor, FileCursor hierarchy, Page<T>, page-size bounds, 4 entry types |
-| Settings | 8 | round-trip, validation rules, transaction applied/validationFailed/revisionConflict/rollback/persist-failure, conflict fault |
-| Handshake | 6 | request/response round-trip, negotiation same/overlap/mismatch, validateResponse happy/fault |
-| Idempotency | 4 | canonical key deterministic, duplicate replay, different keys no replay, key round-trip |
-| ReconnectPolicy | 3 | immediate first attempt, monotonic backoff, budget exhausted |
-| PeerValidation (AppTests) | 6 | nonexistent path, unsigned dummy, **ad-hoc signed → wrongTeamIdentifier (NEW)**, frozen requirement, invalid expression, enforcement gate |
-| TestProfile | 1 | isolation (no production Application Support) |
+| Area | Test | Coverage |
+| :--- | :--- | :--- |
+| WAL / schema | `testOpenCreatesSchemaWithWAL` | journal_mode=wal, synchronous=1, schema_version=1, foreign_keys=ON, reopen idempotent |
+| Clean cycles | `testThreeCleanRestoreCycles` | 3 × 30 records → 90/90, resume+metainfo present, last flag clean |
+| Kill -9 cycles | `testRepeatedKillNineRestore` | 4 × 20 → 80/80, no dupes (resume 80, metainfo 80), flag false |
+| Generations | `testNoDuplicateOrLostRecordsWithGenerations` | monotonic g2>g1, latest served, superseded deleted, g3>g2 across crash |
+| Desired states | `testDesiredStatesPersisted` | state/infoHash/name/addedAt survive clean round-trip |
+| Quarantine | `testCorruptResumeQuarantinedAndTorrentRechecked` | checksum corrupt → quarantined + needs-recheck + others unaffected |
+| Rebuild | `testCorruptDatabaseControlledRecovery` | garbage main → rebuilt+degraded, corrupt-* dir preserved, store usable |
+| WAL-only | `testRecordOnlyInWALRestoredAfterCrash` | main copy has no schema ⇒ record only in WAL ⇒ restored byte-exact |
+| Forensic group | `testForensicGroupPreserved` | unclean: main+WAL preserved, WAL>0; clean: WAL→0 |
+| Failpoints | `testCleanShutdownFlagStaysFalseAtEveryInterruptedPhase` | failpoints 1-6 (write) + 7-8 (shutdown) → flag false, records intact |
+| Failpoint lifecycle | `testFailpointLifecycle` | unarmed no-op / armed throws / disarm restores (all 8 IDs) |
+| Payload integrity | `testPayloadUnchangedAcrossCycles` | 8 KiB payload × 20 writes + crash → byte-identical |
+| Journal | `testJournalCapAndCleanTruncation` | 1100 → 1000 cap; clean → 0 |
+| Journal replay | `testJournalReplayMarksTorrentsForRecheck` | pending → replay ≥1, needs-recheck, never replayed twice |
+| Advisory lock | `testAdvisoryLockSingleWriter` | 2nd acquire → `.alreadyLocked`, release → reacquire |
+| Fixture | `testFixtureSeventyFiveRecords` | 75 torrents / 75 resume / 75 metainfo / 0 quarantine |
 
 ---
 
-## WP-05 Gate Coverage
+## WP-06 Gate Coverage (from plan)
 
 | Gate (from plan) | Test(s) | Status |
 | :--- | :--- | :---: |
-| Version mismatch handled | `testVersionMismatchProducesFault`, `testHandshakeMismatchAcrossMajors`, `testVersionBackwardCompatLogicViaEnvelope` | **PASS** |
-| Duplicate command idempotent | `testIdempotencyDuplicateReplaysSameResult`, `testIdempotencyDifferentKeysDoNotReplay` | **PASS** |
-| Dropped delta → reconciliation | `testDroppedDeltaRequiresFullSnapshot`, `testContiguousDeltaApplicable`, `testSnapshotRevisionMonotonic` | **PASS** |
-| Reconnect works | `testReconnectPolicyFirstAttemptImmediate`, `testReconnectPolicyBackoffMonotonic`, `testReconnectPolicyBudgetExhausted` + WP-02 `test_wp02_reconnect_after_kill.sh` | **PASS** |
-| Instance change → full snapshot | `testInstanceChangeRequiresFullSnapshot`, `testFirstSnapshotAlwaysFull` | **PASS** |
-| Oversized/invalid payload rejected | `testEnvelopeOversizedPayloadRejected`, `testEnvelopeGarbageJSONDecodeFails`, `testEnvelopeTamperedPayloadDecodeFails`, `testEnvelopeFuzzTruncatedJSON`, `testEnvelopeRequestIDMismatch`, `testEnvelopeUnknownKindDecodeFails` | **PASS** |
-| Stale event / revision ordering | `testSnapshotRevisionMonotonic`, `testEnvelopeEventKindValidation` (revision-gated deltas) | **PASS** |
-| Unsigned peer rejected | `testPeerValidationUnsignedDummyFileRejected`, `testPeerValidationNonexistentPathRejected` | **PASS** |
-| Wrong team rejected | **`testPeerValidationWrongTeamIdentifierRejected` (NEW)** — ad-hoc signed Mach-O fails the frozen requirement → `.wrongTeamIdentifier` | **PASS** |
-| Enforcement active in Release | `testPeerValidationEnforcementGate` (Debug=false / Release=true) + `testPeerValidationRequirementExpressionFrozen` | **PASS** |
-| Settings rollback / version conflict | `testSettingsTransactionRollbackOnApplyFailure`, `testSettingsTransactionRevisionConflict`, `testSettingsTransactionPersistFailureNoRollback`, `testSettingsRevisionConflictFault` | **PASS** |
-| Hierarchical file paging | `testFileCursorHierarchyRoundTrip`, `testPaginatedItemsRoundTrip`, `testPageSizeBounded`, `testPageCursorRoundTrip` | **PASS** |
-| All contract tests green | 74/74 IPC + 9/9 App + 19/19 Domain | **PASS** |
-| 32-command / 11-event surface complete | `testEngineCommandV1SurfaceComplete`, `testEngineEventV1SurfaceComplete` | **PASS** |
+| Три clean restore cycles | `testThreeCleanRestoreCycles` (3 × 30 → 90/90) | **PASS** |
+| Repeated kill -9 restore | `testRepeatedKillNineRestore` (4 × 20 → 80/80) | **PASS** |
+| No duplicate/lost records | `testRepeatedKillNineRestore` (counts 80/80), `testNoDuplicateOrLostRecordsWithGenerations` | **PASS** |
+| Desired states сохранены | `testDesiredStatesPersisted` | **PASS** |
+| Corrupt resume → quarantine/recheck, не crash | `testCorruptResumeQuarantinedAndTorrentRechecked` (quarantine + needs-recheck + store serving 5/5) | **PASS** |
+| Corrupt DB copy → controlled recovery/degraded | `testCorruptDatabaseControlledRecovery` (rebuilt=true, degraded=true, usable) | **PASS** |
+| Запись только в WAL восстанавливается | `testRecordOnlyInWALRestoredAfterCrash` (proven via main-file copy, byte-exact) | **PASS** |
+| SQLite main/WAL/SHM — единая forensic group | `testForensicGroupPreserved` (unclean trio + WAL>0), `testCorruptDatabaseControlledRecovery` (moved aside together) | **PASS** |
+| clean_shutdown=false при любой незавершённой фазе | `testCleanShutdownFlagStaysFalseAtEveryInterruptedPhase` (all 8 failpoints) | **PASS** |
+| Payload не изменён | `testPayloadUnchangedAcrossCycles` (8 KiB byte-identical) | **PASS** |
 
 ---
 
@@ -166,9 +174,11 @@ SUITE RESULT: GREEN
 
 | File | Change |
 | :--- | :--- |
-| `run_qa_suite.sh` | **Fixed:** runner now collects `test_wp05_*.sh` (was `test_wp0{1,2,3,4}_*.sh` only); summary now reports a wp05 bucket. Without this the 12 new scripts were NOT part of the monotonic regression. |
-| `scripts/qa/test_wp05_*.sh` (12 files) | New per-feature scripts (identity, commands, events, error contract, envelope limits, pagination, settings transaction, handshake, idempotency, reconciliation, peer validation, contract tests) — all run targeted XCTest selections, all GREEN. |
-| `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift` | **New test:** `testPeerValidationWrongTeamIdentifierRejected` (copies `/usr/bin/true`, ad-hoc re-signs, expects `.wrongTeamIdentifier`). |
+| `run_qa_suite.sh` | Runner now also collects `test_wp06_*.sh` and reports a wp06 bucket in the summary (was wp01..wp05 only). Without this the 14 new scripts would NOT be part of the monotonic regression. |
+| `scripts/qa/test_wp06_*.sh` (14 files) | New per-feature scripts: `sqlite_wal`, `schema_migration`, `atomic_generation`, `checksum_integrity`, `operation_journal`, `clean_shutdown`, `startup_reconciliation`, `quarantine`, `rebuild`, `wal_only_recovery`, `forensic_group`, `failpoints`, `advisory_lock`, `crash_cycles` — each runs its targeted `TorrentinoEngineAgentPersistenceTests` selection, all GREEN. |
+| `scripts/qa/COVERAGE.md` | WP-06 feature/gate matrix added; regression tables extended with WP-06. |
+
+No product code was modified this cycle (test-only QA deliverables).
 
 ---
 
@@ -176,36 +186,38 @@ SUITE RESULT: GREEN
 
 | Check | Command | Result |
 | :--- | :--- | :---: |
-| Full scheme, Developer ID signed | `xcodebuild build -scheme Torrentino -destination 'platform=macOS,arch=arm64' CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM=438UQRF7JV` | **BUILD SUCCEEDED** |
-| Swift 6 strict concurrency | `test_wp03_strict_concurrency.sh` (xcconfig Complete + Werror) | PASS |
-| Contract tests | `test_wp05_contract_tests.sh` (3 targets, standalone + combined) | 102/102 PASS |
+| Full scheme tests (4 bundles) | `xcodebuild test -scheme Torrentino ...` | **118/118 PASS, 0 FAIL** (IPC 74, App 9, Domain 19, EngineAgentPersistence 16) |
+| QA regression | `bash scripts/qa/run_qa_suite.sh` | **71/71 PASS — SUITE RESULT: GREEN** |
 
 ---
 
 ## Observations (non-blocking)
 
-1. **Enforcement gate (Debug vs Release):** `PeerValidation.isEnforcementActive` skips the
-   SecStaticCode + `setCodeSigningRequirement` checks in Debug (no embedded agent / unsigned dev
-   builds). The executable wrong-team rejection path is now proven by the new unit test; the
-   end-to-end transport enforcement still needs the Developer-ID Release artifact (WP-16 signing chain).
-2. **SDK API note:** `SecStaticCodeCopyDesignatedRequirement` is absent from the current SDK's
-   public headers; validation compiles the frozen requirement expression and passes it to
-   `SecStaticCodeCheckValidity` instead — equivalent team/identifier rejection semantics.
-3. **Ad-hoc signing test source:** `/bin/true` does not exist on this macOS (coreutils moved to
-   `/usr/bin`); the test copies `/usr/bin/true` and re-signs it ad-hoc.
-4. **QA defect found & fixed in-cycle:** `test_wp05_peer_validation.sh` referenced
-   `testPeerValidationWrongTeamIdentifierRejected` before it existed — the script would have
-   failed with "no such test". Fixed by adding the missing unit test (test code only; no product
-   code touched). No product defects found this cycle.
-5. **ReconnectPolicy** has no dedicated shell script (not in the 12-script plan); its 3 unit tests
-   run inside `test_wp05_contract_tests.sh` + WP-02 `test_wp02_reconnect_after_kill.sh`.
+1. **kill -9 at process level:** the WP-06 store is exercised with in-process
+   kill -9 semantics (`close(clean:false)` leaves the WAL untouched, exactly what
+   SIGKILL leaves behind; the connection is closed only by the kernel in a real
+   crash, which `rawClose()` models). A real OS-level SIGKILL of the Swift agent
+   against the WP-06 store is not yet possible end-to-end: `AgentService` exposes
+   only counter + health via XPC — `PersistenceStore` is opened at `AgentRuntime`
+   bootstrap but has no XPC persistence surface yet (health snapshot only). The
+   C++ harness `crash_restore` scenario (WP-01) remains the process-level kill -9
+   proof. LOW — wire the persistence XPC surface in a later WP.
+2. **Forensic trio inside `corrupt-*` dir:** `testCorruptDatabaseControlledRecovery`
+   asserts the preserved main file; `moveForensicGroupAside` moves all three names
+   (main/WAL/SHM) and `testForensicGroupPreserved` asserts the WAL lifecycle — the
+   trio-together-on-rebuild assertion is split across two tests rather than one.
+   LOW — could be tightened by asserting WAL+SHM presence inside the corrupt dir.
+3. **Lock file cleanup:** `AdvisoryLockHandle.release()` removes `persistence.lock`
+   after unlocking; the lock file is created by `acquire()` when absent. Two racing
+   acquirers where one releases could unlink a file a third opener is about to
+   flock — benign today (single-writer process model + instance lock), noted as LOW.
 
 ---
 
 ## Overall Summary
 
-- **Total QA scripts:** 57 (45 regression + **12 new**) — **Passed: 57 — Failed: 0 — SUITE RESULT: GREEN**
-- **Contract tests:** 102/102 PASS (IPC 74, App 9, Domain 19)
-- **New unit test added:** 1 (`testPeerValidationWrongTeamIdentifierRejected`)
-- **Bugs found this cycle:** 1 in QA tooling (missing test reference), fixed in-cycle. Product bugs: 0.
+- **Total QA scripts:** 71 (57 regression + **14 new**) — **Passed: 71 — Failed: 0 — SUITE RESULT: GREEN**
+- **XCTest:** 118/118 PASS (IPC 74, App 9, Domain 19, EngineAgentPersistence 16)
+- **New unit tests this cycle:** 0 added by QA (16 WP-06 tests existed in the commit; QA mapped them 1:1)
+- **Bugs found this cycle:** 0 product bugs. 3 LOW observations (see above).
 - **Coverage matrix:** `Native/TorrentinoEngineBridge/scripts/qa/COVERAGE.md`
