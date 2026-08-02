@@ -63,18 +63,19 @@ Human ↔ Orchestrator only (control plane)
 4. **One WP at a time.** No skipping stop-gates.
 5. Diff **only** in `STATE.yaml` → `target_files`.
 6. Communication between agents **via files only**.
-7. No silent architecture redesign by Coder.
-8. No fake data / fake states in production code.
-9. Legacy code (`Legacy/Tauri/`) is **frozen** — never modify.
-10. **Never** `git add -A` on a parent directory outside Torrentino.
-11. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
-12. **Readable, well-commented code** — see § Comments below.
-13. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
-14. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
-15. Swift 6 strict concurrency: `Complete` с первого пакета.
-16. Никаких disk/network/DB/hash operations на `MainActor`.
-17. C++ pointer не пересекает actor boundary.
-18. UI не является источником истины.
+7. **Коммитит только Orchestrator.** Воркеры (Coder, Reviewer, Tester) делают работу, оставляют файлы в working tree. Orchestrator проверяет результат и коммитит + пушит. Воркеры НЕ делают `git commit` / `git push`.
+8. No silent architecture redesign by Coder.
+9. No fake data / fake states in production code.
+10. Legacy code (`Legacy/Tauri/`) is **frozen** — never modify.
+11. **Never** `git add -A` on a parent directory outside Torrentino.
+12. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
+13. **Readable, well-commented code** — see § Comments below.
+14. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
+15. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
+16. Swift 6 strict concurrency: `Complete` с первого пакета.
+17. Никаких disk/network/DB/hash operations на `MainActor`.
+18. C++ pointer не пересекает actor boundary.
+19. UI не является источником истины.
 
 ## Comments (mandatory quality bar)
 
