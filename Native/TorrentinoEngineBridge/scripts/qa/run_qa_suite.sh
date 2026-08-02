@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Torrentino — WP-01 QA suite runner (Test Engineer).
+# Torrentino — QA suite runner (Test Engineer).
 #
-# Role:     runs EVERY test_wp01_*.sh script (regression + new) and reports a
-#           per-script pass/fail table. Exit 0 only if all scripts pass. This is
-#           the single entry point for "run it all"; WP-02+ adds scripts here and
-#           they are picked up automatically (monotonic coverage).
+# Role:     runs EVERY test_wp01_*.sh and test_wp02_*.sh script (regression +
+#           new) and reports a per-script pass/fail table. Exit 0 only if all
+#           scripts pass. Monotonic coverage: WP-02 scripts are picked up
+#           automatically; old WP-01 scripts are never dropped.
 #
 # Usage:    bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh
 #
@@ -13,12 +13,17 @@ set -uo pipefail
 
 QA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Collect scripts in a stable (sorted) order.
+# Collect scripts in a stable (sorted) order: wp01 then wp02 by name.
 scripts=()
-while IFS= read -r s; do scripts+=("${s}"); done < <(find "${QA_DIR}" -maxdepth 1 -name 'test_wp01_*.sh' | sort)
-[[ ${#scripts[@]} -gt 0 ]] || { echo "no test_wp01_*.sh scripts found" >&2; exit 2; }
+while IFS= read -r s; do scripts+=("${s}"); done < <(
+	{
+		find "${QA_DIR}" -maxdepth 1 -name 'test_wp01_*.sh'
+		find "${QA_DIR}" -maxdepth 1 -name 'test_wp02_*.sh'
+	} | sort
+)
+[[ ${#scripts[@]} -gt 0 ]] || { echo "no test_wp01_*.sh / test_wp02_*.sh scripts found" >&2; exit 2; }
 
-echo "==> WP-01 QA suite: ${#scripts[@]} script(s)"
+echo "==> Torrentino QA suite: ${#scripts[@]} script(s)"
 echo
 
 declare -a names results
@@ -42,17 +47,24 @@ for s in "${scripts[@]}"; do
 done
 
 echo "=============================================================="
-echo "WP-01 QA SUITE SUMMARY"
+echo "QA SUITE SUMMARY"
 echo "=============================================================="
-printf '%-44s %s\n' "SCRIPT" "RESULT"
+printf '%-48s %s\n' "SCRIPT" "RESULT"
 for i in "${!names[@]}"; do
-	printf '%-44s %s\n' "${names[$i]}" "${results[$i]}"
+	printf '%-48s %s\n' "${names[$i]}" "${results[$i]}"
 done
 echo
 
 pass_n=$(printf '%s\n' "${results[@]}" | grep -c '^PASS' || true)
 fail_n=$(printf '%s\n' "${results[@]}" | grep -c '^FAIL' || true)
-echo "total: ${#names[@]}  pass: ${pass_n}  fail: ${fail_n}"
+wp01_n=0; wp02_n=0
+for n in "${names[@]}"; do
+	case "${n}" in
+		test_wp01_*) wp01_n=$((wp01_n+1)) ;;
+		test_wp02_*) wp02_n=$((wp02_n+1)) ;;
+	esac
+done
+echo "total: ${#names[@]}  pass: ${pass_n}  fail: ${fail_n}  (wp01: ${wp01_n}  wp02: ${wp02_n})"
 if [[ ${overall} -eq 0 ]]; then
 	echo "SUITE RESULT: GREEN"
 else

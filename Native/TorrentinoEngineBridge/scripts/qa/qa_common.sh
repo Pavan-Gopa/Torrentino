@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
-# Torrentino — shared helpers for WP-01 QA scripts (Test Engineer).
+# Torrentino — shared helpers for WP-01 / WP-02 QA scripts (Test Engineer).
 #
-# Role:     sourced (never executed) by every test_wp01_*.sh. Provides path
-#           resolution, isolated mktemp workspaces with guaranteed cleanup, and
-#           a small set of deterministic assert helpers.
+# Role:     sourced (never executed) by every test_wp01_*.sh / test_wp02_*.sh.
+#           Provides path resolution, isolated mktemp workspaces with guaranteed
+#           cleanup, and a small set of deterministic assert helpers.
 # Invariant: exit 0 == pass, exit 1 == fail. Every test is isolated: scratch data
 #           lives under $TMPDIR and is removed on exit, so no temp data, helper
-#           process or mounted image survives a run. Production Application
-#           Support is never touched (the harness only uses --workspace/$TMPDIR).
+#           process or mounted image survives a run. WP-01 harness only uses
+#           --workspace/$TMPDIR. WP-02 agent hard-codes Application Support
+#           (product constraint); those scripts wipe Engine/ on EXIT via
+#           qa_wp02_common.sh and never leave residual jobs/processes.
 #
 # NOTE: macOS ships bash 3.2 — keep this portable (no mapfile/readarray).
 
