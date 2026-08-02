@@ -68,7 +68,7 @@ public enum Handshake {
     }
 
     /// Negotiates one protocol version. Server picks the most conservative
-    /// overlapping version; empty overlap ⇒ mismatch.
+    /// (smallest) overlapping version; empty overlap ⇒ mismatch.
     public static func negotiate(
         clientRange: ClosedRange<IPCVersion>,
         serverRange: ClosedRange<IPCVersion>
@@ -76,7 +76,7 @@ public enum Handshake {
         let floor = max(clientRange.lowerBound, serverRange.lowerBound)
         let ceiling = min(clientRange.upperBound, serverRange.upperBound)
         guard ceiling >= floor else { return .mismatch }
-        return .negotiated(ceiling)
+        return .negotiated(floor)
     }
 
     /// Validates a response against the client's own range and major version.

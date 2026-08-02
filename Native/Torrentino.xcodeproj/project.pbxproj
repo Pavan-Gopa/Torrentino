@@ -59,6 +59,7 @@
 		4A0000000000000000000564 /* TorrentinoDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000152 /* TorrentinoDomainTests.swift */; };
 		4A0000000000000000000565 /* TorrentinoIPCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000153 /* TorrentinoIPCTests.swift */; };
 		4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000154 /* TorrentinoAppTests.swift */; };
+		4A000000000000000000055B /* PeerValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010D /* PeerValidation.swift */; };
 		4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000162 /* EngineBridgeAdapter.mm */; };
 		4A0000000000000000000582 /* EngineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000163 /* EngineCoordinator.swift */; };
 		4A0000000000000000000583 /* EngineBridgeDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000164 /* EngineBridgeDTOs.swift */; };
@@ -836,6 +837,7 @@
 			files = (
 				4A0000000000000000000563 /* TestProfile.swift in Sources */,
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
+				4A000000000000000000055B /* PeerValidation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

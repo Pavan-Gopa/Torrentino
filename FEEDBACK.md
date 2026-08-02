@@ -2,6 +2,18 @@
 
 ## RESULT: waiting_review
 
+## WP-05 Reviewer CHANGES_REQUESTED — 3 fixes applied
+
+1. **HIGH — PeerValidation without automated tests**
+   - Added 5 tests in `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`: nonexistent path → `.agentBinaryNotFound`; unsigned/dummy file → rejected (`.unsignedPeer` or `.codeSigningUnavailable`, OS-dependent); frozen `expectedAgentRequirement` pins `identifier "com.torrentino.app.engine-agent"` + `certificate leaf[subject.OU] = "438UQRF7JV"` and still compiles; invalid requirement expressions rejected (the `.requirementInvalid` guard); `isEnforcementActive` false in Debug / true in Release.
+   - `PeerValidation.swift` registered in the TorrentinoAppTests target Sources (pbxproj) so the tests exercise the real production code.
+2. **LOW — Handshake.negotiate comment/behavior mismatch**
+   - `Handshake.swift`: negotiation now returns the floor (smallest overlapping version = most conservative), matching the documented invariant; new test `testHandshakePicksMostConservativeOverlap` pins the behavior.
+3. **LOW — testEnvelopeEventKindValidation incomplete**
+   - Added case: event envelope carrying a command payload → `.unexpectedPayload`.
+
+Verification: `xcodebuild test ... -only-testing:TorrentinoIPCTests -only-testing:TorrentinoAppTests` → ** TEST SUCCEEDED ** (82/82).
+
 ## Summary
 Torrentino XPC protocol v1 (WP-05) implemented: versioned IPC contract framework `TorrentinoIPC` (16 files, 32 commands / 11 events / discriminated-union envelopes), agent handshake negotiation, UI-side peer code-signing policy, and a 73-test contract suite. Full scheme builds clean (0 warnings), contract tests 73/73 green, QA regression 45/45 GREEN.
 

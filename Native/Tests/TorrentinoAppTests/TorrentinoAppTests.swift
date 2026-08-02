@@ -52,6 +52,72 @@ final class TorrentinoAppTests: TestProfileCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: markerFile.path))
     }
 
+    // MARK: - PeerValidation (plan §23, WP-05)
+
+    func testPeerValidationNonexistentPathRejected() {
+        let missing = profile.rootURL.appendingPathComponent("no-such-agent-binary")
+        guard case .failure(let error) = PeerValidation.validateAgentBinary(at: missing) else {
+            return XCTFail("expected failure for nonexistent binary")
+        }
+        guard case .agentBinaryNotFound(let path) = error else {
+            return XCTFail("expected agentBinaryNotFound, got \(error)")
+        }
+        XCTAssertEqual(path, missing.path)
+    }
+
+    func testPeerValidationUnsignedDummyFileRejected() throws {
+        let dir = try profile.subdirectory("peer-validation")
+        let dummy = dir.appendingPathComponent("dummy-agent-binary")
+        try Data("not-a-mach-o-not-signed".utf8).write(to: dummy)
+        let result = PeerValidation.validateAgentBinary(at: dummy)
+        switch result {
+        case .failure(let error):
+            // An unsigned/dummy file must be rejected; the exact case depends
+            // on the OS code-signing result for non-signed data files.
+            guard case .unsignedPeer = error else {
+                guard case .codeSigningUnavailable = error else {
+                    return XCTFail("expected unsignedPeer or codeSigningUnavailable, got \(error)")
+                }
+                return
+            }
+        case .success:
+            XCTFail("unsigned dummy binary must be rejected")
+        }
+    }
+
+    func testPeerValidationRequirementExpressionFrozen() {
+        let requirement = PeerValidation.expectedAgentRequirement
+        XCTAssertTrue(
+            requirement.contains(#"identifier "com.torrentino.app.engine-agent""#),
+            "frozen requirement must pin the exact agent signing identifier"
+        )
+        XCTAssertTrue(
+            requirement.contains(#"certificate leaf[subject.OU] = "438UQRF7JV""#),
+            "frozen requirement must pin the Developer ID team (subject.OU)"
+        )
+        // The frozen expression must still compile: this is the exact guard
+        // that would return .requirementInvalid on regression.
+        XCTAssertNotNil(PeerValidation.makeRequirement(requirement))
+    }
+
+    func testPeerValidationInvalidRequirementExpressionRejected() {
+        // Garbage expressions fail to compile; validateAgentBinary maps this
+        // to .requirementInvalid (see makeRequirement guard).
+        XCTAssertNil(PeerValidation.makeRequirement("identifier garbage((("))
+        XCTAssertNil(PeerValidation.makeRequirement(""))
+        XCTAssertNil(PeerValidation.makeRequirement("anchor apple garbage &&("))
+    }
+
+    func testPeerValidationEnforcementGate() {
+        // Developer-ID (Release) builds enforce the checks; Debug builds are
+        // unsigned by design and skip them (WP-02 QA runs against Debug).
+#if DEBUG
+        XCTAssertFalse(PeerValidation.isEnforcementActive)
+#else
+        XCTAssertTrue(PeerValidation.isEnforcementActive)
+#endif
+    }
+
     /// Resolve Localizable.xcstrings from the source tree.
     private static func locateLocalizableCatalog() -> URL? {
         let fm = FileManager.default

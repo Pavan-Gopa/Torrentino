@@ -394,6 +394,18 @@ final class TorrentinoIPCTests: TestProfileCase {
         // An event with a command present is structurally invalid.
         let polluted = IPCEnvelope(version: .current, kind: .event, requestID: nil, command: .pause(PauseRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: TorrentRecordID(rawValue: UUID()))), event: nil, result: nil)
         XCTAssertEqual(polluted.validate(), .missingEvent)
+
+        // An event envelope carrying a command payload alongside the event is
+        // a kind/payload mismatch, not just a missing event.
+        let carriesCommand = IPCEnvelope(
+            version: .current,
+            kind: .event,
+            requestID: nil,
+            command: .pause(PauseRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: TorrentRecordID(rawValue: UUID()))),
+            event: .engineHealthChanged(EngineHealthChangedEvent(healthy: true, reason: nil, engineRevision: 0)),
+            result: nil
+        )
+        XCTAssertEqual(carriesCommand.validate(), .unexpectedPayload)
     }
 
     func testEnvelopeResultKindValidation() {
@@ -734,6 +746,17 @@ final class TorrentinoIPCTests: TestProfileCase {
         XCTAssertEqual(
             Handshake.negotiate(clientRange: clientRange, serverRange: serverRange),
             .negotiated(IPCVersion(major: 1, minor: 9))
+        )
+    }
+
+    func testHandshakePicksMostConservativeOverlap() {
+        // Overlap is [1.5, 2.0]; the server must negotiate the smallest
+        // (most conservative) version inside BOTH ranges, not the ceiling.
+        let clientRange = IPCVersion(major: 1, minor: 5)...IPCVersion(major: 2, minor: 0)
+        let serverRange = IPCVersion(major: 1, minor: 0)...IPCVersion(major: 2, minor: 0)
+        XCTAssertEqual(
+            Handshake.negotiate(clientRange: clientRange, serverRange: serverRange),
+            .negotiated(IPCVersion(major: 1, minor: 5))
         )
     }
 
