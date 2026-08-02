@@ -9,9 +9,10 @@ import Foundation
 import ServiceManagement
 
 enum AgentServiceRegistration {
-    /// Frozen identifiers (plan §23, LIFECYCLE_CONTRACT.md).
-    static let plistName = TorrentinoXPCSecurity.agentPlistName
-    static let label = TorrentinoXPCSecurity.launchAgentLabel
+    /// Frozen identifiers (plan §23, LIFECYCLE_CONTRACT.md). The app-side
+    /// identity authority is PeerValidation (WP-05).
+    static let plistName = PeerValidation.identity.plistFilename
+    static let label = PeerValidation.identity.launchAgentLabel
 
     /// Registers Contents/Library/LaunchAgents/<plistName> from this bundle.
     /// Throws on failure; success still requires status == .enabled afterwards

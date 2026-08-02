@@ -29,6 +29,10 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
         let pid = Int64(ProcessInfo.processInfo.processIdentifier)
         log.notice("hello from ui pid=\(pid)")
+        // §7.4 handshake: the agent advertises its supported protocol via
+        // health() (ipcVersion + protocolRange); the CLIENT negotiates its own
+        // supported range against that advertisement (WP-05 Handshake). The
+        // frozen ObjC reply shape only carries app version + pid.
         reply(AgentRuntime.agentVersion, pid)
     }
 
@@ -36,10 +40,13 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         let store = store
         let started = startDate
         let format = store.formatName
+        let serverRange = Handshake.serverSupportedRange
         Task {
             let counter = await store.current()
             let uptime = Date().timeIntervalSince(started)
-            // Extra keys (e.g. ipcVersion) are ignored by AgentHealth; keep required keys stable.
+            // Extra keys (e.g. protocolRange) are ignored by AgentHealth; keep
+            // required keys stable. protocolRange advertises the agent's
+            // supported protocol for the WP-05 handshake negotiation.
             reply([
                 "agentVersion": AgentRuntime.agentVersion,
                 "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier),
@@ -48,6 +55,7 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
                 "counterFormat": format,
                 "machService": TorrentinoXPCSecurity.machServiceName,
                 "ipcVersion": Self.ipcSchemaVersion.description,
+                "protocolRange": "\(serverRange.lowerBound)...\(serverRange.upperBound)",
             ])
         }
     }

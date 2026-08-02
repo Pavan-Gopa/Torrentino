@@ -1,46 +1,72 @@
 // Layer: UI -> agent transport (Mach XPC client).
-// Role: owns the NSXPCConnection lifecycle, bounded reconnect, and async
-// wrappers over the ObjC reply-block protocol.
+// Role: owns the NSXPCConnection lifecycle, bounded reconnect, peer
+// code-signing validation (PeerValidation), and async wrappers over the ObjC
+// reply-block protocol.
 // Must-not: cache engine state (the agent is authoritative), retry forever,
 // or decode payloads before the peer code-signing requirement is installed.
-// Invariants: at most one live connection; reconnect attempts are bounded
-// (maxAttempts with backoff); every public call returns authoritative state
-// or throws EngineClientError.
+// Invariants: at most one live connection; reconnect attempts are bounded by
+// ClientReconnectPolicy; hello performs the §7.4 protocol negotiation; every
+// public call returns authoritative state or throws EngineClientError.
 
 import Foundation
 import OSLog
 import TorrentinoIPC
 
 actor EngineClient {
-    private static let maxAttempts = 5
-    private static let backoffNanoseconds: [UInt64] = [
-        250_000_000, 500_000_000, 1_000_000_000, 2_000_000_000, 4_000_000_000,
-    ]
+    /// Shared reconnect contract (WP-05): budget + backoff are frozen here so
+    /// tests and the client agree on reconnect semantics.
+    private let reconnectPolicy = ClientReconnectPolicy.standard
     private var connection: NSXPCConnection?
 
     /// IPC command surface from TorrentinoIPC (schema identity; transport is still ObjC XPC).
-    nonisolated var supportedCommands: [EngineCommand] { EngineCommand.allCases }
-    /// Non-nil only if expectedAgentExpression parses as a valid requirement
-    /// (validated once via SecRequirementCreateWithString). The NSXPCConnection
-    /// API takes the requirement-language string itself.
+    nonisolated var supportedCommands: [EngineCommandV1] { EngineCommandV1.allCases }
+    /// Non-nil only if the frozen requirement expression parses as a valid
+    /// requirement (validated once via SecRequirementCreateWithString). The
+    /// NSXPCConnection API takes the requirement-language string itself.
     private let agentExpression: String?
-    private let log = Logger(subsystem: TorrentinoXPCSecurity.uiAppBundleIdentifier, category: "engine-client")
+    private let log = Logger(subsystem: PeerValidation.identity.appSigningID, category: "engine-client")
 
     init() {
-        let expression = TorrentinoXPCSecurity.expectedAgentExpression
-        self.agentExpression = TorrentinoXPCSecurity.makeRequirement(expression) != nil
+        let expression = PeerValidation.expectedAgentRequirement
+        self.agentExpression = PeerValidation.makeRequirement(expression) != nil
             ? expression
             : nil
     }
 
     // MARK: - Public API (agent is the source of truth)
 
+    /// Handshake (plan §7.4): hello + health advertise the agent protocol,
+    /// then the client negotiates; a major mismatch surfaces as a
+    /// protocolVersionMismatch fault before any other command.
     func hello() async throws -> AgentHello {
-        try await call { proxy, deliver in
+        let base: (version: String, pid: Int64) = try await call { proxy, deliver in
             proxy.hello { version, pid in
-                deliver(.success(AgentHello(agentVersion: version, pid: pid)))
+                deliver(.success((version, pid)))
             }
         }
+        // The agent advertises its protocol version over health (ipcVersion);
+        // negotiate the client's supported range against the agent's single
+        // advertised version. v1: both sides freeze to 1.0.
+        let health = try await health()
+        guard let advertisedProtocol = IPCVersion(parsing: health.ipcVersion) else {
+            throw EngineClientError.protocolMismatch(
+                details: "agent advertised unparsable ipcVersion \(health.ipcVersion)")
+        }
+        let request = Handshake.makeRequest(clientVersion: Self.clientVersion)
+        let negotiated: IPCVersion
+        switch Handshake.negotiate(
+            clientRange: request.supportedProtocolRange,
+            serverRange: Handshake.singleVersionRange(advertisedProtocol)
+        ) {
+        case .negotiated(let version):
+            negotiated = version
+        case .mismatch:
+            throw EngineClientError.fault(EngineFault.protocolVersionMismatch(
+                clientMajor: request.supportedProtocolRange.lowerBound.major,
+                serverMajor: advertisedProtocol.major
+            ))
+        }
+        return AgentHello(agentVersion: base.version, pid: base.pid, negotiatedProtocol: negotiated)
     }
 
     func health() async throws -> AgentHealth {
@@ -93,9 +119,9 @@ actor EngineClient {
         ) -> Void
     ) async throws -> T {
         var lastError: Error = EngineClientError.unavailable(reason: "no attempts performed")
-        for attempt in 0..<Self.maxAttempts {
-            if attempt > 0 {
-                let delay = Self.backoffNanoseconds[min(attempt - 1, Self.backoffNanoseconds.count - 1)]
+        let maxAttempts = reconnectPolicy.maxAttempts
+        for attempt in 0..<maxAttempts {
+            if let delay = reconnectPolicy.delayNanoseconds(forAttempt: attempt), delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
             do {
@@ -103,12 +129,12 @@ actor EngineClient {
                 return try await send(on: connection, invoke: invoke)
             } catch {
                 lastError = error
-                log.warning("xpc attempt \(attempt + 1)/\(Self.maxAttempts) failed: \(String(describing: error), privacy: .public)")
+                log.warning("xpc attempt \(attempt + 1)/\(maxAttempts) failed: \(String(describing: error), privacy: .public)")
                 teardownConnection()
             }
         }
         throw EngineClientError.unavailable(
-            reason: "engine agent unreachable after \(Self.maxAttempts) attempts: \(lastError)")
+            reason: "engine agent unreachable after \(maxAttempts) attempts: \(lastError)")
     }
 
     /// Sends one request over a connection, bridging ObjC reply blocks (and
@@ -144,10 +170,26 @@ actor EngineClient {
         guard let agentExpression else {
             throw EngineClientError.unavailable(reason: "invalid agent code-signing requirement expression")
         }
-        let connection = NSXPCConnection(machServiceName: TorrentinoXPCSecurity.machServiceName, options: [])
+
+        // Peer code-signing policy (plan §23): validate the embedded agent
+        // binary's designated requirement BEFORE any payload is decoded.
+        // Debug builds skip both checks (unsigned dev binaries, no embedded
+        // agent); Developer-ID Release builds enforce them.
+        if PeerValidation.isEnforcementActive {
+            switch PeerValidation.validateAgentBinary() {
+            case .success:
+                break
+            case .failure(let validationError):
+                throw EngineClientError.peerValidationFailed(validationError)
+            }
+        }
+
+        let connection = NSXPCConnection(machServiceName: PeerValidation.identity.machServiceName, options: [])
         // macOS 13+: refuse to talk to an agent that is not our Developer-ID
         // signed bundle id — enforced before any payload decode (plan §23).
-        connection.setCodeSigningRequirement(agentExpression)
+        if PeerValidation.isEnforcementActive {
+            connection.setCodeSigningRequirement(agentExpression)
+        }
 
         let interface = NSXPCInterface(with: TorrentinoEngineXPCProtocol.self)
         interface.setClasses(TorrentinoXPCSecurity.healthReplyClasses,
@@ -164,7 +206,7 @@ actor EngineClient {
         }
         connection.resume()
         self.connection = connection
-        log.notice("xpc connection resumed service=\(TorrentinoXPCSecurity.machServiceName, privacy: .public)")
+        log.notice("xpc connection resumed service=\(PeerValidation.identity.machServiceName, privacy: .public)")
         return connection
     }
 
@@ -182,6 +224,13 @@ actor EngineClient {
             connection.invalidate()
             self.connection = nil
         }
+    }
+
+    /// Version string this UI build reports in HelloRequest. The bundle
+    /// version when available; "dev" outside a bundle (tests, bare CLI runs).
+    nonisolated private static var clientVersion: String {
+        let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        return bundleVersion?.isEmpty == false ? bundleVersion! : "dev"
     }
 }
 

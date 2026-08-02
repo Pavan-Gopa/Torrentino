@@ -32,6 +32,19 @@
 		4A0000000000000000000542 /* IPCEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000142 /* IPCEnvelope.swift */; };
 		4A0000000000000000000543 /* EngineCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000143 /* EngineCommand.swift */; };
 		4A0000000000000000000544 /* EngineEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000144 /* EngineEvent.swift */; };
+		4A0000000000000000000545 /* Identity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000145 /* Identity.swift */; };
+		4A0000000000000000000546 /* State.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000146 /* State.swift */; };
+		4A0000000000000000000547 /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000147 /* Snapshot.swift */; };
+		4A0000000000000000000548 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000148 /* Commands.swift */; };
+		4A0000000000000000000549 /* Events.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000149 /* Events.swift */; };
+		4A000000000000000000054A /* ErrorContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014A /* ErrorContract.swift */; };
+		4A000000000000000000054B /* Pagination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014B /* Pagination.swift */; };
+		4A000000000000000000054C /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014C /* Settings.swift */; };
+		4A000000000000000000054D /* Handshake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014D /* Handshake.swift */; };
+		4A000000000000000000054E /* Idempotency.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014E /* Idempotency.swift */; };
+		4A000000000000000000054F /* Reconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000014F /* Reconciliation.swift */; };
+		4A0000000000000000000550 /* ReconnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000150 /* ReconnectPolicy.swift */; };
+		4A0000000000000000000559 /* PeerValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010D /* PeerValidation.swift */; };
 		4A0000000000000000000551 /* TorrentinoDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000210 /* TorrentinoDomain.framework */; };
 		4A0000000000000000000552 /* TorrentinoIPC.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000211 /* TorrentinoIPC.framework */; };
 		4A0000000000000000000553 /* TorrentinoDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000210 /* TorrentinoDomain.framework */; };
@@ -150,6 +163,7 @@
 		4A000000000000000000010A /* AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentService.swift; sourceTree = "<group>"; };
 		4A000000000000000000010B /* CounterStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounterStore.swift; sourceTree = "<group>"; };
 		4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoEngineXPCProtocol.swift; sourceTree = "<group>"; };
+		4A000000000000000000010D /* PeerValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerValidation.swift; sourceTree = "<group>"; };
 		4A000000000000000000010E /* ServiceRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceRegistration.swift; sourceTree = "<group>"; };
 		4A000000000000000000010F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		4A0000000000000000000110 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
@@ -169,6 +183,18 @@
 		4A0000000000000000000142 /* IPCEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCEnvelope.swift; sourceTree = "<group>"; };
 		4A0000000000000000000143 /* EngineCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCommand.swift; sourceTree = "<group>"; };
 		4A0000000000000000000144 /* EngineEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineEvent.swift; sourceTree = "<group>"; };
+		4A0000000000000000000145 /* Identity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Identity.swift; sourceTree = "<group>"; };
+		4A0000000000000000000146 /* State.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = State.swift; sourceTree = "<group>"; };
+		4A0000000000000000000147 /* Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snapshot.swift; sourceTree = "<group>"; };
+		4A0000000000000000000148 /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
+		4A0000000000000000000149 /* Events.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Events.swift; sourceTree = "<group>"; };
+		4A000000000000000000014A /* ErrorContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorContract.swift; sourceTree = "<group>"; };
+		4A000000000000000000014B /* Pagination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pagination.swift; sourceTree = "<group>"; };
+		4A000000000000000000014C /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
+		4A000000000000000000014D /* Handshake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Handshake.swift; sourceTree = "<group>"; };
+		4A000000000000000000014E /* Idempotency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Idempotency.swift; sourceTree = "<group>"; };
+		4A000000000000000000014F /* Reconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reconciliation.swift; sourceTree = "<group>"; };
+		4A0000000000000000000150 /* ReconnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectPolicy.swift; sourceTree = "<group>"; };
 		4A0000000000000000000151 /* TestProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestProfile.swift; sourceTree = "<group>"; };
 		4A0000000000000000000152 /* TorrentinoDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoDomainTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000153 /* TorrentinoIPCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoIPCTests.swift; sourceTree = "<group>"; };
@@ -333,6 +359,7 @@
 			children = (
 				4A0000000000000000000104 /* EngineClient.swift */,
 				4A0000000000000000000105 /* EngineClientTypes.swift */,
+				4A000000000000000000010D /* PeerValidation.swift */,
 				4A000000000000000000010E /* ServiceRegistration.swift */,
 			);
 			path = EngineClient;
@@ -443,6 +470,18 @@
 				4A0000000000000000000142 /* IPCEnvelope.swift */,
 				4A0000000000000000000143 /* EngineCommand.swift */,
 				4A0000000000000000000144 /* EngineEvent.swift */,
+				4A0000000000000000000145 /* Identity.swift */,
+				4A0000000000000000000146 /* State.swift */,
+				4A0000000000000000000147 /* Snapshot.swift */,
+				4A0000000000000000000148 /* Commands.swift */,
+				4A0000000000000000000149 /* Events.swift */,
+				4A000000000000000000014A /* ErrorContract.swift */,
+				4A000000000000000000014B /* Pagination.swift */,
+				4A000000000000000000014C /* Settings.swift */,
+				4A000000000000000000014D /* Handshake.swift */,
+				4A000000000000000000014E /* Idempotency.swift */,
+				4A000000000000000000014F /* Reconciliation.swift */,
+				4A0000000000000000000150 /* ReconnectPolicy.swift */,
 			);
 			path = TorrentinoIPC;
 			sourceTree = "<group>";
@@ -714,6 +753,7 @@
 				4A0000000000000000000503 /* CLIDispatcher.swift in Sources */,
 				4A0000000000000000000504 /* EngineClient.swift in Sources */,
 				4A0000000000000000000505 /* EngineClientTypes.swift in Sources */,
+				4A0000000000000000000559 /* PeerValidation.swift in Sources */,
 				4A0000000000000000000506 /* EngineViewModel.swift in Sources */,
 				4A0000000000000000000507 /* ContentView.swift in Sources */,
 				4A000000000000000000050F /* SettingsView.swift in Sources */,
@@ -757,6 +797,18 @@
 				4A0000000000000000000542 /* IPCEnvelope.swift in Sources */,
 				4A0000000000000000000543 /* EngineCommand.swift in Sources */,
 				4A0000000000000000000544 /* EngineEvent.swift in Sources */,
+				4A0000000000000000000545 /* Identity.swift in Sources */,
+				4A0000000000000000000546 /* State.swift in Sources */,
+				4A0000000000000000000547 /* Snapshot.swift in Sources */,
+				4A0000000000000000000548 /* Commands.swift in Sources */,
+				4A0000000000000000000549 /* Events.swift in Sources */,
+				4A000000000000000000054A /* ErrorContract.swift in Sources */,
+				4A000000000000000000054B /* Pagination.swift in Sources */,
+				4A000000000000000000054C /* Settings.swift in Sources */,
+				4A000000000000000000054D /* Handshake.swift in Sources */,
+				4A000000000000000000054E /* Idempotency.swift in Sources */,
+				4A000000000000000000054F /* Reconciliation.swift in Sources */,
+				4A0000000000000000000550 /* ReconnectPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,10 +5,13 @@
 
 import Foundation
 import TorrentinoDomain
+import TorrentinoIPC
 
 struct AgentHello: Sendable, Equatable {
     let agentVersion: String
     let pid: Int64
+    /// The protocol version agreed during the §7.4 handshake negotiation.
+    let negotiatedProtocol: IPCVersion
 }
 
 struct AgentHealth: Sendable, Equatable {
@@ -18,16 +21,19 @@ struct AgentHealth: Sendable, Equatable {
     let counter: Int64
     let counterFormat: String
     let machService: String
+    let ipcVersion: String
 
     /// Parses the plist dictionary returned by health(reply:). Nil on any
     /// missing/mistyped key => protocol mismatch, surfaced as an error.
+    /// Extra keys (e.g. protocolRange) are ignored; required keys are stable.
     init?(dictionary: [String: Any]) {
         guard let agentVersion = dictionary["agentVersion"] as? String,
               let pid = (dictionary["pid"] as? NSNumber)?.int64Value,
               let uptimeSeconds = (dictionary["uptimeSeconds"] as? NSNumber)?.doubleValue,
               let counter = (dictionary["counter"] as? NSNumber)?.int64Value,
               let counterFormat = dictionary["counterFormat"] as? String,
-              let machService = dictionary["machService"] as? String
+              let machService = dictionary["machService"] as? String,
+              let ipcVersion = dictionary["ipcVersion"] as? String
         else { return nil }
         self.agentVersion = agentVersion
         self.pid = pid
@@ -35,6 +41,7 @@ struct AgentHealth: Sendable, Equatable {
         self.counter = counter
         self.counterFormat = counterFormat
         self.machService = machService
+        self.ipcVersion = ipcVersion
     }
 
     var summary: String {
@@ -50,12 +57,18 @@ enum EngineClientError: Error, CustomStringConvertible, Sendable {
     case interrupted(underlying: Error)
     /// Peer answered with an unexpected payload shape.
     case protocolMismatch(details: String)
+    /// The embedded agent binary failed the §23 peer code-signing validation.
+    case peerValidationFailed(PeerValidation.PeerValidationError)
+    /// The agent rejected the request with a structured EngineFault.
+    case fault(EngineFault)
 
     var description: String {
         switch self {
         case .unavailable(let reason): return "engine unavailable: \(reason)"
         case .interrupted(let underlying): return "connection interrupted: \(underlying)"
         case .protocolMismatch(let details): return "protocol mismatch: \(details)"
+        case .peerValidationFailed(let validation): return "peer validation failed: \(validation)"
+        case .fault(let fault): return "engine fault \(fault.code.rawValue)"
         }
     }
 
@@ -65,6 +78,14 @@ enum EngineClientError: Error, CustomStringConvertible, Sendable {
         case .unavailable: return .xpcUnavailable
         case .interrupted: return .xpcUnavailable
         case .protocolMismatch: return .internalError
+        case .peerValidationFailed: return .agentDenied
+        case .fault(let fault):
+            switch fault.code {
+            case .xpcUnavailable: return .xpcUnavailable
+            case .agentDenied: return .agentDenied
+            case .operationTimeout: return .timeout
+            default: return .internalError
+            }
         }
     }
 }
