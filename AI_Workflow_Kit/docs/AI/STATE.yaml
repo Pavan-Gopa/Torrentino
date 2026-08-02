@@ -1,13 +1,16 @@
-current_step: WP-06
+current_step: WP-07
 step_description: >-
-  Durable persistence/recovery. SQLite schema/migrations/WAL, atomic
-  resume/metainfo/session generations, checksums, operation journal,
-  clean/unclean shutdown, startup reconciliation, quarantine/rebuild,
-  deterministic failpoints, advisory-lock single-writer.
+  Core transfer vertical slice. Add .torrent/magnet/HTTP, duplicate detection,
+  preflight, file selection, start paused/immediately, pause/resume, aggregated
+  stats, native table/sidebar/status bar, bounded counts, path normalization,
+  HTTP limits, negative parser/path corpus.
 target_files:
-- Native/TorrentinoEngineAgent/Persistence/
+- Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
-- Native/Tests/TorrentinoEngineAgentTests/
+- Native/TorrentinoEngineAgent/Transfer/
+- Native/TorrentinoIPC/
+- Native/TorrentinoDomain/
+- Native/Tests/
 completed_steps:
 - WP-00
 - WP-01
@@ -15,6 +18,7 @@ completed_steps:
 - WP-03
 - WP-04
 - WP-05
+- WP-06
 implementation:
   status: pending
   attempts: 0
@@ -26,24 +30,25 @@ review:
 qa:
   status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-05
+  suite: WP-06
   bugs_open: 0
-  note: 'WP-05 GREEN. 57/57 QA + 102/102 contract. WP-01 24h soak PASSED (82k iter, 0 errors, RSS 26MiB).'
+  note: 'WP-06 GREEN. 71/71 scripts + 118/118 tests. Soak 24h PASSED.'
 next_actor: coder
 track: ENGINE
 prior_track: ENGINE
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-06
-  last_post_tag: torrentino/WP-05-done
-  last_commit: f6b7f15
+  last_pre_tag: torrentino/pre-WP-07
+  last_post_tag: torrentino/WP-06-done
+  last_commit: b9582f7
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-06: Durable persistence/recovery. SQLite schema/migrations/WAL, atomic
-  resume/metainfo/session generations, checksums, operation/recent-command
-  journal, clean/unclean shutdown, startup reconciliation, quarantine/rebuild,
-  50-100 record fixture, advisory-lock single-writer tests, deterministic
-  persistence failpoints (8 injection points), forensic group preservation.
+  WP-07: Core transfer vertical slice. First end-to-end usable flow:
+  add .torrent/magnet/HTTP source, duplicate detection, preflight validation,
+  file selection, start paused/immediately, pause/resume, aggregated stats,
+  native SwiftUI table/sidebar/status bar, bounded metainfo/file count,
+  path normalization/traversal rejection, HTTP scheme/redirect/size/deadline
+  limits, negative parser/path corpus before first payload write.
