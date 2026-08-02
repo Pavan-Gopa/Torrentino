@@ -46,6 +46,14 @@
 		4A0000000000000000000564 /* TorrentinoDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000152 /* TorrentinoDomainTests.swift */; };
 		4A0000000000000000000565 /* TorrentinoIPCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000153 /* TorrentinoIPCTests.swift */; };
 		4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000154 /* TorrentinoAppTests.swift */; };
+		4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000162 /* EngineBridgeAdapter.mm */; };
+		4A0000000000000000000582 /* EngineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000163 /* EngineCoordinator.swift */; };
+		4A0000000000000000000583 /* EngineBridgeDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000164 /* EngineBridgeDTOs.swift */; };
+		4A0000000000000000000584 /* EngineCoordinatorError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000165 /* EngineCoordinatorError.swift */; };
+		4A0000000000000000000585 /* EngineBridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000167 /* EngineBridge.cpp */; };
+		4A0000000000000000000586 /* libtorrent-rasterbar.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000168 /* libtorrent-rasterbar.a */; };
+		4A0000000000000000000587 /* libssl.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000169 /* libssl.a */; };
+		4A0000000000000000000588 /* libcrypto.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000016A /* libcrypto.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -172,6 +180,16 @@
 		4A0000000000000000000212 /* TorrentinoDomainTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoDomainTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A0000000000000000000213 /* TorrentinoIPCTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoIPCTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A0000000000000000000214 /* TorrentinoAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A0000000000000000000161 /* EngineBridgeAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TorrentinoEngineBridge/adapter/EngineBridgeAdapter.h"; sourceTree = "<group>"; };
+		4A0000000000000000000162 /* EngineBridgeAdapter.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "TorrentinoEngineBridge/adapter/EngineBridgeAdapter.mm"; sourceTree = "<group>"; };
+		4A0000000000000000000163 /* EngineCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCoordinator.swift; sourceTree = "<group>"; };
+		4A0000000000000000000164 /* EngineBridgeDTOs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineBridgeDTOs.swift; sourceTree = "<group>"; };
+		4A0000000000000000000165 /* EngineCoordinatorError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCoordinatorError.swift; sourceTree = "<group>"; };
+		4A0000000000000000000166 /* TorrentinoEngineAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TorrentinoEngineAgent-Bridging-Header.h"; sourceTree = "<group>"; };
+		4A0000000000000000000167 /* EngineBridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "TorrentinoEngineBridge/bridge/EngineBridge.cpp"; sourceTree = "<group>"; };
+		4A0000000000000000000168 /* libtorrent-rasterbar.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libtorrent-rasterbar.a; path = "ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib/libtorrent-rasterbar.a"; sourceTree = "<group>"; };
+		4A0000000000000000000169 /* libssl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libssl.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libssl.a"; sourceTree = "<group>"; };
+		4A000000000000000000016A /* libcrypto.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcrypto.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libcrypto.a"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -190,6 +208,9 @@
 			files = (
 				4A0000000000000000000553 /* TorrentinoDomain.framework in Frameworks */,
 				4A0000000000000000000554 /* TorrentinoIPC.framework in Frameworks */,
+				4A0000000000000000000586 /* libtorrent-rasterbar.a in Frameworks */,
+				4A0000000000000000000587 /* libssl.a in Frameworks */,
+				4A0000000000000000000588 /* libcrypto.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -244,8 +265,32 @@
 				4A0000000000000000000021 /* TorrentinoIPC */,
 				4A0000000000000000000022 /* Tests */,
 				4A0000000000000000000018 /* Config */,
+				4A000000000000000000001F /* WP04 */,
 				4A0000000000000000000003 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		4A000000000000000000001C /* EngineCoordinator */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000163 /* EngineCoordinator.swift */,
+				4A0000000000000000000164 /* EngineBridgeDTOs.swift */,
+				4A0000000000000000000165 /* EngineCoordinatorError.swift */,
+			);
+			path = EngineCoordinator;
+			sourceTree = "<group>";
+		};
+		4A000000000000000000001F /* WP04 */ = {
+			isa = PBXGroup;
+			children = (
+				4A0000000000000000000161 /* EngineBridgeAdapter.h */,
+				4A0000000000000000000162 /* EngineBridgeAdapter.mm */,
+				4A0000000000000000000167 /* EngineBridge.cpp */,
+				4A0000000000000000000168 /* libtorrent-rasterbar.a */,
+				4A0000000000000000000169 /* libssl.a */,
+				4A000000000000000000016A /* libcrypto.a */,
+			);
+			name = WP04;
 			sourceTree = "<group>";
 		};
 		4A0000000000000000000003 /* Products */ = {
@@ -309,6 +354,8 @@
 				4A0000000000000000000015 /* Agent */,
 				4A0000000000000000000016 /* Persistence */,
 				4A0000000000000000000017 /* XPC */,
+				4A000000000000000000001C /* EngineCoordinator */,
+				4A0000000000000000000166 /* TorrentinoEngineAgent-Bridging-Header.h */,
 			);
 			path = TorrentinoEngineAgent;
 			sourceTree = "<group>";
@@ -684,6 +731,11 @@
 				4A000000000000000000050A /* AgentService.swift in Sources */,
 				4A000000000000000000050B /* CounterStore.swift in Sources */,
 				4A000000000000000000050C /* TorrentinoEngineXPCProtocol.swift in Sources */,
+				4A0000000000000000000585 /* EngineBridge.cpp in Sources */,
+				4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */,
+				4A0000000000000000000582 /* EngineCoordinator.swift in Sources */,
+				4A0000000000000000000583 /* EngineBridgeDTOs.swift in Sources */,
+				4A0000000000000000000584 /* EngineCoordinatorError.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -860,6 +912,40 @@
 				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
 				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
 				PRODUCT_NAME = TorrentinoEngineAgent;
+				// WP-04 bridge integration (locked ThirdParty pins from versions.lock):
+				// adapter .mm + EngineBridge.cpp compile as ObjC++/C++17; the Swift
+				// actor sees only the adapter through the bridging header.
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "TorrentinoEngineAgent/TorrentinoEngineAgent-Bridging-Header.h";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"TORRENT_ABI_VERSION=2",
+					"TORRENT_USE_I2P=0",
+					"TORRENT_USE_RTC=0",
+					"TORRENT_USE_OPENSSL=1",
+					"TORRENT_USE_LIBCRYPTO=1",
+					"TORRENT_SSL_PEERS=1",
+					"TORRENT_NO_DEPRECATE=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/TorrentinoEngineBridge/adapter",
+					"$(SRCROOT)/TorrentinoEngineBridge/bridge",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/boost-1.91.0/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/include",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework CoreFoundation",
+					"-framework SystemConfiguration",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib",
+					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/lib",
+				);
 			};
 			name = Debug;
 		};
@@ -873,6 +959,40 @@
 				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
 				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
 				PRODUCT_NAME = TorrentinoEngineAgent;
+				// WP-04 bridge integration (locked ThirdParty pins from versions.lock):
+				// adapter .mm + EngineBridge.cpp compile as ObjC++/C++17; the Swift
+				// actor sees only the adapter through the bridging header.
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "TorrentinoEngineAgent/TorrentinoEngineAgent-Bridging-Header.h";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"TORRENT_ABI_VERSION=2",
+					"TORRENT_USE_I2P=0",
+					"TORRENT_USE_RTC=0",
+					"TORRENT_USE_OPENSSL=1",
+					"TORRENT_USE_LIBCRYPTO=1",
+					"TORRENT_SSL_PEERS=1",
+					"TORRENT_NO_DEPRECATE=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/TorrentinoEngineBridge/adapter",
+					"$(SRCROOT)/TorrentinoEngineBridge/bridge",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/boost-1.91.0/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/include",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework CoreFoundation",
+					"-framework SystemConfiguration",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib",
+					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/lib",
+				);
 			};
 			name = Release;
 		};

@@ -15,10 +15,12 @@
 #include <libtorrent/load_torrent.hpp>
 #include <libtorrent/torrent_info.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -76,6 +78,36 @@ std::vector<char> make_torrent_file(const std::filesystem::path& dir)
 
 	std::vector<char> buffer = creator.generate_buf();
 	return buffer;
+}
+
+// A larger torrent for the cancellation test. save_resume_data flushes the
+// disk cache before posting its alert, and at this size that flush provably
+// outlives the shutdown handshake below, so the in-flight wait cannot win the
+// race against shutdown() (no fast-path flake in CI).
+std::vector<char> make_large_torrent_file(const std::filesystem::path& dir)
+{
+	const std::filesystem::path payload = dir / "payload-large.bin";
+	{
+		std::ofstream out(payload, std::ios::binary);
+		const std::size_t size = 4u * 1024u * 1024u; // 4 MiB
+		for (std::size_t i = 0; i < size; ++i) {
+			out.put(static_cast<char>(i % 251));
+		}
+	}
+	const std::filesystem::path content_root = dir;
+
+	const std::vector<lt::create_file_entry> entries = lt::list_files(payload.string());
+	lt::create_torrent creator(std::move(entries), 16384, lt::create_torrent::v1_only);
+	creator.set_creator("Torrentino bridge smoke large (WP-04)");
+
+	lt::error_code ec;
+	lt::set_piece_hashes(creator, content_root.string(), ec);
+	TH_REQUIRE(!ec, "set_piece_hashes (large) must not fail");
+	if (ec) {
+		return {};
+	}
+
+	return creator.generate_buf();
 }
 
 // Pumps alerts until a predicate matches or the deadline passes. Mirrors the
@@ -214,6 +246,18 @@ int main()
 		}
 	}
 
+	// --- deadline: a bounded wait must surface BridgeError::timeout ---------------
+	{
+		const auto timeout_set = bridge.setOperationTimeout(1);
+		TH_REQUIRE(timeout_set.is_ok(), "setOperationTimeout(1) must succeed");
+		const auto resume = bridge.requestResumeData(add_result.torrent_id);
+		TH_REQUIRE(!resume.is_ok(), "requestResumeData under a 1ms deadline must time out");
+		TH_REQUIRE(resume.error_code() == BridgeError::timeout,
+			"expired deadline maps to BridgeError::timeout");
+		const auto restore = bridge.setOperationTimeout(10000);
+		TH_REQUIRE(restore.is_ok(), "restoring the operation deadline must succeed");
+	}
+
 	// --- two-phase removal ------------------------------------------------------
 	RemovalToken token;
 	{
@@ -246,6 +290,57 @@ int main()
 		bridge.shutdown(); // must be a no-op, not a crash
 		const HealthDTO health = bridge.health();
 		TH_REQUIRE(!health.running, "health reports stopped engine");
+	}
+
+	// --- cancellation: shutdown unblocks an in-flight bounded wait -----------------
+	// A second engine waits on requestResumeData (large torrent so the resume-data
+	// flush cannot beat the shutdown handshake); shutdown() must release the wait
+	// with BridgeError::stopped and the waiter must return without hanging.
+	{
+		EngineBridge second;
+		SessionConfiguration config2;
+		config2.download_dir = workspace.string();
+		config2.enable_dht = false;
+		config2.operation_timeout_ms = 10000;
+
+		const auto report2 = second.start(config2);
+		TH_REQUIRE(report2.is_ok(), "cancellation engine start must succeed");
+		const std::vector<char> big = make_large_torrent_file(workspace);
+		TH_REQUIRE(!big.empty(), "large torrent generation must succeed");
+		AddSpecification spec2;
+		spec2.torrent_file = big;
+		spec2.save_path = workspace.string();
+		spec2.paused = false;
+		const auto added2 = second.add(spec2);
+		TH_REQUIRE(added2.is_ok(), "cancellation engine add must succeed");
+		const std::string id2 = added2.value().torrent_id;
+
+		std::atomic<bool> entered{false};
+		std::atomic<bool> finished{false};
+		std::atomic<torrentino::bridge::BridgeError> outcome{BridgeError::none};
+		std::thread waiter([&] {
+			entered.store(true);
+			const auto result = second.requestResumeData(id2);
+			outcome.store(result.error_code());
+			finished.store(true);
+		});
+		// Handshake: wait until the waiter is inside requestResumeData, then give
+		// it a few ms to release the operation mutex and sleep in wait_wake_.
+		while (!entered.load()) {
+			std::this_thread::sleep_for(100us);
+		}
+		std::this_thread::sleep_for(5ms);
+		second.shutdown();
+
+		// Bounded join: the waiter must be unblocked by shutdown, never hang.
+		const auto deadline = std::chrono::steady_clock::now() + 10s;
+		while (!finished.load() && std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::sleep_for(10ms);
+		}
+		TH_REQUIRE(finished.load(), "in-flight requestResumeData returns after shutdown (no hang)");
+		waiter.join();
+		TH_REQUIRE(outcome.load() == BridgeError::stopped,
+			"shutdown during a bounded wait maps to BridgeError::stopped");
 	}
 
 	// --- cleanup ---------------------------------------------------------------

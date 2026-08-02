@@ -100,20 +100,6 @@ std::string describe_hashes(const lt::info_hash_t& hashes)
 	return out;
 }
 
-// Maps a libtorrent error_code into our structured taxonomy.
-BridgeError classify(const lt::error_code& ec) noexcept
-{
-	// libtorrent's own category is an engine failure; the portable category
-	// (boost::system) suggests an OS/io error. boost::system::generic_category
-	// and std::generic_category share a name but are distinct types, so the
-	// libtorrent category check comes first and anything else unknown is
-	// conservatively an engine failure.
-	if (ec.category() == lt::libtorrent_category()) {
-		return BridgeError::engine_failure;
-	}
-	return BridgeError::engine_failure;
-}
-
 bool is_tcp_listen(lt::socket_type_t type) noexcept
 {
 	switch (type) {
@@ -191,6 +177,9 @@ struct EngineBridge::Impl {
 		handles_.clear();
 		pending_.clear();
 		alerts_seen_ = 0;
+		// The boot report must reflect what the engine actually runs with, so
+		// the configured peer-id prefix (not the default) is what gets reported.
+		last_peer_id_ = config.peer_id_prefix;
 		started = Clock::now();
 
 		try {
@@ -217,12 +206,11 @@ struct EngineBridge::Impl {
 			report.version = kEngineVersion;
 			report.peer_id = last_peer_id_;
 			report.listen_port = port;
-			started = Clock::now();
 			return Result<BootReport>::ok(std::move(report));
 		} catch (const lt::system_error& e) {
 			session_.reset();
 			return Result<BootReport>::failed(
-				classify(e.code()), std::string("session start failed: ") + e.what());
+				BridgeError::engine_failure, std::string("session start failed: ") + e.what());
 		} catch (const std::exception& e) {
 			session_.reset();
 			return Result<BootReport>::failed(BridgeError::internal,
@@ -319,6 +307,18 @@ struct EngineBridge::Impl {
 		EngineAlertDTO dto;
 		dto.kind = EngineAlertKind::unknown;
 
+		// Progress comes from the live handle status, not the alert payload:
+		// the alert only carries state/error, so a per-alert status() poll is
+		// the only truthful source (and it is cheap: no disk or network work).
+		const auto fill_progress = [&dto](const lt::torrent_handle& h) {
+			try {
+				const lt::torrent_status status = h.status();
+				dto.progress = static_cast<double>(status.progress);
+			} catch (...) {
+				// a handle that died mid-conversion keeps the -1 sentinel
+			}
+		};
+
 		// torrent_alert::alert_type only exists under ABI v1 and would be a
 		// [[deprecated]] dejure global base, so per-case extracts take the
 		// handle from each concrete alert instead of casting to the base.
@@ -327,6 +327,7 @@ struct EngineBridge::Impl {
 			const auto* a = static_cast<const lt::state_changed_alert*>(&alert);
 			dto.kind = EngineAlertKind::state_changed;
 			dto.state = static_cast<int>(a->state);
+			fill_progress(a->handle);
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
 			break;
@@ -336,6 +337,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::checked;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::torrent_finished_alert::alert_type: {
@@ -343,6 +345,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::finished;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::torrent_paused_alert::alert_type: {
@@ -350,6 +353,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::paused;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::torrent_resumed_alert::alert_type: {
@@ -357,6 +361,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::resumed;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::metadata_received_alert::alert_type: {
@@ -364,6 +369,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::metadata_received;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::torrent_error_alert::alert_type: {
@@ -372,6 +378,7 @@ struct EngineBridge::Impl {
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.error = a->error.message();
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::torrent_removed_alert::alert_type: {
@@ -379,6 +386,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::removed;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::add_torrent_alert::alert_type: {
@@ -386,6 +394,7 @@ struct EngineBridge::Impl {
 			dto.kind = EngineAlertKind::state_changed;
 			dto.torrent_id = id_string(a->handle.info_hashes());
 			dto.message = a->message();
+			fill_progress(a->handle);
 			break;
 		}
 		case lt::listen_succeeded_alert::alert_type: {
@@ -501,7 +510,7 @@ struct EngineBridge::Impl {
 				return Result<AddResult>::failed(BridgeError::engine_failure,
 					std::string("duplicate torrent: ") + e.what());
 			}
-			return Result<AddResult>::failed(classify(e.code()),
+			return Result<AddResult>::failed(BridgeError::engine_failure,
 				std::string("add failed: ") + e.what());
 		} catch (const std::exception& e) {
 			return Result<AddResult>::failed(BridgeError::internal,
@@ -531,7 +540,7 @@ struct EngineBridge::Impl {
 			}
 			return Result<void>::success();
 		} catch (const lt::system_error& e) {
-			return Result<void>::failed(classify(e.code()),
+			return Result<void>::failed(BridgeError::engine_failure,
 				std::string(what) + " failed: " + e.what());
 		} catch (const std::exception& e) {
 			return Result<void>::failed(BridgeError::engine_failure,

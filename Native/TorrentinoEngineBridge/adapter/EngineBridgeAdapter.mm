@@ -127,7 +127,7 @@ NSString* bytesToBase64(const std::vector<char>& bytes)
 	if (bytes.empty()) {
 		return @"";
 	}
-	return [[NSData alloc] initWithBytes:bytes.data() length:bytes.size()].base64EncodedStringWithOptions:0;
+	return [[[NSData alloc] initWithBytes:bytes.data() length:bytes.size()] base64EncodedStringWithOptions:0];
 }
 
 NSError* toNSError(BridgeError code, const std::string& message)
@@ -247,20 +247,32 @@ NSDictionary* resumeDataToJSON(const ResumeDataDTO& resume)
 // Generic trampoline: runs `body`, converts any C++/ObjC exception into an
 // NSError in `outError` and returns nil. Without this no engine call can crash
 // or throw into Swift.
+// @catch cannot bind a C++ type (only ObjC interface pointers), so C++
+// exceptions are handled by the inner C++ try/catch (std::exception gets its
+// what() into the message) and ObjC exceptions by the outer @catch (id).
 template <class Fn>
 NSData* runBridge(Fn&& body, NSError* __autoreleasing* error)
 {
 	@try {
-		return body();
-	} @catch (const std::exception& e) {
+		try {
+			return body();
+		} catch (const std::exception& e) {
+			if (error != nil) {
+				*error = toNSError(BridgeError::internal,
+					std::string("bridge adapter exception: ") + e.what());
+			}
+			return nil;
+		} catch (...) {
+			if (error != nil) {
+				*error = toNSError(BridgeError::internal,
+					"bridge adapter exception: unknown");
+			}
+			return nil;
+		}
+	} @catch (id exception) {
 		if (error != nil) {
 			*error = toNSError(BridgeError::internal,
-				std::string("bridge adapter exception: ") + e.what());
-		}
-		return nil;
-	} @catch (...) {
-		if (error != nil) {
-			*error = toNSError(BridgeError::internal, "bridge adapter exception: unknown");
+				"bridge adapter exception: objective-c");
 		}
 		return nil;
 	}

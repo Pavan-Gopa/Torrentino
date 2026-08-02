@@ -1,0 +1,49 @@
+Fix pread_disk_io teardown: destroy m_fence_flush before m_file_pool
+
+pread_storage holds a reference to the disk io's file_pool and calls
+m_pool.release() (which locks the pool's internal mutex) from its
+destructor. Members are destroyed in reverse declaration order, so with
+m_fence_flush declared before m_file_pool the fence-flush vector is
+destroyed AFTER the file pool. When a session is aborted while a fence
+flush is still queued (e.g. save_resume_data(flush_disk_cache) in
+flight), the leftover storage is destroyed after the pool, and the
+destructor locks the pool's already-destroyed mutex:
+
+    libc++abi: terminating due to uncaught exception of type
+    std::__1::system_error: mutex lock failed: Invalid argument
+
+Declare m_fence_flush after m_file_pool so any storage still queued at
+teardown is destroyed while the pool is alive.
+
+--- a/src/pread_disk_io.cpp
++++ b/src/pread_disk_io.cpp
+@@ -271,14 +271,28 @@
+ 	// storages that have a fence queued behind their outstanding cache writes.
+ 	// Those writes won't flush on their own (they can be partial pieces the
+ 	// optimistic pass skips, with the cache under its watermark), so the fence
+ 	// would wait forever. A generic disk thread flushes each so the writes drain
+ 	// and the fence can run. Guarded by m_job_mutex.
+-	std::vector<std::shared_ptr<aux::pread_storage>> m_fence_flush;
+ 
+ 	settings_interface const& m_settings;
+ 
+ 	// LRU cache of open files
+ 	aux::file_pool m_file_pool;
+ 
++	// storages that have a fence queued behind their outstanding cache writes.
++	// Those writes won't flush on their own (they can be partial pieces the
++	// optimistic pass skips, with the cache under its watermark), so the fence
++	// would wait forever. A generic disk thread flushes each so the writes drain
++	// and the fence can run. Guarded by m_job_mutex.
++	//
++	// Deliberately declared AFTER m_file_pool: members are destroyed in reverse
++	// declaration order and pread_storage::~pread_storage() calls
++	// m_pool.release(), which locks the pool's internal mutex. If this vector
++	// were destroyed after the pool (its original position), a storage still
++	// queued at teardown  -  a session aborted while a fence flush was in flight  - 
++	// would lock the already-destroyed mutex and abort with an uncaught
++	// std::system_error ("mutex lock failed: Invalid argument").
++	std::vector<std::shared_ptr<aux::pread_storage>> m_fence_flush;
++
+ 	// disk cache
+ 	aux::disk_buffer_pool m_buffer_pool;

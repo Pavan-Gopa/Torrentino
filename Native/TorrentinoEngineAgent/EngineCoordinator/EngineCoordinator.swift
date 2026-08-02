@@ -43,10 +43,7 @@ public actor EngineCoordinator {
             data = Data("{}".utf8)
         }
 
-        var error: NSError?
-        guard let response = adapter.startEngine(configurationData: data, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.startEngine(withConfigurationData: data) }
         started = true
         return try decode(BootReportDTO.self, from: response)
     }
@@ -55,23 +52,23 @@ public actor EngineCoordinator {
     public func add(specification: AddSpecificationDTO) throws -> AddResultDTO {
         guard started else { throw EngineCoordinatorError.notStarted }
         let data = try encode(specification)
-        var error: NSError?
-        guard let response = adapter.addTorrent(specificationData: data, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.addTorrent(withSpecificationData: data) }
         return try decode(AddResultDTO.self, from: response)
     }
 
     public func pause(torrentID: String) throws {
-        try voidCall { adapter.pause(payloadData: $0, error: &$1) }
+        let payload = try encode(TorrentIDPayload(torrentID: torrentID))
+        try voidCall(payload) { try adapter.pause(withPayloadData: $0) }
     }
 
     public func resume(torrentID: String) throws {
-        try voidCall { adapter.resume(payloadData: $0, error: &$1) }
+        let payload = try encode(TorrentIDPayload(torrentID: torrentID))
+        try voidCall(payload) { try adapter.resume(withPayloadData: $0) }
     }
 
     public func recheck(torrentID: String) throws {
-        try voidCall { adapter.recheck(payloadData: $0, error: &$1) }
+        let payload = try encode(TorrentIDPayload(torrentID: torrentID))
+        try voidCall(payload) { try adapter.recheck(withPayloadData: $0) }
     }
 
     /// Two-phase removal (ADR-010). prepare returns an opaque token; commit
@@ -79,20 +76,14 @@ public actor EngineCoordinator {
     public func prepareRemoval(torrentID: String, deleteFiles: Bool = false) throws -> RemovalTokenDTO {
         guard started else { throw EngineCoordinatorError.notStarted }
         let payload = try encode(RemovalTokenDTO(torrentID: torrentID, deleteFiles: deleteFiles, nonce: 0))
-        var error: NSError?
-        guard let response = adapter.prepareRemoval(payloadData: payload, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.prepareRemoval(withPayloadData: payload) }
         return try decode(RemovalTokenDTO.self, from: response)
     }
 
     public func commitRemoval(token: RemovalTokenDTO) throws -> RemovalResultDTO {
         guard started else { throw EngineCoordinatorError.notStarted }
         let data = try encode(token)
-        var error: NSError?
-        guard let response = adapter.commitRemoval(tokenData: data, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.commitRemoval(withTokenData: data) }
         return try decode(RemovalResultDTO.self, from: response)
     }
 
@@ -100,10 +91,7 @@ public actor EngineCoordinator {
     public func drainAlerts(maxCount: Int = 100) throws -> [EngineAlertDTO] {
         guard started else { return [] } // engine not running: empty batch, like the bridge
         let payload = try encode(AlertDrainPayload(maxCount: maxCount))
-        var error: NSError?
-        guard let response = adapter.drainAlerts(payloadData: payload, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.drainAlerts(withPayloadData: payload) }
         do {
             let decoder = JSONDecoder()
             return try decoder.decode([EngineAlertDTO].self, from: response)
@@ -116,19 +104,13 @@ public actor EngineCoordinator {
     public func requestResumeData(torrentID: String) throws -> ResumeDataDTO {
         guard started else { throw EngineCoordinatorError.notStarted }
         let payload = try encode(TorrentIDPayload(torrentID: torrentID))
-        var error: NSError?
-        guard let response = adapter.requestResumeData(payloadData: payload, error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.requestResumeData(withPayloadData: payload) }
         return try decode(ResumeDataDTO.self, from: response)
     }
 
     /// Returns the engine health snapshot.
     public func health() throws -> HealthDTO {
-        var error: NSError?
-        guard let response = adapter.health(error: &error) else {
-            throw error(for: error)
-        }
+        let response = try envelope { try adapter.health() }
         return try decode(HealthDTO.self, from: response)
     }
 
@@ -136,10 +118,7 @@ public actor EngineCoordinator {
     public func setOperationTimeout(millis: UInt32) throws {
         guard started else { throw EngineCoordinatorError.notStarted }
         let payload = try encode(TimeoutPayload(millis: millis))
-        var error: NSError?
-        guard let _ = adapter.setOperationTimeout(payloadData: payload, error: &error) else {
-            throw error(for: error)
-        }
+        _ = try envelope { try adapter.setOperationTimeoutWithPayloadData(payload) }
     }
 
     /// Deterministic shutdown. Always safe, even if never started.
@@ -181,27 +160,45 @@ public actor EngineCoordinator {
         }
     }
 
-    /// Runs a void adapter call; throws if the adapter returned an NSError.
-    private func voidCall(_ call: (Data, inout NSError?) throws -> Data?) throws {
+    /// Runs an adapter call that returns a JSON envelope; maps any bridge
+    /// NSError into an EngineCoordinatorError. A nil envelope without an error
+    /// is an adapter contract violation and surfaces as internalError.
+    private func envelope(_ call: () throws -> Data?) throws -> Data {
+        do {
+            guard let response = try call() else {
+                throw EngineCoordinatorError.internalError
+            }
+            return response
+        } catch let error as EngineCoordinatorError {
+            throw error
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// Runs a void adapter call with an explicit payload; throws if the
+    /// adapter returned an NSError. The payload is always produced by the
+    /// caller (e.g. TorrentIDPayload) so no operation silently drops its
+    /// arguments on the wire.
+    private func voidCall(_ payload: Data, _ call: (Data) throws -> Data?) throws {
         guard started else { throw EngineCoordinatorError.notStarted }
-        var error: NSError?
-        let payload = Data("{}".utf8)
-        _ = try call(payload, &error)
-        if let error {
-            throw error(for: error)
+        do {
+            _ = try call(payload)
+        } catch let error as EngineCoordinatorError {
+            throw error
+        } catch {
+            throw mapError(error)
         }
     }
 
     /// Maps an NSError produced by the adapter to an EngineCoordinatorError,
     /// preserving the localized bridge message for diagnostics.
-    private func error(for error: NSError?) -> EngineCoordinatorError {
-        guard let error else {
-            return .internalError
-        }
-        let base = EngineCoordinatorError.bridgeError(from: error.code)
+    private func mapError(_ error: any Error) -> EngineCoordinatorError {
+        let nsError = error as NSError
+        let base = EngineCoordinatorError.bridgeError(from: nsError.code)
         switch base {
         case .internalError:
-            return .malformedPayload(error.localizedDescription)
+            return .malformedPayload(nsError.localizedDescription)
         default:
             return base
         }

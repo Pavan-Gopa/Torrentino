@@ -65,6 +65,23 @@ DEFINES=(
 	-DTORRENT_SSL_PEERS
 )
 
+echo "==> building bridge adapter [objc++ compile check]"
+# WP-04 CHANGES_REQUESTED 3-1: the ObjC++ adapter must compile (and link against
+# the EngineBridge facade) so syntax regressions in the Swift-facing boundary are
+# caught by the same headless pipeline that covers the C++ core.
+ADAPTER_OBJ="${BUILD_DIR}/EngineBridgeAdapter.o"
+clang++ -std=c++17 -O1 -x objective-c++ -fobjc-arc -fexceptions \
+	-Wall -Wextra -Wpedantic -Werror \
+	-I"${BRIDGE_DIR}/bridge" \
+	-I"${BRIDGE_DIR}/adapter" \
+	-I"${LT_PREFIX}/include" \
+	-I"${BOOST_PREFIX}/include" \
+	-I"${OPENSSL_PREFIX}/include" \
+	"${DEFINES[@]}" \
+	-DTORRENT_NO_DEPRECATE=1 \
+	-c "${BRIDGE_DIR}/adapter/EngineBridgeAdapter.mm" \
+	-o "${ADAPTER_OBJ}"
+
 echo "==> building bridge smoke [${LT_VERSION}/${FLAVOR}]"
 # Warnings are errors. The macOS SDK's own headers must not pollute our flags;
 # libtorrent/Boost headers arrive via -I and are not SYSTEM, so we keep them
@@ -81,9 +98,11 @@ clang++ -std=c++17 -O1 ${EXTRA_FLAGS} \
 	-DTORRENT_NO_DEPRECATE=1 \
 	"${BRIDGE_DIR}/bridge/bridge_smoke.cpp" \
 	"${BRIDGE_DIR}/bridge/EngineBridge.cpp" \
+	"${ADAPTER_OBJ}" \
 	"${LT_PREFIX}/lib/libtorrent-rasterbar.a" \
 	"${OPENSSL_PREFIX}/lib/libssl.a" \
 	"${OPENSSL_PREFIX}/lib/libcrypto.a" \
+	-framework Foundation \
 	-framework CoreFoundation \
 	-framework SystemConfiguration \
 	-o "${BINARY}"

@@ -28,13 +28,13 @@ extension CodingUserInfoKey {
 /// Startup configuration passed to the engine (`SessionConfiguration`).
 public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
     /// 0 = ephemeral loopback port (hermetic; WP-01 rule).
-    public var listenPort: Int
-    public var downloadDir: String?
-    public var enableDHT: Bool
-    public var maxConnections: Int
-    public var peerIDPrefix: String
-    public var operationTimeoutMS: UInt32
-    public var alertQueueSize: UInt32
+    public let listenPort: Int
+    public let downloadDir: String?
+    public let enableDHT: Bool
+    public let maxConnections: Int
+    public let peerIDPrefix: String
+    public let operationTimeoutMS: UInt32
+    public let alertQueueSize: UInt32
 
     public init(
         listenPort: Int = 0,
@@ -68,10 +68,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
 /// Specification for adding a torrent (`AddSpecification`). Exactly one of
 /// `torrentFile` / `magnetURI` must be non-nil.
 public struct AddSpecificationDTO: Codable, Sendable, Equatable {
-    public var torrentFile: Data?
-    public var magnetURI: String?
-    public var savePath: String
-    public var paused: Bool
+    public let torrentFile: Data?
+    public let magnetURI: String?
+    public let savePath: String
+    public let paused: Bool
 
     public init(torrentFile: Data? = nil, magnetURI: String? = nil, savePath: String, paused: Bool = false) {
         self.torrentFile = torrentFile
@@ -90,9 +90,9 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
 
 /// Boot confirmation returned by `start` (`BootReport`).
 public struct BootReportDTO: Codable, Sendable, Equatable {
-    public var version: String
-    public var peerID: String
-    public var listenPort: Int
+    public let version: String
+    public let peerID: String
+    public let listenPort: Int
 
     enum CodingKeys: String, CodingKey {
         case version = "version"
@@ -103,11 +103,11 @@ public struct BootReportDTO: Codable, Sendable, Equatable {
 
 /// Result of adding a torrent (`AddResult`).
 public struct AddResultDTO: Codable, Sendable, Equatable {
-    public var torrentID: String
-    public var infoHash: String
-    public var name: String
+    public let torrentID: String
+    public let infoHash: String
+    public let name: String
     /// -1 while metadata is unknown (magnet-added).
-    public var totalSize: Int64
+    public let totalSize: Int64
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
@@ -120,12 +120,12 @@ public struct AddResultDTO: Codable, Sendable, Equatable {
 /// Aggregated alert batch item (`EngineAlertDTO`). A batch may contain zero
 /// or more alerts; `kind` is a stable kebab-case name (see bridging header).
 public struct EngineAlertDTO: Codable, Sendable, Equatable {
-    public var kind: String
-    public var torrentID: String?
-    public var progress: Double
-    public var state: Int
-    public var error: String?
-    public var message: String?
+    public let kind: String
+    public let torrentID: String?
+    public let progress: Double
+    public let state: Int
+    public let error: String?
+    public let message: String?
 
     public init(kind: String, torrentID: String? = nil, progress: Double = -1, state: Int = -1,
                 error: String? = nil, message: String? = nil) {
@@ -149,12 +149,12 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
 
 /// Health snapshot (`HealthDTO`).
 public struct HealthDTO: Codable, Sendable, Equatable {
-    public var uptimeSeconds: UInt64
-    public var activeTorrents: Int
-    public var downloadRate: Int
-    public var uploadRate: Int
-    public var alertsSeen: UInt64
-    public var running: Bool
+    public let uptimeSeconds: UInt64
+    public let activeTorrents: Int
+    public let downloadRate: Int
+    public let uploadRate: Int
+    public let alertsSeen: UInt64
+    public let running: Bool
 
     enum CodingKeys: String, CodingKey {
         case uptimeSeconds = "uptime-seconds"
@@ -168,8 +168,8 @@ public struct HealthDTO: Codable, Sendable, Equatable {
 
 /// Resume data response (`ResumeDataDTO`).
 public struct ResumeDataDTO: Codable, Sendable, Equatable {
-    public var torrentID: String
-    public var resumeData: Data
+    public let torrentID: String
+    public let resumeData: Data
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
@@ -179,9 +179,9 @@ public struct ResumeDataDTO: Codable, Sendable, Equatable {
 
 /// Opaque removal token (`RemovalToken`), produced by prepare, consumed by commit.
 public struct RemovalTokenDTO: Codable, Sendable, Equatable {
-    public var torrentID: String
-    public var deleteFiles: Bool
-    public var nonce: UInt64
+    public let torrentID: String
+    public let deleteFiles: Bool
+    public let nonce: UInt64
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
@@ -192,8 +192,8 @@ public struct RemovalTokenDTO: Codable, Sendable, Equatable {
 
 /// Removal outcome (`RemovalResult`).
 public struct RemovalResultDTO: Codable, Sendable, Equatable {
-    public var torrentID: String
-    public var filesDeleted: Bool
+    public let torrentID: String
+    public let filesDeleted: Bool
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
