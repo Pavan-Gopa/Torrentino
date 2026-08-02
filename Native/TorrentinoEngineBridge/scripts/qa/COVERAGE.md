@@ -1,18 +1,18 @@
 # Torrentino QA Coverage — WP-05 (XPC protocol v1)
 
-Updated: 2026-08-02 (Test Engineer, WP-05 cycle)
+Updated: 2026-08-03 (Test Engineer, WP-05 QA cycle)
 Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
-**Last full suite:** 2026-08-02 — **45/45 PASS (GREEN)** — see `REPORT.md`
-**Contract tests:** `TorrentinoIPCTests` — **73/73 PASS**
+**Last full suite:** 2026-08-03 — **57/57 PASS (GREEN)** — see `REPORT.md`
+**Contract tests:** `TorrentinoIPCTests` (74) + `TorrentinoAppTests` (9) + `TorrentinoDomainTests` (19) — **102/102 PASS**
 
 ## Coverage policy
 
 - Monotonic: old WP-01..WP-04 scripts are never deleted; each WP adds tests.
-- Full suite always runs WP-01 + WP-02 + WP-03 + WP-04.
+- Full suite always runs WP-01 + WP-02 + WP-03 + WP-04 + WP-05.
 - Exit 0 = pass; isolated cleanup on EXIT.
 - ADR-010: every public API ≥3 unit axes; every actor ≥1 stress; every parser ≥1 negative/fuzz.
 - WP-05 surface is a Swift contract framework (`Native/TorrentinoIPC/`) verified at XCTest level
-  (`TorrentinoIPCTests`, 73 cases); no new shell scripts this cycle.
+  (`TorrentinoIPCTests`, 74 cases) plus 12 dedicated shell QA scripts (`test_wp05_*.sh`).
 
 ---
 
@@ -33,9 +33,9 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | 11 | Error contract (24 codes, fault, localization keys) | IPC XCTest | fault round-trip + factories | — | localizationKey stable `fault.<rawValue>` | covered |
 | 12 | Pagination (PageCursor/FileCursor/Page/entries) | IPC XCTest | cursor + page round-trip | — | page size bounded (max 200); 4 entry types | covered |
 | 13 | Transactional Settings (validate→persist→apply→rollback) | IPC XCTest | applied | revision conflict, validation failed | apply-failure rollback; persist failure no rollback | covered |
-| 14 | Peer code-signing policy (`PeerValidation`) | build-level + design | requirement expression compiles; identities frozen | wrong-team/unsigned rejected in Release | Debug skips (no embedded agent); Release enforces | covered (see §Open gaps) |
+| 14 | Peer code-signing policy (`PeerValidation`) | `test_wp05_peer_validation.sh` + AppTests | requirement expression compiles; identities frozen | unsigned/wrong-team/nonexistent rejected (`testPeerValidationWrongTeamIdentifierRejected` — ad-hoc signed Mach-O) | Debug skips (no embedded agent); Release enforces (`isEnforcementActive`) | covered |
 | 15 | Agent advertises ipcVersion/protocolRange | integration (hello via CLI) | health advertises 1.0 | — | handshake negotiates against advertised | covered |
-| — | Full XCTest green | `test_wp03_xctest_pass.sh` + `-only-testing:TorrentinoIPCTests` | 73/73 | fails if any case red | — | covered / PASS |
+| — | Full XCTest green | `test_wp05_contract_tests.sh` (3 targets, standalone + combined) | 102/102 | fails if any case red | — | covered / PASS |
 
 ## Gate coverage (from plan — WP-05)
 
@@ -48,10 +48,11 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | Instance change → full snapshot | `testInstanceChangeRequiresFullSnapshot`, `testFirstSnapshotAlwaysFull` | covered / PASS |
 | Oversized/invalid payload rejected | `testEnvelopeOversizedPayloadRejected`, `testEnvelopeGarbageJSONDecodeFails`, `testEnvelopeTamperedPayloadDecodeFails`, `testEnvelopeFuzzTruncatedJSON`, `testEnvelopeUnknownKindDecodeFails`, `testEnvelopeRequestIDMismatch` | covered / PASS |
 | Stale event | `testSnapshotRevisionMonotonic`, `testEnvelopeEventKindValidation` | covered / PASS |
-| Unsigned peer / same-Team wrong-ID rejection | `PeerValidation` SecStaticCode requirement — Release-only enforcement (Debug gate `isEnforcementActive=false`) | design / build-level (see Open gaps) |
+| Unsigned peer rejected | `testPeerValidationUnsignedDummyFileRejected`, `testPeerValidationNonexistentPathRejected` | covered / PASS |
+| Wrong team rejected | `testPeerValidationWrongTeamIdentifierRejected` (ad-hoc signed Mach-O → `.wrongTeamIdentifier`) | covered / PASS |
 | Settings rollback / version conflict | `testSettingsTransactionRollbackOnApplyFailure`, `testSettingsTransactionRevisionConflict`, `testSettingsTransactionPersistFailureNoRollback`, `testSettingsRevisionConflictFault` | covered / PASS |
 | Hierarchical file paging | `testFileCursorHierarchyRoundTrip`, `testPaginatedItemsRoundTrip`, `testPageSizeBounded`, `testPageCursorRoundTrip` | covered / PASS |
-| All contract tests green | 73/73 `TorrentinoIPCTests` | covered / PASS |
+| All contract tests green | 74/74 `TorrentinoIPCTests` + 9/9 `TorrentinoAppTests` + 19/19 `TorrentinoDomainTests` | covered / PASS |
 
 ## Regression (WP-01) — still run every suite
 
@@ -118,18 +119,35 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | `test_wp04_torrent_id_payload.sh` | TorrentIDPayload |
 | `test_wp04_xcode_integration.sh` | pbxproj refs |
 
+## Regression (WP-05) — NEW, run every suite from this cycle
+
+| Script | Feature |
+| --- | --- |
+| `test_wp05_identity_types.sh` | Identity model round-trips |
+| `test_wp05_commands_roundtrip.sh` | 32 EngineCommandV1 Codable + requestID/idempotencyKey invariants |
+| `test_wp05_events_roundtrip.sh` | 11 EngineEventV1 Codable |
+| `test_wp05_error_contract.sh` | EngineFault structure / localization keys |
+| `test_wp05_envelope_limits.sh` | 4 MiB bound, garbage/tampered/unknown-kind, fuzz, version mismatch |
+| `test_wp05_pagination.sh` | Cursor round-trips, page size ≤ 200 |
+| `test_wp05_settings_transaction.sh` | Transaction / rollback / revision conflict |
+| `test_wp05_handshake.sh` | Version negotiation / floor / mismatch |
+| `test_wp05_idempotency.sh` | Duplicate replay same result |
+| `test_wp05_reconciliation.sh` | Dropped delta / instance change → full snapshot |
+| `test_wp05_peer_validation.sh` | Unsigned/wrong-team/nonexistent rejected, enforcement gate |
+| `test_wp05_contract_tests.sh` | All 3 test targets standalone + combined |
+
 ## Shared infrastructure
 
 | File | Role |
 | --- | --- |
 | `qa_common.sh` | paths, mktemp, asserts |
 | `qa_wp02_common.sh` | app resolve, launchd/cli helpers |
-| `run_qa_suite.sh` | runs `test_wp0{1,2,3,4}_*.sh` |
+| `run_qa_suite.sh` | runs `test_wp0{1,2,3,4,5}_*.sh` |
 
 ## Open gaps (after this run)
 
 | Gap | Severity | Notes |
 | --- | --- | --- |
-| Automated runtime test of peer rejection (unsigned/wrong-team) in Debug | P2 | Debug builds are unsigned and have no embedded agent → checks gated off (`isEnforcementActive=false`); enforcement runs on Developer-ID Release artifact; verified at design/build level this cycle, executable check scheduled with the WP-16 signing chain |
+| End-to-end transport peer rejection (Release artifact) | P2 | Executable wrong-team/unsigned rejection proven at unit level; `setCodeSigningRequirement` on the live XPC connection still needs the Developer-ID Release artifact (WP-16 signing chain) |
 | GUI pixel/UI automation of empty window | N/A | Covered via source contract + AppTests; no AppKit snapshot harness yet |
 | Full 24h soak burn-in | N/A | Wall-clock item (WP-01 gate); smoke soaks green every suite run |

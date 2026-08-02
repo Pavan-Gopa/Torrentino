@@ -85,6 +85,30 @@ final class TorrentinoAppTests: TestProfileCase {
         }
     }
 
+    func testPeerValidationWrongTeamIdentifierRejected() throws {
+        // A real Mach-O re-signed ad-hoc (no Developer ID cert, no team OU)
+        // must pass basic validity but FAIL the frozen requirement match and
+        // be reported as .wrongTeamIdentifier.
+        let dir = try profile.subdirectory("peer-validation")
+        let wrongTeamBinary = dir.appendingPathComponent("ad-hoc-signed-agent")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: wrongTeamBinary)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["--force", "-s", "-", wrongTeamBinary.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "codesign ad-hoc must succeed")
+
+        let result = PeerValidation.validateAgentBinary(at: wrongTeamBinary)
+        guard case .failure(let error) = result else {
+            return XCTFail("ad-hoc signed binary must be rejected")
+        }
+        guard case .wrongTeamIdentifier = error else {
+            return XCTFail("expected wrongTeamIdentifier, got \(error)")
+        }
+    }
+
     func testPeerValidationRequirementExpressionFrozen() {
         let requirement = PeerValidation.expectedAgentRequirement
         XCTAssertTrue(
