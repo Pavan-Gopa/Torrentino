@@ -1,16 +1,18 @@
-current_step: WP-04
+current_step: WP-05
 step_description: >-
-  Bridge и engine kernel. ObjC++ PIMPL facade над libtorrent, EngineCoordinator
-  actor, alert drain/batching, deterministic shutdown, add/pause/resume/recheck
-  primitives, sanitizer configurations.
+  XPC protocol v1. Codable envelopes, hello/version, request IDs/idempotency,
+  event batches, snapshots, revisions, backpressure, reconnect, peer code-signing,
+  paginated reads, transactional Settings.
 target_files:
-- Native/TorrentinoEngineBridge/
-- Native/TorrentinoEngineAgent/EngineCoordinator/
+- Native/TorrentinoIPC/
+- Native/TorrentinoEngineAgent/Agent/
+- Native/TorrentinoApp/EngineClient/
 completed_steps:
 - WP-00
 - WP-01
 - WP-02
 - WP-03
+- WP-04
 implementation:
   status: pending
   attempts: 0
@@ -22,22 +24,23 @@ review:
 qa:
   status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-03
+  suite: WP-04
   bugs_open: 0
-  note: 'WP-03 GREEN. 32/32 scripts. Soak 24h on track.'
+  note: 'WP-04 GREEN. 45/45 scripts. Soak 24h on track.'
 next_actor: coder
 track: ENGINE
-prior_track: FOUNDATION
+prior_track: ENGINE
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-04
-  last_post_tag: torrentino/WP-03-done
-  last_commit: 6f989d9
+  last_pre_tag: torrentino/pre-WP-05
+  last_post_tag: torrentino/WP-04-done
+  last_commit: 82de59b
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-04: Bridge и engine kernel. ObjC++ PIMPL facade, EngineCoordinator actor,
-  alert drain/batching, deterministic shutdown, add/pause/resume/recheck/remove
-  primitives, ASan/UBSan/TSan clean, cancellation/deadline tested.
+  WP-05: XPC protocol v1. Codable envelopes, hello/version range, request
+  IDs/idempotency, reverse event batches, full/incremental snapshots,
+  revisions/instance IDs, backpressure/coalescing, reconnect, peer code-signing,
+  paginated inspector reads, transactional Settings protocol.
