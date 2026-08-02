@@ -1,15 +1,18 @@
-current_step: WP-02
+current_step: WP-03
 step_description: >-
-  Signed SMAppService lifecycle spike. Create minimal signed app + agent,
-  register via SMAppService, prove Mach XPC lifecycle (kill, reconnect,
-  reboot, update N-1→N).
+  Native project skeleton и strict concurrency. Xcode targets/modules,
+  macOS 13/arm64, Swift 6 strict concurrency complete, warnings as errors,
+  String Catalog, basic app shell, test profiles, Debug/Release xcconfig.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
 - Native/Config/
+- Native/Torrentino.xcodeproj/
+- Native/Tests/
 completed_steps:
 - WP-00
 - WP-01
+- WP-02
 implementation:
   status: pending
   attempts: 0
@@ -20,23 +23,24 @@ review:
   note: ''
 qa:
   status: green
-  last_report: AI_Workflow_Kit/docs/AI/REPORT.md
-  suite: WP-01
+  last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
+  suite: WP-02
   bugs_open: 0
-  note: 'WP-01 GREEN. Soak 24h on track (completes ~2026-08-02 18:51 UTC).'
+  note: 'WP-02 GREEN. 24/24 scripts. Soak 24h on track.'
 next_actor: coder
 track: FOUNDATION
 prior_track: null
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-01
-  last_post_tag: torrentino/WP-01-done
-  last_commit: 4fb2def
+  last_pre_tag: torrentino/pre-WP-03
+  last_post_tag: torrentino/WP-02-done
+  last_commit: b237253
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-02: Signed SMAppService lifecycle spike. Create minimal Swift app +
-  LaunchAgent, register via SMAppService, prove Mach XPC hello/health/counter,
-  test kill/reconnect/reboot/update/denial flows. Developer ID config.
+  WP-03: Native project skeleton. Xcode targets/modules from plan §5,
+  macOS 13/arm64, Swift 6 strict concurrency complete, warnings as errors,
+  String Catalog EN/RU, basic app shell + menu + Settings placeholder,
+  XCTest target (TestProfile, not production App Support), Debug/Release xcconfig.
