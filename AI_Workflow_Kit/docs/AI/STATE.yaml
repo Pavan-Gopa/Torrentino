@@ -53,7 +53,7 @@ working_roots:
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: c242967
+  last_commit: 6589283
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
