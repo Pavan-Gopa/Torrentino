@@ -1,7 +1,8 @@
 // Layer: UI (SwiftUI main window).
 // Role: hosts the WP-07 transfer window (sidebar + table + files + status
 // bar), with a degraded-agent banner on top when the lifecycle VM reports
-// SMAppService problems.
+// SMAppService problems, and the native empty state when the authoritative
+// list is empty.
 // Must-not: invent torrents, edit engine state, or hide degraded agent status.
 // Invariants: UI is not source of truth; the list view model talks to the
 // agent over the command lane; empty copy comes from String Catalog.
@@ -17,14 +18,53 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if viewModel.degraded {
-                degradedBanner
+        Group {
+            if transfers.torrents.isEmpty {
+                VStack(spacing: 0) {
+                    if viewModel.degraded {
+                        degradedBanner
+                    }
+                    emptyState
+                }
+            } else {
+                VStack(spacing: 0) {
+                    if viewModel.degraded {
+                        degradedBanner
+                    }
+                    TorrentListView(viewModel: transfers)
+                }
             }
-            TorrentListView(viewModel: transfers)
         }
         .frame(minWidth: 860, minHeight: 520)
         .task { viewModel.refreshServiceStatus() }
+        .task { await transfers.start() }
+        .sheet(isPresented: $transfers.showAddSheet) {
+            AddTorrentSheet(viewModel: transfers)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "square.stack.3d.up.slash")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(String(localized: "empty.no_torrents"))
+                .font(.title3.weight(.semibold))
+            Text(String(localized: "empty.subtitle"))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            Button {
+                transfers.showAddSheet = true
+            } label: {
+                Label(String(localized: "torrents.add"), systemImage: "plus")
+            }
+            .controlSize(.large)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     private var degradedBanner: some View {

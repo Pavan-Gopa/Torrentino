@@ -134,3 +134,24 @@ xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
 - **Table SDK quirk**: `TableColumn(_:value:content:)` requires a sorting table on macOS 13 SDK; the name column uses a content-only column instead.
 - **Test-only annotations**: `nonisolated(unsafe)` confined to `StubURLProtocol` statics; production code has none.
 - **Files drill-down semantics**: top-level page of a multi-file torrent with a common root shows the root directory only (all files live below it) — asserted accordingly.
+
+---
+
+# WP-07 Reviewer Fixes (CHANGES_REQUESTED)
+
+## RESULT: waiting_review
+
+## Fix 1 — HIGH: RU localization for 45 new keys
+`Native/TorrentinoApp/Resources/Localizable.xcstrings`: all 45 new WP-07 keys (`torrents.title`, `torrents.add.*`, `torrents.col.*`, `torrents.filter.*`, `torrents.status.*`, `torrents.action.*`, `torrents.files.*`, `torrents.sidebar.library`, `fixture.note`, `subscribe.failed`, `add.failed`, `files.failed`) now carry full `ru` localizations. Terminology follows the agreed glossary: торент, загрузка/отдача, раздача, на паузе, прогресс, размер, статус, библиотека, magnet-ссылка. `test_wp03_string_catalog.sh` now validates `keys=63 langs=en+ru complete`.
+
+## Fix 2 — HIGH: empty-state contract restored in ContentView.swift
+`Native/TorrentinoApp/Features/ContentView.swift` regains the `emptyState` wrapper (`square.stack.3d.up.slash`, `String(localized: "empty.no_torrents")`, `String(localized: "empty.subtitle")`, no `TorrentInfo(` fabrication) and displays it full-window whenever the authoritative list is empty, with an "Add Torrent…" button opening the same sheet. Lifecycle was hoisted to ContentView so the empty branch still starts the VM: `.task { await transfers.start() }` and the `.sheet` moved from `TorrentListView` to `ContentView` (single owner — no duplicate subscribe or double sheet presentation). `TorrentListView` keeps its in-table overlay empty state for the filter-matches-nothing case.
+
+## Gates Verified
+
+| Gate | Status |
+|------|--------|
+| test_wp03_string_catalog.sh | ✅ PASS (63 keys, en+ru complete) |
+| test_wp03_empty_state.sh | ✅ PASS (static contract + AppTests green) |
+| run_qa_suite.sh | ✅ GREEN 71/71 (wp01: 11, wp02: 13, wp03: 8, wp04: 13, wp05: 12, wp06: 14) |
+| xcodebuild build (Developer ID signed) | ✅ BUILD SUCCEEDED |

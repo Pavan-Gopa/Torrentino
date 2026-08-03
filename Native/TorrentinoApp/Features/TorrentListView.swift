@@ -35,12 +35,6 @@ struct TorrentListView: View {
             }
         }
         .navigationTitle(String(localized: "torrents.title"))
-        .sheet(isPresented: $viewModel.showAddSheet) {
-            AddTorrentSheet(viewModel: viewModel)
-        }
-        .task {
-            await viewModel.start()
-        }
         .safeAreaInset(edge: .bottom) {
             statusBar
         }
