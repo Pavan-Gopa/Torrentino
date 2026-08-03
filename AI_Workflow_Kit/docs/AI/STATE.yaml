@@ -1,9 +1,7 @@
 current_step: WP-09
 step_description: >-
-  Fault recovery and resource control. Network offline/online, interface/VPN
-  change, sleep/wake, memory/thermal/Low Power Mode, disk full/permissions,
-  external volume detach/attach, bounded queues/cache/connections, crash-loop
-  safe recovery, health lane, conservative watchdog.
+  Fault recovery and resource control under review. System conditions, bounded
+  resources, health lane, crash-loop guard, volume-safe preflight, fault matrix.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -25,39 +23,38 @@ completed_steps:
 - WP-07
 - WP-08
 implementation:
-  status: pending
-  attempts: 0
-  note: PRE tag torrentino/pre-WP-09 created. WP-08 PRODUCT GREEN closed.
+  status: waiting_review
+  attempts: 1
+  note: >-
+    feat 0918a3d. Coder handoff claims full matrix + build/test green; FEEDBACK
+    file was written in review-shaped prose with RESULT waiting_review — real
+    independent Reviewer must overwrite with APPROVED/CHANGES_REQUESTED.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: null
-  note: ''
+  note: Independent re-review required (do not trust self-shaped PASS tables).
 qa:
-  status: green
+  status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-08
-  bugs_open: 0
+  suite: WP-09
+  bugs_open: open
   note: >-
-    WP-08 PRODUCT GREEN / ENVIRONMENTAL Legacy FAIL waived (ADR-013).
-    16 WP-08 scripts, 201 XCTest, bridge runners PASS.
-next_actor: coder
+    Coder claims test_wp09_fault_matrix 6/6, 100/101 suite (Legacy env fail).
+    Tester after APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
 - .
 legacy_hard_ban: >-
   Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
-  Orchestrator restores accidental dirt only; never product-commit Legacy.
 checkpoint:
   last_pre_tag: torrentino/pre-WP-09
   last_post_tag: torrentino/WP-08-done
-  last_commit: ad7a44a
+  last_commit: 0918a3d
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-09: fault recovery + resource control. Fault matrix, no busy-loops,
-  no global stop from one task, clear recovery actions, no fake paths for
-  missing volumes. Health lane + conservative watchdog. No WP-10+ file ops
-  / creator / Metal. No Legacy.
+  Awaiting independent review of WP-09 fault recovery.
