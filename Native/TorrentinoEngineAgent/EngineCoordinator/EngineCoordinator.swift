@@ -53,34 +53,32 @@ public actor EngineCoordinator {
 
     #if canImport(TorrentinoIPC)
     /// Applies the agent's complete settings candidate to the live session.
-    /// The bridge owns the libtorrent session, so reconfiguration is a
-    /// deterministic stop/start on this actor; records are re-added by the
-    /// transfer coordinator after a successful restart.
+    /// The bridge applies settings asynchronously inside libtorrent without
+    /// destroying torrent handles. The download directory is retained by the
+    /// bridge as the default for future add requests.
     public func apply(settings: EngineSettings) throws {
+        let configuration = Self.sessionConfiguration(for: settings)
         if started {
-            adapter.shutdown()
-            started = false
+            let data = try encode(configuration)
+            _ = try envelope { try adapter.applyEngine(withConfigurationData: data) }
+        } else {
+            _ = try start(configuration: configuration)
         }
-        _ = try start(configuration: Self.sessionConfiguration(for: settings))
     }
 
-    /// Per-torrent controls are deliberately exposed on the coordinator so
-    /// the transfer lane cannot fall back to a DTO-only mutation. The adapter
-    /// implementation is the only place that may eventually translate these
-    /// JSON operation payloads into libtorrent calls.
     public func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) throws {
-        throw EngineCoordinatorError.unsupportedOperation(
-            "setLimits is not supported by the linked engine bridge")
+        let payload = try encode(TorrentLimitsPayload(torrentID: torrentID, limits: limits))
+        try voidCall(payload) { try adapter.setLimitsWithPayloadData($0) }
     }
 
     public func editTrackers(torrentID: String, trackers: [String]) throws {
-        throw EngineCoordinatorError.unsupportedOperation(
-            "editTrackers is not supported by the linked engine bridge")
+        let payload = try encode(TrackersPayload(torrentID: torrentID, trackers: trackers))
+        try voidCall(payload) { try adapter.editTrackers(withPayloadData: $0) }
     }
 
     public func reannounce(torrentID: String) throws {
-        throw EngineCoordinatorError.unsupportedOperation(
-            "reannounce is not supported by the linked engine bridge")
+        let payload = try encode(TorrentIDPayload(torrentID: torrentID))
+        try voidCall(payload) { try adapter.reannounce(withPayloadData: $0) }
     }
     #endif
 
@@ -169,6 +167,10 @@ public actor EngineCoordinator {
             listenPort: Int(settings.listenPort),
             downloadDir: settings.downloadDirectory,
             enableDHT: settings.dhtEnabled,
+            enableLSD: settings.lsdEnabled,
+            enableUPnP: settings.upnpEnabled,
+            enableNATPMP: settings.natPmpEnabled,
+            encryptionEnabled: settings.encryptionEnabled,
             maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
             maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
             proxy: SessionProxyDTO(
@@ -186,6 +188,28 @@ public actor EngineCoordinator {
     private struct TorrentIDPayload: Codable {
         let torrentID: String
         enum CodingKeys: String, CodingKey { case torrentID = "torrent-id" }
+    }
+
+    #if canImport(TorrentinoIPC)
+    private struct TorrentLimitsPayload: Codable {
+        let torrentID: String
+        let limits: TorrentinoIPC.TransferLimits
+
+        enum CodingKeys: String, CodingKey {
+            case torrentID = "torrent-id"
+            case limits
+        }
+    }
+    #endif
+
+    private struct TrackersPayload: Codable {
+        let torrentID: String
+        let trackers: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case torrentID = "torrent-id"
+            case trackers
+        }
     }
 
     private struct AlertDrainPayload: Codable {
@@ -249,6 +273,9 @@ public actor EngineCoordinator {
     /// preserving the localized bridge message for diagnostics.
     private func mapError(_ error: any Error) -> EngineCoordinatorError {
         let nsError = error as NSError
+        if nsError.code == 10 {
+            return .unsupportedOperation(nsError.localizedDescription)
+        }
         let base = EngineCoordinatorError.bridgeError(from: nsError.code)
         switch base {
         case .internalError:

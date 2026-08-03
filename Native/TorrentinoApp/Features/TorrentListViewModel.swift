@@ -40,6 +40,7 @@ final class TorrentListViewModel: ObservableObject {
     private(set) var directoryStack: [String] = []
     private var fileCursor: PageCursor?
     private var eventHandler: (@Sendable ([EngineEventV1]) -> Void)?
+    private var recoveryInFlight = false
 
     init(client: EngineClient) {
         self.client = client
@@ -87,8 +88,13 @@ final class TorrentListViewModel: ObservableObject {
     /// fully interactive without an agent.
     func start() async {
         do {
+            await client.setReconnectHandler { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.recoverAfterReconnect()
+                }
+            }
             _ = try await client.hello()
-            subscribe()
+            try await subscribe()
             try await fetchFullSnapshot()
             usingFixture = false
             connectionNote = nil
@@ -103,20 +109,14 @@ final class TorrentListViewModel: ObservableObject {
     }
 
     /// Registers the event handler on the XPC queue; batches hop to MainActor.
-    func subscribe() {
+    func subscribe() async throws {
         eventHandler = { [weak self] events in
             Task { @MainActor [weak self] in
                 self?.apply(events)
             }
         }
         guard let eventHandler else { return }
-        Task {
-            do {
-                try await client.subscribeEvents(handler: eventHandler)
-            } catch {
-                connectionNote = String(localized: "subscribe.failed")
-            }
-        }
+        try await client.subscribeEvents(handler: eventHandler)
     }
 
     func refresh() {
@@ -134,7 +134,7 @@ final class TorrentListViewModel: ObservableObject {
             case .torrentDelta(let payload):
                 let delta = payload.delta
                 guard delta.engineRevision == engineRevision + 1, !usingFixture else {
-                    Task { try? await fetchFullSnapshot() }
+                    Task { await recoverFromFullSnapshot() }
                     continue
                 }
                 for snapshot in delta.added { upsert(snapshot) }
@@ -152,7 +152,7 @@ final class TorrentListViewModel: ObservableObject {
                 engineRevision = max(engineRevision, payload.engineRevision)
                 changedAuthoritativeState = true
             case .snapshotRequired:
-                Task { try? await fetchFullSnapshot() }
+                Task { await recoverFromFullSnapshot() }
             case .inspectionInvalidated(let payload):
                 if selection.contains(payload.recordID),
                    payload.scope == .files || payload.scope == .all {
@@ -192,6 +192,25 @@ final class TorrentListViewModel: ObservableObject {
         usingFixture = false
         connectionNote = nil
         NotificationManager.shared.processSnapshots(torrents)
+    }
+
+    private func recoverFromFullSnapshot() async {
+        guard !recoveryInFlight else { return }
+        recoveryInFlight = true
+        defer { recoveryInFlight = false }
+        do {
+            try await fetchFullSnapshot()
+            connectionGeneration &+= 1
+        } catch {
+            connectionNote = String(localized: "snapshot.failed")
+        }
+    }
+
+    private func recoverAfterReconnect() async {
+        // EngineClient has already restored the event subscription before this
+        // callback. The snapshot is still required because the agent may have
+        // restarted and its revision/instance are authoritative again.
+        await recoverFromFullSnapshot()
     }
 
     func addMagnet(_ uri: String, startPaused: Bool) async {
@@ -341,6 +360,22 @@ final class TorrentListViewModel: ObservableObject {
         }
     }
 
+    func editTrackers(_ recordID: TorrentRecordID, addedURLs: [String], removedURLs: [String]) async {
+        let command = EngineCommandV1.editTrackers(EditTrackersRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            addedURLs: addedURLs,
+            removedURLs: removedURLs
+        ))
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "trackers.failed")
+        }
+    }
+
     func setLimits(_ recordID: TorrentRecordID, limits: TransferLimits) async {
         let command = EngineCommandV1.setLimits(SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits))
         do {
@@ -423,6 +458,7 @@ final class TorrentListViewModel: ObservableObject {
            case .fault(let fault) = clientError {
             switch fault.code {
             case .rateLimited: return String(localized: "error.rate_limited")
+            case .unsupportedOperation: return String(localized: "error.unsupported_operation")
             case .engineBusy, .engineNotReady, .operationTimeout:
                 return String(localized: "error.engine_operation")
             default: break

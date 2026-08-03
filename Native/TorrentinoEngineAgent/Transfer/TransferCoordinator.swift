@@ -42,7 +42,7 @@ public actor TransferCoordinator {
     private var idempotencyResults: [IdempotencyKey: CommitAddResult] = [:]
     private var pumpTask: Task<Void, Never>?
     private let instanceID = UUID()
-    private var activeSettings: EngineSettings = .default
+    private var activeSettings: EngineSettings
     private var settingsRevision: SettingsRevision = 1
     private var lastReannounceAt: [TorrentRecordID: Date] = [:]
     private var pendingRemovalTokens: [String: TorrentRecordID] = [:]
@@ -64,6 +64,19 @@ public actor TransferCoordinator {
         self.agentVersion = agentVersion
         self.defaultSaveLocation = defaultSaveLocation
         self.pumpIntervalNanoseconds = pumpIntervalNanoseconds
+        let defaults = EngineSettings.default
+        self.activeSettings = EngineSettings(
+            downloadDirectory: defaultSaveLocation.path,
+            maxDownloadBytesPerSec: defaults.maxDownloadBytesPerSec,
+            maxUploadBytesPerSec: defaults.maxUploadBytesPerSec,
+            listenPort: defaults.listenPort,
+            dhtEnabled: defaults.dhtEnabled,
+            lsdEnabled: defaults.lsdEnabled,
+            upnpEnabled: defaults.upnpEnabled,
+            natPmpEnabled: defaults.natPmpEnabled,
+            encryptionEnabled: defaults.encryptionEnabled,
+            proxy: defaults.proxy
+        )
     }
 
     // MARK: - Lifecycle
@@ -140,7 +153,7 @@ public actor TransferCoordinator {
                 metainfoData: metainfoData,
                 trackers: trackers,
                 fileSelection: [],
-                saveLocation: defaultSaveLocation,
+                saveLocation: configuredSaveLocation(),
                 addedAt: torrent.addedAt,
                 revision: 0,
                 limits: limits.normalized
@@ -330,7 +343,10 @@ public actor TransferCoordinator {
         let now = Int64(Date().timeIntervalSince1970)
         let recordID = TorrentRecordID(rawValue: UUID())
         let desiredState: DesiredTorrentState = (request.startPaused ?? false) ? .paused : .running
-        let saveLocation = request.saveLocation ?? defaultSaveLocation
+        // The persisted settings candidate is authoritative for new torrents;
+        // the constructor location is only a bootstrap fallback before settings
+        // have been restored.
+        let saveLocation = request.saveLocation ?? configuredSaveLocation()
         let displayName = request.desiredName ?? inspection.displayName
         let selection: [RecordFileSelection]
         if let metainfo = inspection.metainfo {
@@ -849,6 +865,23 @@ public actor TransferCoordinator {
             redactedContext: "command=\(commandName)"
         )
     }
+
+    private func configuredSaveLocation() -> PersistedLocation {
+        let path = activeSettings.downloadDirectory
+        return path.isEmpty ? defaultSaveLocation : PersistedLocation(path: path)
+    }
+
+    private static func engineFault(
+        _ error: Error,
+        operation: String,
+        recordID: TorrentRecordID? = nil,
+        fallback: String
+    ) -> EngineFault {
+        if let fault = error as? EngineFault, fault.code == .unsupportedOperation {
+            return fault
+        }
+        return .engineBusy(details: fallback)
+    }
 }
 
 // MARK: - TransferRecord mutation helpers
@@ -983,7 +1016,12 @@ extension TransferCoordinator {
                 torrentID: request.recordID.rawValue.uuidString,
                 limits: record.limits
             )
-            return .failure(.engineBusy(details: "setLimits rejected by engine"))
+            return .failure(Self.engineFault(
+                error,
+                operation: "setLimits",
+                recordID: request.recordID,
+                fallback: "setLimits rejected by engine"
+            ))
         }
         records[request.recordID] = (records[request.recordID] ?? record).with(limits: normalized)
         bumpRecordRevision(request.recordID)
@@ -1011,17 +1049,19 @@ extension TransferCoordinator {
                     }
                     do {
                         try await self.engine.apply(settings: candidate)
-                        await self.invalidateEngineBindings()
                         await self.setActiveSettings(candidate, revision: previousRevision + 1)
                         return .success(())
                     } catch {
-                        return .failure(.engineBusy(details: "settings apply rejected by engine"))
+                        return .failure(Self.engineFault(
+                            error,
+                            operation: "applySettings",
+                            fallback: "settings apply rejected by engine"
+                        ))
                     }
                 },
                 rollback: { [weak self] _, _ in
                     if let self {
                         try await self.engine.apply(settings: previousSettings)
-                        await self.invalidateEngineBindings()
                         await self.setActiveSettings(previousSettings, revision: previousRevision)
                     }
                     try await persistence.persistSettings(previousSettings, revision: previousRevision)
@@ -1062,7 +1102,12 @@ extension TransferCoordinator {
         do {
             try await engine.reannounce(torrentID: engineID)
         } catch {
-            return .failure(.engineBusy(details: "reannounce rejected by engine"))
+            return .failure(Self.engineFault(
+                error,
+                operation: "reannounce",
+                recordID: recordID,
+                fallback: "reannounce rejected by engine"
+            ))
         }
         lastReannounceAt[recordID] = now
         return .success(.ack)
@@ -1104,7 +1149,12 @@ extension TransferCoordinator {
                 torrentID: request.recordID.rawValue.uuidString,
                 trackers: record.trackers
             )
-            return .failure(.engineBusy(details: "tracker edit rejected by engine"))
+            return .failure(Self.engineFault(
+                error,
+                operation: "editTrackers",
+                recordID: request.recordID,
+                fallback: "tracker edit rejected by engine"
+            ))
         }
         records[request.recordID] = (records[request.recordID] ?? record).withTrackers(updated)
         bumpRecordRevision(request.recordID)
@@ -1119,12 +1169,6 @@ extension TransferCoordinator {
         }
         await pumpOnce()
         return records[recordID]?.engineID
-    }
-
-    private func invalidateEngineBindings() {
-        for (recordID, record) in records where record.engineID != nil {
-            records[recordID] = record.with(engineID: nil, health: .healthy)
-        }
     }
 
     private static func normalizedTrackerURL(_ value: String) -> String? {

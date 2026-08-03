@@ -25,6 +25,7 @@ using torrentino::bridge::RemovalResult;
 using torrentino::bridge::RemovalToken;
 using torrentino::bridge::ResumeDataDTO;
 using torrentino::bridge::SessionConfiguration;
+using torrentino::bridge::TorrentLimits;
 using torrentino::bridge::TorrentRecordID;
 
 NSErrorDomain const TorrentinoEngineBridgeErrorDomain = @"com.torrentino.engine-bridge";
@@ -108,6 +109,34 @@ uint32_t uint32Value(NSDictionary* dict, const char* key, uint32_t fallback)
 	return static_cast<uint32_t>(value);
 }
 
+std::optional<int64_t> optionalInt64Value(NSDictionary* dict, const char* key)
+{
+	id value = dict[jsonKey(key)];
+	return [value isKindOfClass:[NSNumber class]]
+		? std::optional<int64_t>([value longLongValue]) : std::nullopt;
+}
+
+std::optional<double> optionalDoubleValue(NSDictionary* dict, const char* key)
+{
+	id value = dict[jsonKey(key)];
+	return [value isKindOfClass:[NSNumber class]]
+		? std::optional<double>([value doubleValue]) : std::nullopt;
+}
+
+std::vector<std::string> stringArrayValue(NSDictionary* dict, const char* key)
+{
+	id value = dict[jsonKey(key)];
+	NSArray* array = [value isKindOfClass:[NSArray class]] ? value : @[];
+	std::vector<std::string> result;
+	result.reserve(array.count);
+	for (id item in array) {
+		if ([item isKindOfClass:[NSString class]]) {
+			result.emplace_back([item UTF8String]);
+		}
+	}
+	return result;
+}
+
 // The torrent-file field travels base64 because JSON strings are not a safe
 // byte container; the C++ side receives the raw bytes back.
 std::vector<char> base64ToBytes(NSDictionary* dict, const char* key)
@@ -150,11 +179,38 @@ SessionConfiguration configurationFromJSON(NSDictionary* dict)
 	config.listen_port = static_cast<int>(int64Value(dict, "listen-port", 0));
 	config.download_dir = std::string(stringValue(dict, "download-dir", @"").UTF8String);
 	config.enable_dht = boolValue(dict, "enable-dht", false);
+	config.enable_lsd = boolValue(dict, "enable-lsd", false);
+	config.enable_upnp = boolValue(dict, "enable-upnp", false);
+	config.enable_natpmp = boolValue(dict, "enable-natpmp", false);
+	config.encryption_enabled = boolValue(dict, "encryption-enabled", true);
 	config.max_connections = static_cast<int>(int64Value(dict, "max-connections", 120));
+	config.max_download_bytes_per_sec = int64Value(dict, "max-download-bytes-per-sec", 0);
+	config.max_upload_bytes_per_sec = int64Value(dict, "max-upload-bytes-per-sec", 0);
+	NSDictionary* proxy = dict[jsonKey("proxy")];
+	if ([proxy isKindOfClass:[NSDictionary class]]) {
+		config.proxy_kind = std::string(stringValue(proxy, "kind", @"none").UTF8String);
+		config.proxy_host = std::string(stringValue(proxy, "host", @"").UTF8String);
+		config.proxy_port = static_cast<uint16_t>(uint32Value(proxy, "port", 0));
+		config.proxy_username = std::string(stringValue(proxy, "username", @"").UTF8String);
+	}
 	config.peer_id_prefix = std::string(stringValue(dict, "peer-id-prefix", @"-TT0400-").UTF8String);
 	config.operation_timeout_ms = uint32Value(dict, "operation-timeout-ms", 10000);
 	config.alert_queue_size = uint32Value(dict, "alert-queue-size", 8000);
 	return config;
+}
+
+TorrentLimits torrentLimitsFromJSON(NSDictionary* dict)
+{
+	NSDictionary* limits = dict[jsonKey("limits")];
+	if (![limits isKindOfClass:[NSDictionary class]]) {
+		limits = @{};
+	}
+	TorrentLimits result;
+	result.max_download_bytes_per_sec = optionalInt64Value(limits, "maxDownloadBytesPerSec");
+	result.max_upload_bytes_per_sec = optionalInt64Value(limits, "maxUploadBytesPerSec");
+	result.ratio_limit = optionalDoubleValue(limits, "ratioLimit");
+	result.seed_time_seconds = optionalInt64Value(limits, "seedTimeSeconds");
+	return result;
 }
 
 AddSpecification addSpecificationFromJSON(NSDictionary* dict)
@@ -336,7 +392,7 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 }
 
 - (nullable NSData *)startEngineWithConfigurationData:(NSData *)configurationData
-												error:(NSError *_Nullable *_Nullable)error
+														 error:(NSError *_Nullable *_Nullable)error
 {
 	return runBridge([&]() -> NSData* {
 		NSDictionary* dict = toJSON(configurationData, error);
@@ -346,6 +402,19 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		const SessionConfiguration config = configurationFromJSON(dict);
 		auto result = _engine->start(config);
 		return resultToData(result, bootReportToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)applyEngineWithConfigurationData:(NSData *)configurationData
+														 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(configurationData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const SessionConfiguration config = configurationFromJSON(dict);
+		return voidResultToData(_engine->apply(config), error);
 	}, error);
 }
 
@@ -390,7 +459,7 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 }
 
 - (nullable NSData *)recheckWithPayloadData:(NSData *)payloadData
-									  error:(NSError *_Nullable *_Nullable)error
+															 error:(NSError *_Nullable *_Nullable)error
 {
 	return runBridge([&]() -> NSData* {
 		NSDictionary* dict = toJSON(payloadData, error);
@@ -399,6 +468,45 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		}
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
 		return voidResultToData(_engine->requestRecheck(id), error);
+	}, error);
+}
+
+- (nullable NSData *)setLimitsWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->setLimits(id, torrentLimitsFromJSON(dict)), error);
+	}, error);
+}
+
+- (nullable NSData *)editTrackersWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->editTrackers(id, stringArrayValue(dict, "trackers")), error);
+	}, error);
+}
+
+- (nullable NSData *)reannounceWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return voidResultToData(_engine->reannounce(id), error);
 	}, error);
 }
 

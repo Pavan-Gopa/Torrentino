@@ -16,6 +16,7 @@ struct InspectorView: View {
 
     @State private var selectedTab: InspectorTab = .general
     @State private var trackers: [TrackerEntry] = []
+    @State private var newTrackerURL = ""
 
     enum InspectorTab: Hashable, CaseIterable {
         case general
@@ -178,17 +179,35 @@ struct InspectorView: View {
                         .textSelection(.enabled)
                 }
 
-                List(trackers, id: \.url) { tracker in
-                    HStack {
-                        Image(systemName: "network")
-                            .foregroundStyle(.secondary)
-                        Text(tracker.url)
-                            .lineLimit(1)
-                        Spacer()
-                        Text(String(localized: "inspector.tracker.active"))
-                            .font(.caption)
-                            .foregroundStyle(.green)
+                List {
+                    ForEach(trackers, id: \.url) { tracker in
+                        HStack {
+                            Image(systemName: "network")
+                                .foregroundStyle(.secondary)
+                            Text(tracker.url)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(String(localized: "inspector.tracker.active"))
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                            Button {
+                                removeTracker(tracker.url)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(String(localized: "inspector.activity.remove_tracker"))
+                        }
                     }
+                }
+
+                HStack(spacing: 8) {
+                    TextField(String(localized: "inspector.activity.tracker_url"), text: $newTrackerURL)
+                        .textFieldStyle(.roundedBorder)
+                    Button(String(localized: "inspector.activity.add_tracker")) {
+                        addTracker()
+                    }
+                    .disabled(newTrackerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             } else {
                 Text(String(localized: "inspector.no_selection"))
@@ -297,6 +316,25 @@ struct InspectorView: View {
             trackers = page.items
         } catch {
             viewModel.surfaceCommandError(error, fallback: "trackers.failed")
+        }
+    }
+
+    private func addTracker() {
+        guard let torrent else { return }
+        let value = newTrackerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        newTrackerURL = ""
+        Task {
+            await viewModel.editTrackers(torrent.id, addedURLs: [value], removedURLs: [])
+            await loadTrackers()
+        }
+    }
+
+    private func removeTracker(_ url: String) {
+        guard let torrent else { return }
+        Task {
+            await viewModel.editTrackers(torrent.id, addedURLs: [], removedURLs: [url])
+            await loadTrackers()
         }
     }
 

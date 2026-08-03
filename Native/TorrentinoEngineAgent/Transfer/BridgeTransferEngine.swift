@@ -44,7 +44,7 @@ public actor BridgeTransferEngine: TransferEngine {
             started = true
         } catch {
             started = false
-            throw error
+            throw Self.mappedBridgeError(error, operation: "applySettings")
         }
     }
 
@@ -70,15 +70,27 @@ public actor BridgeTransferEngine: TransferEngine {
     }
 
     public func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws {
-        try await coordinator.setLimits(torrentID: torrentID, limits: limits)
+        do {
+            try await coordinator.setLimits(torrentID: torrentID, limits: limits)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "setLimits")
+        }
     }
 
     public func editTrackers(torrentID: String, trackers: [String]) async throws {
-        try await coordinator.editTrackers(torrentID: torrentID, trackers: trackers)
+        do {
+            try await coordinator.editTrackers(torrentID: torrentID, trackers: trackers)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "editTrackers")
+        }
     }
 
     public func reannounce(torrentID: String) async throws {
-        try await coordinator.reannounce(torrentID: torrentID)
+        do {
+            try await coordinator.reannounce(torrentID: torrentID)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "reannounce")
+        }
     }
 
     /// Drains the alert queue, folds the latest per-torrent progress/state
@@ -128,11 +140,23 @@ public actor BridgeTransferEngine: TransferEngine {
         }
     }
 
+    private static func mappedBridgeError(_ error: Error, operation: String) -> Error {
+        if let coordinatorError = error as? EngineCoordinatorError,
+           case .unsupportedOperation(let details) = coordinatorError {
+            return EngineFault.unsupportedOperation(operation: operation, details: details)
+        }
+        return error
+    }
+
     private static func sessionConfiguration(for settings: EngineSettings) -> SessionConfigurationDTO {
         SessionConfigurationDTO(
             listenPort: Int(settings.listenPort),
             downloadDir: settings.downloadDirectory,
             enableDHT: settings.dhtEnabled,
+            enableLSD: settings.lsdEnabled,
+            enableUPnP: settings.upnpEnabled,
+            enableNATPMP: settings.natPmpEnabled,
+            encryptionEnabled: settings.encryptionEnabled,
             maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
             maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
             proxy: SessionProxyDTO(

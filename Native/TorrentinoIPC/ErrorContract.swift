@@ -247,4 +247,18 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             redactedContext: details
         )
     }
+
+    public static func unsupportedOperation(
+        operation: String,
+        recordID: TorrentRecordID? = nil,
+        details: String? = nil
+    ) -> EngineFault {
+        EngineFault(
+            code: .unsupportedOperation,
+            severity: .error,
+            affectedRecord: recordID,
+            recoveryActions: [],
+            redactedContext: details ?? "operation=\(operation)"
+        )
+    }
 }

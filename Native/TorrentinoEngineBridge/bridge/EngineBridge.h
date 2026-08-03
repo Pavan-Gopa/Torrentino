@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ enum class BridgeError : std::int32_t {
 	io = 7,              // filesystem-level failure
 	stopped = 8,         // operation aborted because shutdown was requested
 	internal = 9,        // unknown exception at the firewall
+	unsupported_operation = 10, // capability is not exposed by this libtorrent ABI
 };
 
 // Text form used by the ObjC adapter for NSError diagnostics.
@@ -48,9 +50,21 @@ const char* bridge_error_name(BridgeError code) noexcept;
 
 struct SessionConfiguration {
 	int listen_port = 0; // 0 = ephemeral loopback port (hermetic, WP-01 rule)
+	// The session has no global save-path setting. The bridge keeps this value
+	// as the default for an add request that does not provide an explicit path.
 	std::string download_dir;
 	bool enable_dht = false;
+	bool enable_lsd = false;
+	bool enable_upnp = false;
+	bool enable_natpmp = false;
+	bool encryption_enabled = true;
 	int max_connections = 120;
+	std::int64_t max_download_bytes_per_sec = 0;
+	std::int64_t max_upload_bytes_per_sec = 0;
+	std::string proxy_kind = "none";
+	std::string proxy_host;
+	std::uint16_t proxy_port = 0;
+	std::string proxy_username;
 	// Stable prefix libtorrent expands into the 20-byte wire peer ID. The full
 	// wire ID is synthesized inside libtorrent and not exposed by any
 	// non-deprecated API in 2.x, so the boot report reports this configured,
@@ -60,6 +74,15 @@ struct SessionConfiguration {
 	// call becomes a timeout Result, never a stuck actor.
 	std::uint32_t operation_timeout_ms = 10000;
 	std::uint32_t alert_queue_size = 8000;
+};
+
+struct TorrentLimits {
+	// nil means unlimited for bandwidth fields. Ratio and seed-time goals are
+	// optional so the adapter can distinguish an omitted goal from zero.
+	std::optional<std::int64_t> max_download_bytes_per_sec;
+	std::optional<std::int64_t> max_upload_bytes_per_sec;
+	std::optional<double> ratio_limit;
+	std::optional<std::int64_t> seed_time_seconds;
 };
 
 struct AddSpecification {
@@ -221,10 +244,16 @@ public:
 	EngineBridge& operator=(const EngineBridge&) = delete;
 
 	Result<BootReport> start(const SessionConfiguration& config) noexcept;
+	// Applies live session settings without destroying torrent handles. The
+	// download directory is retained as the default for subsequent adds.
+	Result<void> apply(const SessionConfiguration& config) noexcept;
 	Result<AddResult> add(const AddSpecification& spec) noexcept;
 	Result<void> pause(const TorrentRecordID& id) noexcept;
 	Result<void> resume(const TorrentRecordID& id) noexcept;
 	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
+	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits) noexcept;
+	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;
+	Result<void> reannounce(const TorrentRecordID& id) noexcept;
 	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id, bool delete_files) noexcept;
 	Result<RemovalResult> commitRemoval(const RemovalToken& token) noexcept;
 	// Aggregated alert batch (never one alert per peer/piece). Returns an

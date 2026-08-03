@@ -800,6 +800,25 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(snap.torrents.first?.limits, limits)
     }
 
+    func testUnsupportedEngineOperationRemainsTypedOnWire() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "9", count: 40))")
+        await engine.setUnsupportedTorrentMutation(true)
+
+        let reply = await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 1024)
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("expected typed unsupportedOperation fault")
+        }
+        XCTAssertEqual(fault.code, EngineErrorCode.unsupportedOperation)
+    }
+
     func testTransferLimitsNegativeBecomeUnlimited() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
@@ -1313,6 +1332,7 @@ private actor StubTransferEngine: TransferEngine {
     private var reannouncedIDs: [String] = []
     private var failSettingsApply = false
     private var failTorrentMutation = false
+    private var unsupportedTorrentMutation = false
     /// When non-nil, add() throws for every magnet whose URI contains the
     /// marker (per-record engine fault injection).
     private var failAddMarker: String?
@@ -1330,22 +1350,35 @@ private actor StubTransferEngine: TransferEngine {
     }
 
     func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws {
+        if unsupportedTorrentMutation {
+            throw EngineFault.unsupportedOperation(operation: "stub setLimits")
+        }
         if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
         appliedLimits[torrentID] = limits
     }
 
     func editTrackers(torrentID: String, trackers: [String]) async throws {
+        if unsupportedTorrentMutation {
+            throw EngineFault.unsupportedOperation(operation: "stub editTrackers")
+        }
         if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
         appliedTrackers[torrentID] = trackers
     }
 
     func reannounce(torrentID: String) async throws {
+        if unsupportedTorrentMutation {
+            throw EngineFault.unsupportedOperation(operation: "stub reannounce")
+        }
         if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
         reannouncedIDs.append(torrentID)
     }
 
     func setSettingsApplyFailure(_ value: Bool) {
         failSettingsApply = value
+    }
+
+    func setUnsupportedTorrentMutation(_ value: Bool) {
+        unsupportedTorrentMutation = value
     }
 
     func settingsApplications() -> [EngineSettings] {

@@ -39,6 +39,7 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 	TorrentinoEngineBridgeErrorIO = 7,
 	TorrentinoEngineBridgeErrorStopped = 8,
 	TorrentinoEngineBridgeErrorInternal = 9,
+	TorrentinoEngineBridgeErrorUnsupportedOperation = 10,
 };
 
 /// ObjC-compatible facade over the C++ engine. One instance owns exactly one
@@ -50,7 +51,13 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 /// Returns a JSON BootReport on success, or an NSError (code reflects the
 /// BridgeError). Rejects repeated start and non-conforming payloads.
 - (nullable NSData *)startEngineWithConfigurationData:(NSData *)configurationData
-												error:(NSError *_Nullable *_Nullable)error;
+														 error:(NSError *_Nullable *_Nullable)error;
+
+/// Applies the same SessionConfiguration to the running session. Unlike a
+/// restart, this keeps torrent handles alive; download-dir becomes the default
+/// path for later adds and the remaining fields are sent to libtorrent.
+- (nullable NSData *)applyEngineWithConfigurationData:(NSData *)configurationData
+														 error:(NSError *_Nullable *_Nullable)error;
 
 /// Adds a torrent from a JSON AddSpecification (exactly one of torrent-file
 /// base64 or magnet-uri). Returns a JSON AddResult on success.
@@ -64,7 +71,21 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 - (nullable NSData *)resumeWithPayloadData:(NSData *)payloadData
 									 error:(NSError *_Nullable *_Nullable)error;
 - (nullable NSData *)recheckWithPayloadData:(NSData *)payloadData
-									  error:(NSError *_Nullable *_Nullable)error;
+															 error:(NSError *_Nullable *_Nullable)error;
+
+/// Applies per-torrent bandwidth limits. Ratio/seed-time goals are rejected by
+/// the bridge with the typed UnsupportedOperation error when non-zero because
+/// libtorrent ABI 2 has no per-torrent setter for those goals.
+- (nullable NSData *)setLimitsWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error;
+
+/// Replaces the complete tracker URL list for {"torrent-id", "trackers"}.
+- (nullable NSData *)editTrackersWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error;
+
+/// Forces an immediate reannounce for {"torrent-id"}.
+- (nullable NSData *)reannounceWithPayloadData:(NSData *)payloadData
+															 error:(NSError *_Nullable *_Nullable)error;
 
 /// Two-phase removal (ADR-010). prepare validates the record and returns an
 /// opaque JSON RemovalToken; commit actually removes it. The payload for

@@ -20,9 +20,13 @@ actor EngineClient {
     /// WP-07: the object exported on every connection; the agent pushes event
     /// batches into it. Survives reconnects (re-exported per connection).
     private let eventSink = ClientEventSink()
-    /// True after a successful subscribeEvents; the agent-side registration
-    /// survives reconnects (only the per-connection sink binding is re-done).
+    /// True after a successful subscribeEvents. The agent-side bus registration
+    /// is re-created on a new connection because it belongs to the old agent
+    /// process/connection pair.
     private var eventSubscriptionActive = false
+    private var eventHandler: (@Sendable ([EngineEventV1]) -> Void)?
+    private var reconnectHandler: (@Sendable () -> Void)?
+    private var hasEstablishedConnection = false
 
     /// IPC command surface from TorrentinoIPC (schema identity; transport is still ObjC XPC).
     nonisolated var supportedCommands: [EngineCommandV1] { EngineCommandV1.allCases }
@@ -157,11 +161,13 @@ actor EngineClient {
     /// Idempotent: re-calling replaces the handler and re-registers the
     /// agent-side sink.
     func subscribeEvents(handler: @escaping @Sendable ([EngineEventV1]) -> Void) async throws {
+        eventHandler = handler
         eventSink.setHandler(handler)
         let ok: Bool = try await call { proxy, deliver in
             proxy.subscribeEvents { deliver(.success($0)) }
         }
         guard ok else {
+            eventHandler = nil
             eventSink.setHandler(nil)
             throw EngineClientError.unavailable(reason: "agent refused event subscription")
         }
@@ -169,12 +175,19 @@ actor EngineClient {
     }
 
     func unsubscribeEvents() async {
+        eventHandler = nil
         eventSink.setHandler(nil)
         guard eventSubscriptionActive else { return }
         eventSubscriptionActive = false
         _ = try? await call { proxy, deliver in
             proxy.unsubscribeEvents { deliver(.success($0)) }
         }
+    }
+
+    /// Registers a UI recovery callback. It fires only after a bounded
+    /// reconnect has established a new connection and restored the event sink.
+    func setReconnectHandler(_ handler: (@Sendable () -> Void)?) {
+        reconnectHandler = handler
     }
 
     // MARK: - Bounded reconnect
@@ -195,8 +208,15 @@ actor EngineClient {
                 try? await Task.sleep(nanoseconds: delay)
             }
             do {
-                let connection = try currentOrNewConnection()
-                return try await send(on: connection, invoke: invoke)
+                let (connection, reconnected) = try currentOrNewConnection()
+                if reconnected {
+                    try await restoreEventSubscription(on: connection)
+                }
+                let value = try await send(on: connection, invoke: invoke)
+                if reconnected {
+                    reconnectHandler?()
+                }
+                return value
             } catch {
                 lastError = error
                 log.warning("xpc attempt \(attempt + 1)/\(maxAttempts) failed: \(String(describing: error), privacy: .public)")
@@ -234,8 +254,8 @@ actor EngineClient {
         }
     }
 
-    private func currentOrNewConnection() throws -> NSXPCConnection {
-        if let connection { return connection }
+    private func currentOrNewConnection() throws -> (connection: NSXPCConnection, reconnected: Bool) {
+        if let connection { return (connection, false) }
 
         guard let agentExpression else {
             throw EngineClientError.unavailable(reason: "invalid agent code-signing requirement expression")
@@ -280,8 +300,27 @@ actor EngineClient {
         }
         connection.resume()
         self.connection = connection
+        let reconnected = hasEstablishedConnection
+        hasEstablishedConnection = true
         log.notice("xpc connection resumed service=\(PeerValidation.identity.machServiceName, privacy: .public)")
-        return connection
+        return (connection, reconnected)
+    }
+
+    /// Re-registers the event bus sink before a recovered request is allowed
+    /// to proceed. The event handler remains in ClientEventSink while XPC is
+    /// down, so no UI subscription has to be rebuilt by the view layer.
+    private func restoreEventSubscription(on connection: NSXPCConnection) async throws {
+        guard eventSubscriptionActive else { return }
+        guard eventHandler != nil else {
+            eventSubscriptionActive = false
+            return
+        }
+        let ok: Bool = try await send(on: connection) { proxy, deliver in
+            proxy.subscribeEvents { deliver(.success($0)) }
+        }
+        guard ok else {
+            throw EngineClientError.unavailable(reason: "agent refused event resubscription")
+        }
     }
 
     private func handleInterruption() {

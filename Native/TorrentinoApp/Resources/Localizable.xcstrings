@@ -2766,6 +2766,41 @@
         "en": { "stringUnit": { "state": "translated", "value": "items" } },
         "ru": { "stringUnit": { "state": "translated", "value": "элементов" } }
       }
+    },
+    "inspector.activity.tracker_url": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Tracker URL" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "URL трекера" } }
+      }
+    },
+    "inspector.activity.add_tracker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Add" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Добавить" } }
+      }
+    },
+    "inspector.activity.remove_tracker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Remove tracker" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Удалить трекер" } }
+      }
+    },
+    "error.unsupported_operation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "This engine operation is not supported" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Эта операция движка не поддерживается" } }
+      }
+    },
+    "snapshot.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not recover the torrent snapshot" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось восстановить снимок торрентов" } }
+      }
     }
   },
   "version": "1.0"

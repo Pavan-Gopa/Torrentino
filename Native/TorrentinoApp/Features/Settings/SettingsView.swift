@@ -436,6 +436,8 @@ struct SettingsView: View {
                 return String(localized: "settings.conflict_retry")
             case .settingsValidationFailed:
                 return String(localized: "settings.validation_failed")
+            case .unsupportedOperation:
+                return String(localized: "error.unsupported_operation")
             case .engineBusy, .engineNotReady, .operationTimeout:
                 return String(localized: "settings.engine_apply_failed")
             default:

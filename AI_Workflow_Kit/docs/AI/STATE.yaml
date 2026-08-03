@@ -1,9 +1,8 @@
 current_step: WP-08
 step_description: >-
-  Native UX completeness — NARROWED bridge completion round.
-  Implement real EngineBridge session-settings + per-torrent limits/trackers/
-  reannounce (or honest typed unsupported end-to-end), downloadDirectory for
-  new torrents, reconnect connectionGeneration for focus restore.
+  Native UX completeness — NARROWED bridge completion round under review.
+  Session settings, limits/trackers/reannounce bridge APIs, typed unsupported
+  for ratio/seed goals, reconnect connectionGeneration.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
@@ -27,28 +26,27 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: in_progress
+  status: waiting_review
   attempts: 1
   note: >-
-    Scope-narrowed after attempt 3 CHANGES_REQUESTED. Prior Swift UX largely
-    PASS. This round ONLY FEEDBACK §5 items 1-3 (bridge settings, limits/
-    trackers/reannounce, reconnect generation). Attempts reset for clean
-    narrowed retry per ORCHESTRATOR rule C.
+    Narrowed bridge round coder handoff. Claims REAL session apply, bandwidth
+    limits, editTrackers, reannounce; TYPED UNSUPPORTED ratio/seed goals;
+    unsupported preserved on wire; Inspector tracker edit; reconnect generation.
+    QA 97/97 claimed.
 review:
-  status: changes_requested
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
+  verdict: null
   note: >-
-    attempt3 review: build/test/97 QA green; P1-4/P1-6/P2-7/P2-8/P2-9 PASS;
-    remaining P1 bridge session settings + limits/trackers/reannounce wiring
-    honesty; P2 reconnect connectionGeneration.
+    Re-review narrowed §5 items 1-3 only. Do not re-open already-PASS Swift UX
+    without new evidence.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-08
   bugs_open: open
-  note: Tester only after Reviewer APPROVED on narrowed bridge round.
-next_actor: coder
+  note: Tester after APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -56,12 +54,9 @@ working_roots:
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: bde5bb2
+  last_commit: pending
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  NARROWED WP-08 bridge round. Only FEEDBACK.md §5 items 1-3.
-  Prefer real libtorrent apply; if impossible for a field, typed unsupported
-  end-to-end (no silent ignore, no fake success, no engineBusy collapse).
-  No WP-09+. No drive-by refactors. FEEDBACK waiting_review. No git commit.
+  Bridge handoff awaiting review.

@@ -46,6 +46,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
     public let listenPort: Int
     public let downloadDir: String?
     public let enableDHT: Bool
+    public let enableLSD: Bool
+    public let enableUPnP: Bool
+    public let enableNATPMP: Bool
+    public let encryptionEnabled: Bool
     public let maxConnections: Int
     public let peerIDPrefix: String
     public let operationTimeoutMS: UInt32
@@ -61,6 +65,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         listenPort: Int = 0,
         downloadDir: String? = nil,
         enableDHT: Bool = false,
+        enableLSD: Bool = false,
+        enableUPnP: Bool = false,
+        enableNATPMP: Bool = false,
+        encryptionEnabled: Bool = true,
         maxConnections: Int = 120,
         peerIDPrefix: String = "-TT0400-",
         operationTimeoutMS: UInt32 = 10_000,
@@ -72,6 +80,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         self.listenPort = listenPort
         self.downloadDir = downloadDir
         self.enableDHT = enableDHT
+        self.enableLSD = enableLSD
+        self.enableUPnP = enableUPnP
+        self.enableNATPMP = enableNATPMP
+        self.encryptionEnabled = encryptionEnabled
         self.maxConnections = maxConnections
         self.peerIDPrefix = peerIDPrefix
         self.operationTimeoutMS = operationTimeoutMS
@@ -86,6 +98,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         self.listenPort = try container.decode(Int.self, forKey: .listenPort)
         self.downloadDir = try container.decodeIfPresent(String.self, forKey: .downloadDir)
         self.enableDHT = try container.decode(Bool.self, forKey: .enableDHT)
+        self.enableLSD = try container.decodeIfPresent(Bool.self, forKey: .enableLSD) ?? false
+        self.enableUPnP = try container.decodeIfPresent(Bool.self, forKey: .enableUPnP) ?? false
+        self.enableNATPMP = try container.decodeIfPresent(Bool.self, forKey: .enableNATPMP) ?? false
+        self.encryptionEnabled = try container.decodeIfPresent(Bool.self, forKey: .encryptionEnabled) ?? true
         self.maxConnections = try container.decode(Int.self, forKey: .maxConnections)
         self.peerIDPrefix = try container.decode(String.self, forKey: .peerIDPrefix)
         self.operationTimeoutMS = try container.decode(UInt32.self, forKey: .operationTimeoutMS)
@@ -100,6 +116,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         case listenPort = "listen-port"
         case downloadDir = "download-dir"
         case enableDHT = "enable-dht"
+        case enableLSD = "enable-lsd"
+        case enableUPnP = "enable-upnp"
+        case enableNATPMP = "enable-natpmp"
+        case encryptionEnabled = "encryption-enabled"
         case maxConnections = "max-connections"
         case peerIDPrefix = "peer-id-prefix"
         case operationTimeoutMS = "operation-timeout-ms"

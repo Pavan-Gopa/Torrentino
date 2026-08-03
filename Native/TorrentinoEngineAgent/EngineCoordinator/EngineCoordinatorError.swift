@@ -33,6 +33,7 @@ public enum EngineCoordinatorError: Error, Sendable, Equatable, CustomStringConv
         case 6: return .engineFailure
         case 7: return .io
         case 8: return .stopped
+        case 10: return .unsupportedOperation("bridge reported an unsupported operation")
         default: return .internalError
         }
     }

@@ -39,6 +39,7 @@ using torrentino::bridge::HealthDTO;
 using torrentino::bridge::RemovalResult;
 using torrentino::bridge::RemovalToken;
 using torrentino::bridge::SessionConfiguration;
+using torrentino::bridge::TorrentLimits;
 
 int g_failures = 0;
 
@@ -228,6 +229,43 @@ int main()
 		const auto recheck = bridge.requestRecheck(add_result.torrent_id);
 		TH_REQUIRE(recheck.is_ok(), "recheck must succeed");
 		TH_REQUIRE(wait_for_alert(bridge, 30s, is_checked), "recheck completes");
+	}
+
+	// --- live session settings --------------------------------------------------
+	{
+		SessionConfiguration applied;
+		applied.download_dir = (workspace / "next-downloads").string();
+		applied.enable_dht = false;
+		applied.enable_lsd = false;
+		applied.enable_upnp = false;
+		applied.enable_natpmp = false;
+		applied.encryption_enabled = true;
+		applied.max_download_bytes_per_sec = 4096;
+		applied.max_upload_bytes_per_sec = 2048;
+		const auto result = bridge.apply(applied);
+		TH_REQUIRE(result.is_ok(), "live session settings apply must succeed");
+	}
+
+	// --- per-torrent controls and explicit unsupported distinction --------------
+	{
+		TorrentLimits bandwidth;
+		bandwidth.max_download_bytes_per_sec = 8192;
+		bandwidth.max_upload_bytes_per_sec = 4096;
+		const auto limits = bridge.setLimits(add_result.torrent_id, bandwidth);
+		TH_REQUIRE(limits.is_ok(), "per-torrent bandwidth limits must apply");
+
+		TorrentLimits unsupported;
+		unsupported.ratio_limit = 1.5;
+		const auto ratio = bridge.setLimits(add_result.torrent_id, unsupported);
+		TH_REQUIRE(!ratio.is_ok(), "unsupported ratio goal must not report success");
+		TH_REQUIRE(ratio.error_code() == BridgeError::unsupported_operation,
+			"unsupported ratio goal maps to typed unsupported_operation");
+
+		const auto trackers = bridge.editTrackers(add_result.torrent_id,
+			{"udp://127.0.0.1:1/announce"});
+		TH_REQUIRE(trackers.is_ok(), "tracker replacement must apply");
+		const auto reannounce = bridge.reannounce(add_result.torrent_id);
+		TH_REQUIRE(reannounce.is_ok(), "reannounce must reach the torrent handle");
 	}
 
 	// --- missing id error path -------------------------------------------------

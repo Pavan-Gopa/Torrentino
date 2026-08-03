@@ -10,6 +10,7 @@
 //           cooperative wake flag lets shutdown() unblock a wait loop.
 #include "EngineBridge.h"
 
+#include <libtorrent/announce_entry.hpp>
 #include <libtorrent/alert_types.hpp>
 #include <libtorrent/error_code.hpp>
 #include <libtorrent/hex.hpp>
@@ -25,8 +26,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string_view>
@@ -71,10 +74,43 @@ lt::settings_pack make_settings(const SessionConfiguration& config)
 		static_cast<int>(static_cast<std::uint32_t>(kAlertMask)));
 	pack.set_str(lt::settings_pack::peer_fingerprint, config.peer_id_prefix);
 	pack.set_bool(lt::settings_pack::enable_dht, config.enable_dht);
-	pack.set_bool(lt::settings_pack::enable_lsd, false);
-	pack.set_bool(lt::settings_pack::enable_upnp, false);
-	pack.set_bool(lt::settings_pack::enable_natpmp, false);
+	pack.set_bool(lt::settings_pack::enable_lsd, config.enable_lsd);
+	pack.set_bool(lt::settings_pack::enable_upnp, config.enable_upnp);
+	pack.set_bool(lt::settings_pack::enable_natpmp, config.enable_natpmp);
 	pack.set_int(lt::settings_pack::connections_limit, config.max_connections);
+	pack.set_int(lt::settings_pack::download_rate_limit,
+		static_cast<int>(config.max_download_bytes_per_sec));
+	pack.set_int(lt::settings_pack::upload_rate_limit,
+		static_cast<int>(config.max_upload_bytes_per_sec));
+
+	// Proxy passwords never cross the Swift/XPC boundary. The UI owns that
+	// secret in Keychain; the bridge still applies every non-secret proxy field
+	// and deliberately clears the unavailable password slot.
+	int proxyType = static_cast<int>(lt::settings_pack::none);
+	if (config.proxy_kind == "socks5") {
+		proxyType = static_cast<int>(config.proxy_username.empty()
+			? lt::settings_pack::socks5 : lt::settings_pack::socks5_pw);
+	} else if (config.proxy_kind == "http") {
+		proxyType = static_cast<int>(config.proxy_username.empty()
+			? lt::settings_pack::http : lt::settings_pack::http_pw);
+	}
+	pack.set_int(lt::settings_pack::proxy_type, proxyType);
+	pack.set_int(lt::settings_pack::proxy_port, static_cast<int>(config.proxy_port));
+	pack.set_str(lt::settings_pack::proxy_hostname, config.proxy_host);
+	pack.set_str(lt::settings_pack::proxy_username, config.proxy_username);
+	pack.set_str(lt::settings_pack::proxy_password, "");
+
+	const auto encryptionPolicy = config.encryption_enabled
+		? lt::settings_pack::pe_enabled
+		: lt::settings_pack::pe_disabled;
+	pack.set_int(lt::settings_pack::out_enc_policy,
+		static_cast<int>(encryptionPolicy));
+	pack.set_int(lt::settings_pack::in_enc_policy,
+		static_cast<int>(encryptionPolicy));
+	pack.set_int(lt::settings_pack::allowed_enc_level,
+		static_cast<int>(config.encryption_enabled
+			? lt::settings_pack::pe_both
+			: lt::settings_pack::pe_plaintext));
 	// Local-first determinism inherited from the WP-01 bakeoff: fast
 	// reconnects and short timeouts keep shutdown from leaving a half-open
 	// connection storm behind.
@@ -82,6 +118,40 @@ lt::settings_pack make_settings(const SessionConfiguration& config)
 	pack.set_int(lt::settings_pack::peer_connect_timeout, 5);
 	pack.set_bool(lt::settings_pack::smooth_connects, false);
 	return pack;
+}
+
+bool validate_configuration(const SessionConfiguration& config, std::string& message)
+{
+	if (config.listen_port < 0 || config.listen_port > 65535) {
+		message = "listen_port must be between 0 and 65535";
+		return false;
+	}
+	if (config.max_connections <= 0) {
+		message = "max_connections must be positive";
+		return false;
+	}
+	if (config.max_download_bytes_per_sec < 0
+		|| config.max_download_bytes_per_sec > std::numeric_limits<int>::max()
+		|| config.max_upload_bytes_per_sec < 0
+		|| config.max_upload_bytes_per_sec > std::numeric_limits<int>::max()) {
+		message = "session rate limits must fit a signed 32-bit byte-per-second value";
+		return false;
+	}
+	if (config.alert_queue_size == 0) {
+		message = "alert_queue_size must be positive";
+		return false;
+	}
+	if (config.proxy_kind != "none" && config.proxy_kind != "socks5"
+		&& config.proxy_kind != "http") {
+		message = "proxy_kind is not supported";
+		return false;
+	}
+	if (config.proxy_kind != "none"
+		&& (config.proxy_host.empty() || config.proxy_port == 0)) {
+		message = "enabled proxy requires a host and port";
+		return false;
+	}
+	return true;
 }
 
 std::string id_string(const lt::info_hash_t& hashes)
@@ -126,6 +196,7 @@ const char* bridge_error_name(BridgeError code) noexcept
 	case BridgeError::io: return "io";
 	case BridgeError::stopped: return "stopped";
 	case BridgeError::internal: return "internal";
+	case BridgeError::unsupported_operation: return "unsupported_operation";
 	}
 	return "unknown";
 }
@@ -173,6 +244,11 @@ struct EngineBridge::Impl {
 			return Result<BootReport>::failed(BridgeError::already_started,
 				"engine is already running");
 		}
+		std::string configurationError;
+		if (!validate_configuration(config, configurationError)) {
+			return Result<BootReport>::failed(BridgeError::invalid_argument,
+				std::move(configurationError));
+		}
 		stop_requested_.store(false);
 		handles_.clear();
 		pending_.clear();
@@ -180,6 +256,9 @@ struct EngineBridge::Impl {
 		// The boot report must reflect what the engine actually runs with, so
 		// the configured peer-id prefix (not the default) is what gets reported.
 		last_peer_id_ = config.peer_id_prefix;
+		default_download_dir_ = config.download_dir;
+		timeout_ = Millis{config.operation_timeout_ms > 0
+			? config.operation_timeout_ms : kDefaultTimeoutMs};
 		started = Clock::now();
 
 		try {
@@ -219,6 +298,39 @@ struct EngineBridge::Impl {
 			session_.reset();
 			return Result<BootReport>::failed(BridgeError::internal,
 				"session start failed: unknown exception");
+		}
+	}
+
+	Result<void> apply(const SessionConfiguration& config)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		const Result<void> startedResult = requireStartedLocked();
+		if (!startedResult.is_ok()) {
+			return startedResult;
+		}
+		std::string configurationError;
+		if (!validate_configuration(config, configurationError)) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				std::move(configurationError));
+		}
+		try {
+			// apply_settings is asynchronous inside libtorrent, but the call itself
+			// is the documented live configuration boundary and does not drop handles.
+			session_->apply_settings(make_settings(config));
+			default_download_dir_ = config.download_dir;
+			last_peer_id_ = config.peer_id_prefix;
+			timeout_ = Millis{config.operation_timeout_ms > 0
+				? config.operation_timeout_ms : kDefaultTimeoutMs};
+			return Result<void>::success();
+		} catch (const lt::system_error& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("session settings apply failed: ") + e.what());
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("session settings apply failed: ") + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				"session settings apply failed: unknown exception");
 		}
 	}
 
@@ -460,9 +572,11 @@ struct EngineBridge::Impl {
 		if (!started.is_ok()) {
 			return Result<AddResult>::failed(started.error_code(), started.error_message());
 		}
-		if (spec.save_path.empty()) {
+		const std::string savePath = spec.save_path.empty()
+			? default_download_dir_ : spec.save_path;
+		if (savePath.empty()) {
 			return Result<AddResult>::failed(BridgeError::invalid_argument,
-				"add: save_path must not be empty");
+				"add: save_path and configured download_dir must not both be empty");
 		}
 		const bool has_file = !spec.torrent_file.empty();
 		const bool has_magnet = !spec.magnet_uri.empty();
@@ -478,7 +592,7 @@ struct EngineBridge::Impl {
 			} else {
 				atp = lt::parse_magnet_uri(spec.magnet_uri);
 			}
-			atp.save_path = spec.save_path;
+			atp.save_path = savePath;
 			// Deterministic flags: the coordinator owns the state machine, so
 			// the engine neither auto-manages nor inherits seed-mode flags.
 			atp.flags &= ~lt::torrent_flags::auto_managed;
@@ -568,6 +682,106 @@ struct EngineBridge::Impl {
 		std::lock_guard<std::mutex> lock(mutex_);
 		return withHandleLocked(id, "recheck", [](const lt::torrent_handle& h) {
 			h.force_recheck();
+		});
+	}
+
+	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		const Result<void> startedResult = requireStartedLocked();
+		if (!startedResult.is_ok()) {
+			return startedResult;
+		}
+		const Result<lt::torrent_handle> found = findHandleLocked(id);
+		if (!found.is_ok()) {
+			return Result<void>::failed(found.error_code(), found.error_message());
+		}
+
+		if (limits.max_download_bytes_per_sec.has_value()
+			&& (*limits.max_download_bytes_per_sec < 0
+				|| *limits.max_download_bytes_per_sec > std::numeric_limits<int>::max())) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"setLimits: download limit is outside the supported range");
+		}
+		if (limits.max_upload_bytes_per_sec.has_value()
+			&& (*limits.max_upload_bytes_per_sec < 0
+				|| *limits.max_upload_bytes_per_sec > std::numeric_limits<int>::max())) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"setLimits: upload limit is outside the supported range");
+		}
+		if (limits.ratio_limit.has_value()
+			&& (!std::isfinite(*limits.ratio_limit) || *limits.ratio_limit < 0)) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"setLimits: ratio limit must be finite and non-negative");
+		}
+		if (limits.seed_time_seconds.has_value() && *limits.seed_time_seconds < 0) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"setLimits: seed time must be non-negative");
+		}
+		// libtorrent 2.x exposes per-torrent bandwidth setters, but its ABI 2
+		// public handle has no per-torrent ratio or seed-time setter. Refusing
+		// those fields is safer than persisting a goal the engine will ignore.
+		if ((limits.ratio_limit.has_value() && *limits.ratio_limit > 0)
+			|| (limits.seed_time_seconds.has_value() && *limits.seed_time_seconds > 0)) {
+			return Result<void>::failed(BridgeError::unsupported_operation,
+				"setLimits: ratio and seed-time goals are unsupported by libtorrent ABI 2");
+		}
+
+		const auto toLimit = [](const std::optional<std::int64_t>& value) {
+			return value.has_value() && *value > 0 ? static_cast<int>(*value) : -1;
+		};
+		try {
+			const lt::torrent_handle& handle = found.value();
+			handle.set_download_limit(toLimit(limits.max_download_bytes_per_sec));
+			handle.set_upload_limit(toLimit(limits.max_upload_bytes_per_sec));
+			return Result<void>::success();
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("setLimits failed: ") + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				"setLimits failed: unknown exception");
+		}
+	}
+
+	Result<void> editTrackers(const TorrentRecordID& id,
+		const std::vector<std::string>& trackers)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		const Result<void> startedResult = requireStartedLocked();
+		if (!startedResult.is_ok()) {
+			return startedResult;
+		}
+		const Result<lt::torrent_handle> found = findHandleLocked(id);
+		if (!found.is_ok()) {
+			return Result<void>::failed(found.error_code(), found.error_message());
+		}
+		std::vector<lt::announce_entry> entries;
+		entries.reserve(trackers.size());
+		for (const std::string& tracker : trackers) {
+			if (tracker.empty()) {
+				return Result<void>::failed(BridgeError::invalid_argument,
+					"editTrackers: tracker URL must not be empty");
+			}
+			entries.emplace_back(tracker);
+		}
+		try {
+			found.value().replace_trackers(entries);
+			return Result<void>::success();
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("editTrackers failed: ") + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				"editTrackers failed: unknown exception");
+		}
+	}
+
+	Result<void> reannounce(const TorrentRecordID& id)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		return withHandleLocked(id, "reannounce", [](const lt::torrent_handle& h) {
+			h.force_reannounce(0, lt::torrent_handle::high_priority);
 		});
 	}
 
@@ -784,6 +998,7 @@ struct EngineBridge::Impl {
 	std::uint64_t alerts_seen_{0};
 	int last_tcp_listen_port_{-1};
 	std::string last_peer_id_{"-TT0400-"};
+	std::string default_download_dir_;
 	Millis timeout_{kDefaultTimeoutMs};
 	Clock::time_point started{Clock::now()};
 };
@@ -810,6 +1025,18 @@ Result<BootReport> EngineBridge::start(const SessionConfiguration& config) noexc
 	} catch (...) {
 		return Result<BootReport>::failed(BridgeError::internal,
 			detail::internal_message("start: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::apply(const SessionConfiguration& config) noexcept
+{
+	try {
+		return impl_->apply(config);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("apply: unknown exception"));
 	}
 }
 
@@ -858,6 +1085,44 @@ Result<void> EngineBridge::requestRecheck(const TorrentRecordID& id) noexcept
 	} catch (...) {
 		return Result<void>::failed(BridgeError::internal,
 			detail::internal_message("recheck: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::setLimits(const TorrentRecordID& id,
+	const TorrentLimits& limits) noexcept
+{
+	try {
+		return impl_->setLimits(id, limits);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("setLimits: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::editTrackers(const TorrentRecordID& id,
+	const std::vector<std::string>& trackers) noexcept
+{
+	try {
+		return impl_->editTrackers(id, trackers);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("editTrackers: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::reannounce(const TorrentRecordID& id) noexcept
+{
+	try {
+		return impl_->reannounce(id);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("reannounce: unknown exception"));
 	}
 }
 
