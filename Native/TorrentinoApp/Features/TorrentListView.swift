@@ -5,6 +5,7 @@
 // Invariants: every cell renders snapshot fields; accessibility & localization fully supported.
 
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import TorrentinoIPC
 
@@ -58,6 +59,13 @@ struct TorrentListView: View {
         .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
             handleDrop(providers)
         }
+        .onChange(of: viewModel.searchFocusRequest) { _ in
+            NSApp.sendAction(#selector(NSSearchField.selectText(_:)), to: nil, from: nil)
+        }
+        .transaction { transaction in
+            if reduceMotion { transaction.animation = nil }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: viewModel.torrents)
     }
 
     // MARK: - Sidebar
@@ -110,7 +118,7 @@ struct TorrentListView: View {
             }
             .width(min: 200, ideal: 320)
 
-            TableColumn(String(localized: "torrents.col.state")) { torrent in
+            TableColumn(String(localized: "torrents.col.state"), value: \.stateSortKey) { torrent in
                 Text(Self.stateText(for: torrent))
                     .foregroundStyle(torrent.desiredState == .paused ? .secondary : .primary)
             }
@@ -137,6 +145,13 @@ struct TorrentListView: View {
                 Text(Self.byteCount(torrent.progress.totalBytes))
             }
             .width(90)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(
+                    contrast == .increased ? Color.primary : Color.secondary.opacity(0.25),
+                    lineWidth: contrast == .increased ? 2 : 1
+                )
         }
         .contextMenu(forSelectionType: TorrentRecordID.self) { ids in
             Button(String(localized: "torrents.action.pause")) {
@@ -443,6 +458,7 @@ private struct FileRow: View {
                     set: { onToggle(entry.relativePath, $0 ? .normal : .skip) }
                 ))
                 .labelsHidden()
+                .accessibilityLabel(String(localized: "torrents.files.selection"))
                 .toggleStyle(.checkbox)
             }
         }

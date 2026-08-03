@@ -44,6 +44,7 @@ public enum EngineErrorCode: String, Codable, Sendable, Equatable, CaseIterable 
     // Engine / timing
     case engineNotReady
     case engineBusy
+    case rateLimited
     case operationTimeout
     case operationCancelled
     case storeError
@@ -216,6 +217,25 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             severity: .warning,
             recoveryActions: ["retry_op"],
             redactedContext: details
+        )
+    }
+
+    public static func engineBusy(details: String) -> EngineFault {
+        EngineFault(
+            code: .engineBusy,
+            severity: .warning,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func rateLimited(recordID: TorrentRecordID, retryAfter: TimeInterval) -> EngineFault {
+        EngineFault(
+            code: .rateLimited,
+            severity: .warning,
+            affectedRecord: recordID,
+            recoveryActions: ["retry_op"],
+            redactedContext: "retryAfterSeconds=\(Int(ceil(retryAfter)))"
         )
     }
 

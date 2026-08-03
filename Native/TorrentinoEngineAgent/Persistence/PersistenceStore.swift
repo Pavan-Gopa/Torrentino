@@ -13,6 +13,7 @@
 
 import Foundation
 import OSLog
+import TorrentinoIPC
 
 // MARK: - Value types (all Sendable)
 
@@ -287,6 +288,7 @@ actor PersistenceStore {
         _ = try statement.step()
         PersistenceSidecar.removeAll(kind: .resume, owner: torrentID, dataDirectory: dataDirectory)
         PersistenceSidecar.removeAll(kind: .metainfo, owner: torrentID, dataDirectory: dataDirectory)
+        try? removeSessionValue(key: Self.torrentLimitsKey(torrentID))
     }
 
     func markTorrentForRecheck(torrentID: String) throws {
@@ -394,6 +396,54 @@ actor PersistenceStore {
         try withTransaction {
             try upsertSessionRow(key: key, data: data, checksum: checksum, generation: generation)
         }
+    }
+
+    /// Atomically writes several session values under one SQLite transaction.
+    /// Settings use this so a failed second key cannot leave a partial config.
+    func setSessionValues(_ values: [(key: String, data: Data)]) throws {
+        try requireOpen()
+        guard !values.isEmpty else { return }
+        let generation = try nextGeneration(.session)
+        try withTransaction {
+            for value in values {
+                try upsertSessionRow(
+                    key: value.key,
+                    data: value.data,
+                    checksum: AtomicGeneration.sha256(value.data),
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    func setTorrentLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let data = try JSONEncoder().encode(limits)
+        try setSessionValue(key: Self.torrentLimitsKey(torrentID), data: data)
+    }
+
+    func torrentLimits(torrentID: String) throws -> TorrentinoIPC.TransferLimits? {
+        guard let payload = try sessionValue(key: Self.torrentLimitsKey(torrentID)) else { return nil }
+        return try JSONDecoder().decode(TorrentinoIPC.TransferLimits.self, from: payload.data)
+    }
+
+    func persistSettings(_ settings: EngineSettings, revision: SettingsRevision) throws {
+        let settingsData = try JSONEncoder().encode(settings)
+        try setSessionValues([
+            (key: "engine_settings", data: settingsData),
+            (key: "engine_settings_revision", data: Data("\(revision)".utf8)),
+        ])
+    }
+
+    func loadSettings() throws -> (settings: EngineSettings, revision: SettingsRevision)? {
+        guard let settingsPayload = try sessionValue(key: "engine_settings"),
+              let revisionPayload = try sessionValue(key: "engine_settings_revision"),
+              let settings = try? JSONDecoder().decode(EngineSettings.self, from: settingsPayload.data),
+              let revision = SettingsRevision(String(data: revisionPayload.data, encoding: .utf8) ?? "") else {
+            return nil
+        }
+        return (settings, revision)
     }
 
     func sessionValue(key: String) throws -> StoredPayload? {
@@ -865,6 +915,10 @@ actor PersistenceStore {
         guard connection != nil, state != .closed, state != .unopened else {
             throw PersistenceError.notOpen
         }
+    }
+
+    private static func torrentLimitsKey(_ torrentID: String) -> String {
+        "torrent_limits.\(torrentID)"
     }
 
     private func applyPragmas(_ database: SQLiteConnection) throws {

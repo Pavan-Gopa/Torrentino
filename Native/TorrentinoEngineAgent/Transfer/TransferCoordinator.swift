@@ -44,6 +44,9 @@ public actor TransferCoordinator {
     private let instanceID = UUID()
     private var activeSettings: EngineSettings = .default
     private var settingsRevision: SettingsRevision = 1
+    private var lastReannounceAt: [TorrentRecordID: Date] = [:]
+    private var pendingRemovalTokens: [String: TorrentRecordID] = [:]
+    private static let reannounceCooldown: TimeInterval = 30
 
     // MARK: - Init
 
@@ -89,6 +92,15 @@ public actor TransferCoordinator {
     /// The pump then re-adds running torrents to the engine. Safe to call more
     /// than once; never throws — a store failure leaves the coordinator empty.
     public func restoreFromPersistence() async {
+        do {
+            if let restored = try await persistence.loadSettings() {
+                activeSettings = restored.settings
+                settingsRevision = restored.revision
+            }
+        } catch {
+            log.warning("restore: settings load failed: \(String(describing: error))")
+        }
+
         let stored: [StoredTorrent]
         do {
             stored = try await persistence.allTorrents()
@@ -106,6 +118,7 @@ public actor TransferCoordinator {
             let metainfoData = (try? await persistence.metainfo(torrentID: torrent.id))?.data
             let metainfo = metainfoData.flatMap { try? Preflight.validateTorrentData($0) }
             let desired = DesiredTorrentState(rawValue: torrent.state) ?? .paused
+            let limits = (try? await persistence.torrentLimits(torrentID: torrent.id)) ?? TorrentinoIPC.TransferLimits()
             let record = TransferRecord(
                 id: recordID,
                 contentIdentity: identity,
@@ -126,7 +139,8 @@ public actor TransferCoordinator {
                 fileSelection: [],
                 saveLocation: defaultSaveLocation,
                 addedAt: torrent.addedAt,
-                revision: 0
+                revision: 0,
+                limits: limits.normalized
             )
             records[recordID] = record
             recordRevisions[recordID] = 0
@@ -184,6 +198,9 @@ public actor TransferCoordinator {
         case .fetchPeers(let request):
             return .success(.peers(peers(request: request)))
         case .fetchTrackers(let request):
+            guard records[request.recordID] != nil else {
+                return .failure(EngineFault.recordNotFound(recordID: request.recordID))
+            }
             return .success(.trackers(trackers(request: request)))
         case .fetchActivity(let request):
             return .success(.activity(activity(request: request)))
@@ -227,7 +244,11 @@ public actor TransferCoordinator {
             return await handleEditTrackers(request)
         case .reannounce(let request):
             return await handleReannounce(request.recordID)
-        case .moveStorage, .prepareRemoval, .commitRemoval,
+        case .prepareRemoval(let request):
+            return await handlePrepareRemoval(request)
+        case .commitRemoval(let request):
+            return await handleCommitRemoval(request)
+        case .moveStorage,
              .inspectCreateSource, .commitCreate, .exportDiagnostics:
             return .failure(unsupported(command.name))
         }
@@ -830,7 +851,7 @@ extension TransferRecord {
             peersConnected: peersConnected, seedsTotal: seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: trackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
         )
     }
 
@@ -843,7 +864,7 @@ extension TransferRecord {
             peersConnected: peersConnected, seedsTotal: seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: trackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
         )
     }
 
@@ -856,7 +877,7 @@ extension TransferRecord {
             peersConnected: peersConnected, seedsTotal: seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: trackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
         )
     }
 
@@ -869,7 +890,20 @@ extension TransferRecord {
             peersConnected: peersConnected, seedsTotal: seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: trackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
+    fileprivate func with(limits: TorrentinoIPC.TransferLimits) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
         )
     }
 
@@ -890,7 +924,7 @@ extension TransferRecord {
             peersConnected: status.peersConnected, seedsTotal: status.seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: trackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
         )
         return candidate == self ? self : candidate
     }
@@ -904,7 +938,7 @@ extension TransferRecord {
             peersConnected: peersConnected, seedsTotal: seedsTotal,
             engineID: engineID, metainfoData: metainfoData, trackers: newTrackers,
             fileSelection: fileSelection, saveLocation: saveLocation,
-            addedAt: addedAt, revision: revision
+            addedAt: addedAt, revision: revision, limits: limits
         )
     }
 }
@@ -913,34 +947,66 @@ extension TransferCoordinator {
     // MARK: - WP-08 Command Handlers
 
     private func handleSetLimits(_ request: SetLimitsRequest) async -> EngineCommandResult {
-        guard records[request.recordID] != nil else {
+        guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
+        // Negative values become zero and nil remains unlimited at the engine boundary.
+        let normalized = request.limits.normalized
+        do {
+            try await persistence.setTorrentLimits(
+                torrentID: request.recordID.rawValue.uuidString,
+                limits: normalized
+            )
+        } catch {
+            return .failure(.storeError(underlying: error))
+        }
+        records[request.recordID] = record.with(limits: normalized)
+        bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)
     }
 
     private func handleApplySettings(_ request: ApplySettingsRequest) async -> EngineCommandResult {
-        let candidate = request.candidate
-        let errors = SettingsRules.validate(candidate)
-        guard errors.isEmpty else {
-            return .success(.settingsApply(SettingsApplyResult(revision: settingsRevision)))
-        }
-        if let expected = request.expectedRevision, expected != settingsRevision {
-            return .failure(EngineFault.invalidRequest(details: "settings revision conflict"))
-        }
+        let previousSettings = activeSettings
+        let previousRevision = settingsRevision
+        let persistence = self.persistence
+        let outcome = await SettingsTransaction.run(
+            candidate: request.candidate,
+            expectedRevision: request.expectedRevision,
+            context: SettingsTransaction.AsyncContext(
+                currentRevision: previousRevision,
+                persist: { candidate, currentRevision in
+                    let newRevision = currentRevision + 1
+                    try await persistence.persistSettings(candidate, revision: newRevision)
+                    return newRevision
+                },
+                apply: { [weak self] candidate in
+                    guard let self else {
+                        return .failure(.internalError(details: "settings coordinator deallocated"))
+                    }
+                    await self.setActiveSettings(candidate, revision: previousRevision + 1)
+                    return .success(())
+                },
+                rollback: { [weak self] _, _ in
+                    try await persistence.persistSettings(previousSettings, revision: previousRevision)
+                    await self?.setActiveSettings(previousSettings, revision: previousRevision)
+                }
+            )
+        )
 
-        let newRevision = settingsRevision + 1
-        do {
-            let data = try JSONEncoder().encode(candidate)
-            try await persistence.setSessionValue(key: "engine_settings", data: data)
-            try await persistence.setSessionValue(key: "engine_settings_revision", data: Data("\(newRevision)".utf8))
-            self.activeSettings = candidate
-            self.settingsRevision = newRevision
-            await eventBus.publish([.settingsChanged(SettingsChangedEvent(revision: newRevision))])
-            return .success(.settingsApply(SettingsApplyResult(revision: newRevision)))
-        } catch {
-            return .failure(EngineFault.invalidRequest(details: "failed to persist settings"))
+        switch outcome {
+        case .applied(let revision):
+            await eventBus.publish([.settingsChanged(SettingsChangedEvent(revision: revision))])
+            return .success(.settingsApply(SettingsApplyResult(revision: revision)))
+        case .validationFailed(let errors):
+            return .failure(EngineFault.settingsValidationFailed(errors: errors))
+        case .revisionConflict(let current):
+            return .failure(EngineFault.settingsRevisionConflict(
+                current: current,
+                expected: request.expectedRevision ?? current
+            ))
+        case .failed(let fault):
+            return .failure(fault)
         }
     }
 
@@ -948,6 +1014,14 @@ extension TransferCoordinator {
         guard records[recordID] != nil else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
+        let now = Date()
+        if let previous = lastReannounceAt[recordID] {
+            let elapsed = now.timeIntervalSince(previous)
+            if elapsed < Self.reannounceCooldown {
+                return .failure(.rateLimited(recordID: recordID, retryAfter: Self.reannounceCooldown - elapsed))
+            }
+        }
+        lastReannounceAt[recordID] = now
         return .success(.ack)
     }
 
@@ -961,7 +1035,49 @@ extension TransferCoordinator {
         }
         updated.removeAll { request.removedURLs.contains($0) }
         records[request.recordID] = record.withTrackers(updated)
+        bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)
+    }
+
+    private func handlePrepareRemoval(_ request: PrepareRemovalRequest) async -> EngineCommandResult {
+        guard records[request.recordID] != nil else {
+            return .failure(EngineFault.recordNotFound(recordID: request.recordID))
+        }
+        let token = RemovalToken(rawValue: UUID().uuidString)
+        pendingRemovalTokens[token.rawValue] = request.recordID
+        return .success(.removalToken(token))
+    }
+
+    private func handleCommitRemoval(_ request: CommitRemovalRequest) async -> EngineCommandResult {
+        guard let recordID = pendingRemovalTokens.removeValue(forKey: request.token.rawValue),
+              let record = records[recordID] else {
+            return .failure(.invalidRequest(details: "removal token is unknown or expired"))
+        }
+
+        if let engineID = record.engineID, await ensureEngineStarted() {
+            do {
+                try await engine.remove(torrentID: engineID)
+            } catch {
+                return .failure(.engineBusy(details: "removal failed"))
+            }
+        }
+
+        do {
+            try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
+        } catch {
+            return .failure(.storeError(underlying: error))
+        }
+
+        records.removeValue(forKey: recordID)
+        recordRevisions.removeValue(forKey: recordID)
+        lastReannounceAt.removeValue(forKey: recordID)
+        bumpEngineRevision(change: .removed(recordID))
+        return .success(.ack)
+    }
+
+    private func setActiveSettings(_ settings: EngineSettings, revision: SettingsRevision) {
+        activeSettings = settings
+        settingsRevision = revision
     }
 }

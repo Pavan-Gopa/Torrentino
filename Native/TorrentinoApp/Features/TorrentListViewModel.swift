@@ -31,6 +31,7 @@ final class TorrentListViewModel: ObservableObject {
     @Published var showAddSheet = false
     @Published var showInspector = false
     @Published var searchText = ""
+    @Published var searchFocusRequest = 0
     @Published private(set) var busy = false
 
     let client: EngineClient
@@ -280,10 +281,33 @@ final class TorrentListViewModel: ObservableObject {
 
     func removeSelected() {
         let selectedIDs = Array(selection)
-        for id in selectedIDs {
-            torrents.removeAll { $0.id == id }
-            selection.remove(id)
+        Task {
+            for recordID in selectedIDs {
+                let prepare = EngineCommandV1.prepareRemoval(PrepareRemovalRequest(
+                    requestID: RequestID(),
+                    idempotencyKey: IdempotencyKey(),
+                    recordID: recordID,
+                    deleteFiles: false
+                ))
+                do {
+                    guard case .removalToken(let token) = try await client.sendCommand(prepare) else {
+                        throw EngineClientError.protocolMismatch(details: "unexpected prepareRemoval reply")
+                    }
+                    let commit = EngineCommandV1.commitRemoval(CommitRemovalRequest(
+                        requestID: RequestID(),
+                        idempotencyKey: IdempotencyKey(),
+                        token: token
+                    ))
+                    _ = try await client.sendCommand(commit)
+                } catch {
+                    connectionNote = "remove.failed"
+                }
+            }
         }
+    }
+
+    func focusSearch() {
+        searchFocusRequest += 1
     }
 
     func revealSelected() {
@@ -363,6 +387,9 @@ final class TorrentListViewModel: ObservableObject {
     }
 }
 
+// FixtureLibrary is kept in its dependency-free source file so the app tests
+// can exercise the same generator: enum FixtureLibrary { static func snapshot(count: Int = 100) -> [TorrentSnapshot] { return (1...count).map { _ in fatalError() } } }
+
 /// Aggregate numbers for the status bar (UI-side projection of the snapshot).
 struct TorrentStatusBarModel: Equatable {
     let downloadBytesPerSec: Int64
@@ -371,63 +398,4 @@ struct TorrentStatusBarModel: Equatable {
     let seeding: Int
     let paused: Int
     let total: Int
-}
-
-/// Deterministic 100-row demo snapshot used only when the agent is
-/// unreachable. Names are invented and generic; rows carry varied states so
-/// identity/scroll/focus behavior can be exercised.
-enum FixtureLibrary {
-    static func snapshot(count: Int = 100) -> [TorrentSnapshot] {
-        (1...count).map { index in
-            let cycle = index % 8
-            let activity: TorrentActivity
-            let desired: DesiredTorrentState
-            let fraction: Double
-            switch cycle {
-            case 0: activity = .downloading; desired = .running; fraction = 0.05 + 0.9 * Double(index) / Double(count)
-            case 1: activity = .seeding; desired = .running; fraction = 1.0
-            case 2: activity = .checking; desired = .running; fraction = 0.5
-            case 3: activity = .idle; desired = .paused; fraction = Double(index % 90) / 100.0
-            case 4: activity = .downloading; desired = .running; fraction = Double(index % 70) / 100.0
-            case 5: activity = .fetchingMetadata; desired = .running; fraction = 0.0
-            case 6: activity = .queued; desired = .running; fraction = 0.0
-            default: activity = .seeding; desired = .running; fraction = 1.0
-            }
-            let totalBytes = Int64(1_500_000_000 + index * 37_000_000)
-            let downloaded = Int64(Double(totalBytes) * fraction)
-            let recordID = TorrentRecordID(rawValue: UUID())
-            let name = String(format: "Demo Archive %03d — %@", index, Self.suffixes[index % Self.suffixes.count])
-            return TorrentSnapshot(
-                id: recordID,
-                contentIdentity: ContentIdentity(infoHashV1: Data([UInt8(index & 0xFF)]), infoHashV2: nil),
-                displayName: name,
-                desiredState: desired,
-                activity: activity,
-                health: .healthy,
-                progress: TransferProgress(
-                    fraction: fraction,
-                    totalBytes: totalBytes,
-                    downloadedBytes: downloaded,
-                    uploadedBytes: activity == .seeding ? downloaded / 2 : downloaded / 10
-                ),
-                rates: TransferRates(
-                    downloadBytesPerSec: activity == .downloading ? Int64(400_000 + index * 7_000) : 0,
-                    uploadBytesPerSec: activity == .seeding ? Int64(120_000 + index * 3_000) : 0
-                ),
-                peers: PeerSummary(
-                    connected: activity == .downloading || activity == .seeding ? 4 + index % 40 : 0,
-                    halfOpen: activity == .downloading ? index % 12 : 0,
-                    total: activity == .downloading || activity == .seeding ? 20 + index % 200 : 0
-                ),
-                saveLocation: PersistedLocation(path: "/Users/Shared/Demo"),
-                revision: UInt64(index)
-            )
-        }
-        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-    }
-
-    private static let suffixes = [
-        "Source", "Assets", "Backup", "Pack", "Bundle", "Collection",
-        "Dataset", "Release", "Build", "Episode",
-    ]
 }

@@ -65,7 +65,21 @@ struct InspectorView: View {
             .padding(16)
         }
         .frame(width: 480, height: 420)
-        .task { await loadTrackers() }
+        .task(id: torrent?.id) {
+            await loadTrackers()
+            loadLimitFields()
+        }
+        .transaction { transaction in
+            if reduceMotion { transaction.animation = nil }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: selectedTab)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                    contrast == .increased ? Color.primary : Color.secondary.opacity(0.25),
+                    lineWidth: contrast == .increased ? 2 : 1
+                )
+        }
     }
 
     // MARK: - Header
@@ -201,6 +215,8 @@ struct InspectorView: View {
 
     @State private var maxDownKB: String = ""
     @State private var maxUpKB: String = ""
+    @State private var ratioLimit: String = ""
+    @State private var seedTimeSeconds: String = ""
 
     private var settingsTab: some View {
         Form {
@@ -210,12 +226,27 @@ struct InspectorView: View {
                         .textFieldStyle(.roundedBorder)
                     TextField(String(localized: "inspector.settings.max_up"), text: $maxUpKB)
                         .textFieldStyle(.roundedBorder)
+                    TextField(String(localized: "inspector.settings.ratio_limit"), text: $ratioLimit)
+                        .textFieldStyle(.roundedBorder)
+                    TextField(String(localized: "inspector.settings.seed_time"), text: $seedTimeSeconds)
+                        .textFieldStyle(.roundedBorder)
+                    Text(String(localized: "inspector.settings.unlimited"))
+                        .font(.caption)
+                        .foregroundStyle(contrast == .increased ? .primary : .secondary)
                     Button(String(localized: "inspector.settings.apply")) {
                         let down = Int64(maxDownKB) ?? 0
                         let up = Int64(maxUpKB) ?? 0
+                        let ratio = ratioLimit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? nil
+                            : Double(ratioLimit)
+                        let seed = seedTimeSeconds.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? nil
+                            : Int64(seedTimeSeconds)
                         let limits = TransferLimits(
                             maxDownloadBytesPerSec: down > 0 ? down * 1024 : 0,
-                            maxUploadBytesPerSec: up > 0 ? up * 1024 : 0
+                            maxUploadBytesPerSec: up > 0 ? up * 1024 : 0,
+                            ratioLimit: ratio,
+                            seedTimeSeconds: seed
                         )
                         Task { await viewModel.setLimits(torrent.id, limits: limits) }
                     }
@@ -228,6 +259,14 @@ struct InspectorView: View {
     }
 
     // MARK: - Helpers
+
+    private func loadLimitFields() {
+        guard let torrent else { return }
+        maxDownKB = torrent.limits.maxDownloadBytesPerSec.map { String($0 / 1024) } ?? ""
+        maxUpKB = torrent.limits.maxUploadBytesPerSec.map { String($0 / 1024) } ?? ""
+        ratioLimit = torrent.limits.ratioLimit.map { String($0) } ?? ""
+        seedTimeSeconds = torrent.limits.seedTimeSeconds.map { String($0) } ?? ""
+    }
 
     private func loadTrackers() async {
         guard let torrent else { return }

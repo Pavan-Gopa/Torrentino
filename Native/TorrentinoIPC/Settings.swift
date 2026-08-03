@@ -53,7 +53,7 @@ public struct EngineSettings: Codable, Sendable, Equatable {
         downloadDirectory: "~/Downloads",
         maxDownloadBytesPerSec: 0,
         maxUploadBytesPerSec: 0,
-        listenPort: 0,
+        listenPort: 6881,
         dhtEnabled: true,
         lsdEnabled: true,
         upnpEnabled: true,
@@ -87,6 +87,9 @@ public enum SettingsRules {
         if settings.maxUploadBytesPerSec < 0 {
             errors.append(SettingsValidationError(field: "maxUploadBytesPerSec", message: "must be >= 0"))
         }
+        if settings.listenPort < 1 || settings.listenPort > 65535 {
+            errors.append(SettingsValidationError(field: "listenPort", message: "must be between 1 and 65535"))
+        }
         return errors
     }
 }
@@ -115,6 +118,28 @@ public struct SettingsTransaction: Sendable {
             persist: @escaping @Sendable (EngineSettings, SettingsRevision) throws -> SettingsRevision,
             apply: @escaping @Sendable (EngineSettings) -> Result<Void, EngineFault>,
             rollback: @escaping @Sendable (EngineSettings, SettingsRevision) throws -> Void
+        ) {
+            self.currentRevision = currentRevision
+            self.persist = persist
+            self.apply = apply
+            self.rollback = rollback
+        }
+    }
+
+    /// Async side effects used by the agent, whose persistence store and live
+    /// engine are actor-isolated. The synchronous Context remains available to
+    /// keep the pure IPC transaction tests and callers deterministic.
+    public struct AsyncContext: Sendable {
+        public let currentRevision: SettingsRevision
+        public let persist: @Sendable (EngineSettings, SettingsRevision) async throws -> SettingsRevision
+        public let apply: @Sendable (EngineSettings) async -> Result<Void, EngineFault>
+        public let rollback: @Sendable (EngineSettings, SettingsRevision) async throws -> Void
+
+        public init(
+            currentRevision: SettingsRevision,
+            persist: @escaping @Sendable (EngineSettings, SettingsRevision) async throws -> SettingsRevision,
+            apply: @escaping @Sendable (EngineSettings) async -> Result<Void, EngineFault>,
+            rollback: @escaping @Sendable (EngineSettings, SettingsRevision) async throws -> Void
         ) {
             self.currentRevision = currentRevision
             self.persist = persist
@@ -166,11 +191,46 @@ public struct SettingsTransaction: Sendable {
             }
         }
     }
+
+    /// Runs the same transaction for actor-backed persistence and apply
+    /// operations. Validation and revision checks still happen before any I/O.
+    public static func run(
+        candidate: EngineSettings,
+        expectedRevision: SettingsRevision?,
+        context: AsyncContext,
+        validation: @Sendable (EngineSettings) -> [SettingsValidationError] = SettingsRules.validate
+    ) async -> Outcome {
+        let errors = validation(candidate)
+        guard errors.isEmpty else { return .validationFailed(errors) }
+
+        if let expectedRevision, expectedRevision != context.currentRevision {
+            return .revisionConflict(current: context.currentRevision)
+        }
+
+        let newRevision: SettingsRevision
+        do {
+            newRevision = try await context.persist(candidate, context.currentRevision)
+        } catch {
+            return .failed(EngineFault.storeError(underlying: error))
+        }
+
+        switch await context.apply(candidate) {
+        case .success:
+            return .applied(revision: newRevision)
+        case .failure(let fault):
+            do {
+                try await context.rollback(candidate, newRevision)
+                return .failed(fault)
+            } catch {
+                return .failed(EngineFault.storeError(underlying: error))
+            }
+        }
+    }
 }
 
 extension EngineFault {
     /// Store-layer failure inside a settings transaction.
-    static func storeError(underlying: Error) -> EngineFault {
+    public static func storeError(underlying: Error) -> EngineFault {
         EngineFault(
             code: .storeError,
             severity: .error,

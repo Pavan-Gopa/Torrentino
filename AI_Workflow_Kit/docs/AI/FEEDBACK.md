@@ -1,127 +1,129 @@
-# FEEDBACK — WP-07 Review (Core transfer vertical slice)
+# FEEDBACK — WP-08 Implementation (Coder handoff)
 
-**Reviewer:** Verification Engineer
 **Date:** 2026-08-03
-**RESULT:** CHANGES_REQUESTED
+**WP:** WP-08 — Native UX completeness
+**Role:** Implementation Engineer (Coder)
+**RESULT:** waiting_review
 
 ---
 
-### 1. Build & Tests Status
+## Context for Reviewer
 
-- **Xcode build:** `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM=438UQRF7JV`
-  - **Result:** **BUILD SUCCEEDED** (0 warnings, Swift 6 strict concurrency complete).
-- **Xcode tests:** `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM=438UQRF7JV`
-  - **Result:** **TEST SUCCEEDED** (25 new `TransferSmokeTests` passing).
-- **QA Suite:** `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
-  - **Result:** **SUITE RESULT: FAIL** (69 PASS / 2 FAIL out of 71 scripts).
-  - Failed scripts:
-    1. `test_wp03_string_catalog.sh` — 45 newly added keys in `Localizable.xcstrings` miss Russian (`ru`) localizations.
-    2. `test_wp03_empty_state.sh` — `ContentView.swift` moved `emptyState` to `TorrentListView.swift`, breaking the `test_wp03_empty_state.sh` static structural assertions on `ContentView.swift`.
+This is a **fix round after Tester BUG_REPORT (11 findings)** plus earlier
+Reviewer CHANGES_REQUESTED (notification auth + KeychainStore dedupe).
+
+Official BUG_REPORT path still contains the pre-fix FAIL snapshot
+(`Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md`). Do **not** treat that
+as current product truth — re-verify against working tree / latest commit.
 
 ---
 
-### 2. Gate Checklist (WP-07)
+## Final WP-08 Status (Coder claim)
 
-- [x] **UI не polling full list (event-driven snapshots/deltas из WP-05 protocol)**
-  - Evidence: `TorrentListViewModel.swift:L99-L155` (`subscribe()` registers XPC listener; `apply(_ events:)` receives `torrentDelta` with contiguous revision check `delta.engineRevision == engineRevision + 1` and updates in-memory list).
-  - Evidence: `TransferEventBus.swift:L46-L58` (50ms coalescing window for delta batches, immediate flush for `snapshotRequired`).
-  - Evidence: `TransferCoordinator.swift:L708-L744` (`publishDelta()` diffs changes since `publishedRevision` and publishes `TorrentDeltaEvent`).
+All 11 reported WP-08 findings are fixed and covered by source-contract and
+XCTest checks.
 
-- [x] **Row identity/focus/scroll стабильны (stable TorrentRecordID)**
-  - Evidence: `TorrentListView.swift:L75` (`Table(filteredTorrents, selection: $viewModel.selection)` keyed by `TorrentRecordID`).
-  - Evidence: `Identity.swift:L14` (`TorrentRecordID` is a stable UUID-backed type conforming to `Identifiable`, `Hashable`, `Codable`, `Sendable`).
-  - Evidence: `TorrentListViewModel.swift:L26` (`selection: Set<TorrentRecordID>` preserves selection across delta updates).
+| Bug | Status | Verification |
+| --- | --- | --- |
+| WP08-BUG-001 Finder associations | FIXED | `Info.plist`, drag/drop, URL association |
+| WP08-BUG-002 Settings transaction | FIXED | validate/apply/rollback + transaction checks |
+| WP08-BUG-003 Per-torrent limits | FIXED | UI, normalization, persistence round-trip |
+| WP08-BUG-004 Reannounce throttling | FIXED | tracker commands + cooldown |
+| WP08-BUG-005 Completion notifications | FIXED | transition tracking + authorization |
+| WP08-BUG-006 Sorting/search/removal | FIXED | sortable state, ⌘F, batch remove |
+| WP08-BUG-007 Edit/View menus | FIXED | menus + shortcuts |
+| WP08-BUG-008 Localization references | FIXED | 152-key EN/RU catalog |
+| WP08-BUG-009 Accessibility and motion | FIXED | labels, contrast, reduce-motion, keyboard |
+| WP08-BUG-010 Fixture performance | FIXED | 100/500-row fixture + perf tests |
+| WP08-BUG-011 Keychain coverage | FIXED | save/load/delete + negative tests |
 
-- [x] **100-row fixture**
-  - Evidence: `TorrentListViewModel.swift:L92` (`FixtureLibrary.snapshot(count: 100)` fallback when agent is unreachable).
-  - Evidence: `TorrentListViewModel.swift:L322-L376` (`FixtureLibrary` generates 100 deterministic sorted `TorrentSnapshot` entries across diverse states and progress values).
+### Prior Reviewer fixes (round 2)
 
-- [x] **Metadata/file list не блокирует MainActor (async, pagination)**
-  - Evidence: `TorrentListViewModel.swift:L275-L291` (`loadFiles` sends async XPC `fetchFiles` request with `PageCursor` and `pageSize: 200`).
-  - Evidence: `TransferCoordinator.swift:L454-L540` (`files(request:)` pages through directory/file rows using an opaque little-endian byte token cursor).
-  - Evidence: `TorrentListViewModel.swift:L194-L196` (`addTorrentFile` reads file bytes off MainActor via `Task.detached(priority: .userInitiated)`).
-
-- [x] **Restart сохраняет flow (persistence integration с WP-06)**
-  - Evidence: `TransferCoordinator.swift:L89-L137` (`restoreFromPersistence()` queries `persistence.allTorrents()`, restores `StoredTorrent` rows sorted by `addedAt`, re-loads metainfo, and rebuilds coordinator records).
-  - Evidence: `TransferCoordinator.swift:L628-L644` (`pumpOnce()` automatically re-adds non-engine-registered restored records to the engine).
-
-- [x] **Один torrent error не блокирует другие (per-record faults)**
-  - Evidence: `TransferCoordinator.swift:L342-L347` (Engine add failure during `commitAdd` sets record health to `.recoverableError(.engineBusy)` without aborting coordinator state).
-  - Evidence: `TransferCoordinator.swift:L406-L408` (Pause/resume failure marks record health as `.recoverableError(.engineBusy)` for that record only).
-  - Evidence: `TransferCoordinator.swift:L637-L643` (`pumpOnce()` catches per-record add failures and isolates degradation to the single record).
-
-- [x] **Untrusted source не может создать путь вне validated torrent root (PathValidator: traversal rejection)**
-  - Evidence: `Metainfo.swift:L220` (`PathValidator.validatedRelativePath(path)` enforced on every metainfo file component).
-  - Evidence: `PathValidator.swift:L67-L102` (`validatedRelativePath` rejects absolute paths, `..`, `.`, backslashes, null bytes, reserved Windows device names, and overlong components/paths).
-  - Evidence: `TorrentAdder.swift:L114-L117` (`validateSelection` validates all selection paths through `PathValidator.validatedRelativePath`).
+1. **HIGH** — `NotificationManager.requestAuthorization()` called from
+   `AppDelegate.applicationDidFinishLaunching` and Settings notification toggles.
+2. **MEDIUM** — duplicate `KeychainStore.swift` removed; single path:
+   `Native/TorrentinoApp/Features/Settings/KeychainStore.swift`.
 
 ---
 
-### 3. Security / Hardening Verification
+## 1. Build & commands (Coder)
 
-- **BencodeParser (`BencodeParser.swift`):**
-  - Nesting depth bounded: `maxDepth = 64` (`BencodeParser.swift:L59`, depth check at `L79`).
-  - Input size bounded: `maxInputBytes = 16 * 1024 * 1024` (16 MiB, `BencodeParser.swift:L63`, `L69`).
-  - Strict integer grammar (`BencodeParser.swift:L95-L128`): no leading zeros except `0`, no `-0`, overflow check, digit count <= 19.
-  - Strict dictionary key check (`BencodeParser.swift:L180-L185`): duplicate keys and non-UTF-8 keys strictly rejected.
+```bash
+cd "/Users/pavan/Documents/AI Projects/Torrentino"
+xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64'
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64'
+bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh
+```
 
-- **Metainfo (`Metainfo.swift`):**
-  - Input size capped at 10 MiB (`TransferLimits.maxTorrentFileBytes = 10 * 1024 * 1024`, `Metainfo.swift:L120`, `Preflight.swift:L29`).
-  - Max files capped at 10,000 (`TransferLimits.maxFiles = 10_000`, `Metainfo.swift:L118`, `L228`).
-  - Max trackers capped at 512 (`TransferLimits.maxTrackers = 512`, `Metainfo.swift:L123`, `L203`).
-  - Path length <= 4096 / component length <= 255 (`PathValidator.swift:L51-L52`).
+Coder-reported results:
 
-- **Magnet (`MagnetParser.swift`):**
-  - Hash validation: 40-hex v1 hash or 32-char base32 decoded to exact 20-byte SHA-1 hash (`MagnetParser.swift:L110-L141`).
-  - URI length capped at 8 KiB (`TransferLimits.maxMagnetLength = 8 * 1024`, `MagnetParser.swift:L52`).
+- `xcodebuild build`: **BUILD SUCCEEDED**
+- `xcodebuild test`: **TEST SUCCEEDED**
+- `run_qa_suite.sh`: **84/84 PASS** (WP-01..WP-07 regression base)
+- WP-08 scripts: **13/13 PASS** (new, untracked until this commit)
+- Swift 6 strict concurrency: 0 warnings
 
-- **HTTPSourceFetcher (`HTTPSourceFetcher.swift`):**
-  - Scheme restricted: `http` / `https` only (`HTTPSourceFetcher.swift:L68`, `L163`).
-  - Max redirects <= 5 (`HTTPSourceFetcher.maxRedirects = 5`, `HTTPSourceFetcher.swift:L155`).
-  - Max body size 10 MiB (`HTTPSourceFetcher.maxBodyBytes = 10 * 1024 * 1024`, `HTTPSourceFetcher.swift:L187`, `L200`).
-  - Deadline 30 seconds (`HTTPSourceFetcher.deadline = 30`, `HTTPSourceFetcher.swift:L77-L78`).
-  - Content-Type allowlist: `application/x-bittorrent`, `application/octet-stream` (`HTTPSourceFetcher.swift:L47-L50`, `L182-L185`).
-
-- **PathValidator (`PathValidator.swift`):**
-  - Rejects `../`, absolute paths (`/` or volume `C:`), null bytes (`\0`), backslashes (`\`), reserved Windows names (`CON`, `PRN`, `AUX`, `NUL`, etc.), overlong paths/components (`PathValidator.swift:L74-L101`).
-
-- **Negative Corpus Execution:**
-  - Negative corpora defined in `NegativeCorpus.swift` (bencode, metainfo, magnet, path negatives).
-  - Evaluated in `TransferSmokeTests.swift:L38-L42`, `L69-L73`, `L107-L111`, `L121-L125` before any payload write or persistence step.
-
-- **SHA-1 Info Hash Computation:**
-  - `Metainfo.swift:L137`, `L166`: Bencode parser records exact byte span of `"info"` dictionary (`infoSpan`). Digest computed over exact raw bencoded bytes via CommonCrypto `CC_SHA1`.
+Reviewer must re-run build/test independently.
 
 ---
 
-### 4. Code Quality & Concurrency
+## 2. WP compliance
 
-- **Sendable / Actor Isolation:** All public types conform to `Sendable`. Actor isolation enforced (`TransferCoordinator`, `TransferEventBus`, `BridgeTransferEngine`).
-- **commitAdd Durability Order:** Journal and metainfo persistence occur BEFORE updating in-memory records or adding to the engine (`TransferCoordinator.swift:L308-L323`).
-- **Idempotency:** Duplicate detection by `ContentIdentity` (`TransferCoordinator.swift:L283-L287`), replay by `IdempotencyKey` (`TransferCoordinator.swift:L275-L277`).
-- **Delta Continuity:** Gap check `from + 1 < firstLogRevision` triggers `snapshotRequired` (`TransferCoordinator.swift:L712-L718`).
-- **Error Contract:** Typed `EngineFault` with `FaultCode` and `redactedContext` (`TransferCoordinator.swift:L781-L792`).
+Implemented end-to-end native UX completeness:
 
----
-
-### 5. Required Changes (Concrete List)
-
-#### 1. [HIGH] Russian Localizations in `Localizable.xcstrings`
-- **File:** `Native/TorrentinoApp/Resources/Localizable.xcstrings`
-- **Problem:** 45 new localization keys (`torrents.title`, `torrents.add`, `torrents.col.name`, `torrents.filter.*`, `torrents.status.*`, `torrents.files.*`, `torrents.action.*`, etc.) have `"en"` localizations but miss `"ru"` localizations.
-- **Impact:** `test_wp03_string_catalog.sh` fails in QA suite.
-- **Required Action:** Add `"ru"` translations for all newly added string keys in `Localizable.xcstrings`.
-
-#### 2. [HIGH] Fix QA Assertion Breakage in `test_wp03_empty_state.sh`
-- **Files:** `Native/TorrentinoApp/Features/ContentView.swift` & `Native/TorrentinoEngineBridge/scripts/qa/test_wp03_empty_state.sh`
-- **Problem:** `test_wp03_empty_state.sh` statically checks `ContentView.swift` for `emptyState`, `empty.no_torrents`, `empty.subtitle`, and `square.stack.3d.up.slash`. Moving `emptyState` into `TorrentListView.swift` removed those symbols from `ContentView.swift`.
-- **Impact:** `test_wp03_empty_state.sh` fails in QA suite (`[FAIL] emptyState view present: missing 'emptyState'`).
-- **Required Action:** Maintain backwards compatibility for `test_wp03_empty_state.sh` (e.g. keep or reference `emptyState` in `ContentView.swift` or update `test_wp03_empty_state.sh` if authorized).
+1. Inspector tabs (General / Activity / Files / Settings), ⌘I
+2. Sorting, columns, search (⌘F), multi-selection + batch actions
+3. Drag-and-drop + Finder `.torrent` / `magnet:` association (`Info.plist`)
+4. Menus / shortcuts / context menus
+5. Settings sections (General, Bandwidth, Network, Transfers, Notifications)
+6. Trackers + reannounce (throttled)
+7. Per-torrent limits + seed goals (`ratioLimit`, `seedTimeSeconds`)
+8. System notifications (complete / all-complete / error)
+9. Full EN/RU String Catalog coverage
+10. VoiceOver / keyboard / contrast / reduce-motion
+11. Keychain proxy credentials
+12. Settings validate → persist → apply → rollback (`SettingsTransaction`)
 
 ---
 
-### Conclusion
+## 3. Architecture invariants (Coder claim)
 
-The code implementation for WP-07 core transfer vertical slice is architecturally sound and security controls are fully verified. However, changes are requested to resolve the 2 QA suite script failures.
+- Diff within WP-08 `target_files` (App / Agent Transfer / IPC / Domain / Tests)
+- Swift 6 Complete, no new warnings
+- No MainActor disk/network/DB/hash work introduced intentionally
+- UI not source of truth — engine/agent owns transfer + settings state
+- Legacy/Tauri untouched
+- No Homebrew runtime deps
 
-**VERDICT: CHANGES_REQUESTED**
+---
+
+## 4. Comments & readability
+
+New/changed modules should carry role headers and why-comments on non-obvious
+logic (Keychain, SettingsTransaction, NotificationManager transition tracking,
+reannounce cooldown). Reviewer to audit.
+
+---
+
+## 5. Files touched (this fix round)
+
+### Product
+- `Native/TorrentinoApp/**` (Inspector, Settings, List, App, NotificationManager, Info.plist, FixtureLibrary, Localizable)
+- `Native/TorrentinoEngineAgent/Transfer/**`, `Persistence/PersistenceStore.swift`
+- `Native/TorrentinoIPC/{Settings,Snapshot,State,ErrorContract}.swift`
+- `Native/Torrentino.xcodeproj/project.pbxproj`
+
+### Tests / QA
+- `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`
+- `Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift`
+- `Native/TorrentinoEngineBridge/scripts/qa/test_wp08_*.sh` (13 scripts)
+- `Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md` (historical FAIL snapshot)
+
+---
+
+**RESULT:** waiting_review
+
+Reviewer: overwrite this file with full review template and final
+**APPROVED** or **CHANGES_REQUESTED**.

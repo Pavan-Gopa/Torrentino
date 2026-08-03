@@ -184,11 +184,30 @@ final class TorrentinoAppTests: TestProfileCase {
 
     // MARK: - WP-08 Smoke Tests
 
-    func testKeychainStoreOperations() {
+    func testKeychainSave() {
+        _ = KeychainStore.deleteProxyPassword()
+        defer { _ = KeychainStore.deleteProxyPassword() }
+        XCTAssertTrue(KeychainStore.saveProxyPassword("test_proxy_password_123"))
+    }
+
+    func testKeychainLoad() {
+        _ = KeychainStore.deleteProxyPassword()
+        defer { _ = KeychainStore.deleteProxyPassword() }
         let password = "test_proxy_password_123"
         XCTAssertTrue(KeychainStore.saveProxyPassword(password))
         XCTAssertEqual(KeychainStore.loadProxyPassword(), password)
+    }
+
+    func testKeychainDelete() {
+        _ = KeychainStore.deleteProxyPassword()
+        let password = "test_proxy_password_123"
+        XCTAssertTrue(KeychainStore.saveProxyPassword(password))
         XCTAssertTrue(KeychainStore.deleteProxyPassword())
+        XCTAssertNil(KeychainStore.loadProxyPassword())
+    }
+
+    func testKeychainLoadMissingReturnsNil() {
+        _ = KeychainStore.deleteProxyPassword()
         XCTAssertNil(KeychainStore.loadProxyPassword())
     }
 
@@ -207,5 +226,81 @@ final class TorrentinoAppTests: TestProfileCase {
         let errors = SettingsRules.validate(invalidCandidate)
         XCTAssertEqual(errors.count, 1)
         XCTAssertEqual(errors.first?.field, "maxDownloadBytesPerSec")
+
+        let invalidPort = EngineSettings(
+            downloadDirectory: "~/Downloads",
+            maxDownloadBytesPerSec: 0,
+            maxUploadBytesPerSec: 0,
+            listenPort: 0,
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: true,
+            encryptionEnabled: true
+        )
+        XCTAssertEqual(SettingsRules.validate(invalidPort).first?.field, "listenPort")
+    }
+
+    func testNotificationCompletion() {
+        var tracker = NotificationTransitionTracker()
+        let id = TorrentRecordID(rawValue: UUID())
+        _ = tracker.processSnapshots([notificationSnapshot(id: id, fraction: 0.5, activity: .downloading)])
+        let transitions = tracker.processSnapshots([notificationSnapshot(id: id, fraction: 1, activity: .seeding)])
+        XCTAssertTrue(transitions.contains { transition in
+            if case .torrentCompleted(let recordID, _) = transition { return recordID == id }
+            return false
+        })
+    }
+
+    func testNotificationAllComplete() {
+        var tracker = NotificationTransitionTracker()
+        let id = TorrentRecordID(rawValue: UUID())
+        _ = tracker.processSnapshots([notificationSnapshot(id: id, fraction: 0.5, activity: .downloading)])
+        let finished = tracker.processSnapshots([notificationSnapshot(id: id, fraction: 1, activity: .seeding)])
+        XCTAssertTrue(finished.contains(.allComplete))
+        XCTAssertFalse(tracker.processSnapshots([notificationSnapshot(id: id, fraction: 1, activity: .seeding)]).contains(.allComplete))
+    }
+
+    func testNotificationError() {
+        var tracker = NotificationTransitionTracker()
+        let id = TorrentRecordID(rawValue: UUID())
+        _ = tracker.processSnapshots([notificationSnapshot(id: id, fraction: 0.5, activity: .downloading)])
+        let transitions = tracker.processSnapshots([
+            notificationSnapshot(id: id, fraction: 0.5, activity: .downloading, health: .recoverableError(.internalError))
+        ])
+        XCTAssertTrue(transitions.contains { transition in
+            if case .error(let recordID, _) = transition { return recordID == id }
+            return false
+        })
+    }
+
+    func testFixtureLibrary100And500Performance() {
+        XCTAssertEqual(FixtureLibrary.snapshot(count: 100).count, 100)
+        XCTAssertEqual(FixtureLibrary.snapshot(count: 500).count, 500)
+        measure {
+            _ = FixtureLibrary.snapshot(count: 100)
+            _ = FixtureLibrary.snapshot(count: 500)
+        }
+    }
+
+    private func notificationSnapshot(
+        id: TorrentRecordID,
+        fraction: Double,
+        activity: TorrentActivity,
+        health: TorrentHealth = .healthy
+    ) -> TorrentSnapshot {
+        TorrentSnapshot(
+            id: id,
+            contentIdentity: nil,
+            displayName: "Fixture",
+            desiredState: .running,
+            activity: activity,
+            health: health,
+            progress: TransferProgress(fraction: fraction, totalBytes: 100, downloadedBytes: Int64(fraction * 100), uploadedBytes: 0),
+            rates: TransferRates(downloadBytesPerSec: 0, uploadBytesPerSec: 0),
+            peers: PeerSummary(connected: 0, halfOpen: 0, total: 0),
+            saveLocation: PersistedLocation(path: "/tmp"),
+            revision: 0
+        )
     }
 }

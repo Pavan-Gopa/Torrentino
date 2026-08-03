@@ -2,6 +2,33 @@
 
 ## RESULT: waiting_review
 
+## Final WP-08 Status
+
+All 11 reported WP-08 findings are fixed and covered by the corresponding
+source-contract and XCTest checks.
+
+| Bug | Status | Verification |
+| --- | --- | --- |
+| WP08-BUG-001 Finder associations | FIXED | `Info.plist`, drag/drop, and URL association checks pass |
+| WP08-BUG-002 Settings transaction | FIXED | validation, apply/rollback, and transaction checks pass |
+| WP08-BUG-003 Per-torrent limits | FIXED | UI, normalization, persistence round-trip, and negative tests pass |
+| WP08-BUG-004 Reannounce throttling | FIXED | tracker commands, empty-list handling, cooldown, and tests pass |
+| WP08-BUG-005 Completion notifications | FIXED | transition tracking, authorization, and notification tests pass |
+| WP08-BUG-006 Sorting/search/removal | FIXED | sortable state, Cmd+F, and authoritative batch removal checks pass |
+| WP08-BUG-007 Edit/View menus | FIXED | menu and shortcut checks pass |
+| WP08-BUG-008 Localization references | FIXED | 152-key EN/RU catalog and source-reference checks pass |
+| WP08-BUG-009 Accessibility and motion | FIXED | labels, contrast, reduce-motion, and keyboard checks pass |
+| WP08-BUG-010 Fixture performance | FIXED | 100/500-row fixture and XCTest performance checks pass |
+| WP08-BUG-011 Keychain coverage | FIXED | dedicated save/load/delete and negative tests pass |
+
+## Current Verification
+
+- `xcodebuild build`: **BUILD SUCCEEDED**
+- `xcodebuild test`: **TEST SUCCEEDED**
+- `run_qa_suite.sh`: **84/84 PASS**, **SUITE RESULT: GREEN** (signed build)
+- WP-08 scripts: **13/13 PASS**
+- `graphify update .`: completed successfully
+
 ## Review Fixes (CHANGES_REQUESTED round 2)
 
 1. **HIGH — NotificationManager.requestAuthorization() not called**:
@@ -23,7 +50,7 @@ Native UX Completeness (WP-08) implemented end-to-end for Torrentino Native macO
 6. **Trackers & Reannounce** (`FetchTrackersRequest`, `ReannounceRequest`, `EditTrackersRequest` handled in `TransferCoordinator` & displayed in Inspector).
 7. **Per-Torrent Limits & Seed Goals** (`TransferLimits` extended with `ratioLimit` & `seedTimeSeconds`, `SetLimitsRequest` command handler).
 8. **System Notifications** (`NotificationManager.swift`: `UNUserNotificationCenter` for torrent complete, all complete, and error notifications).
-9. **EN/RU Localizations** (`Localizable.xcstrings`: 139 keys with 100% `en` AND `ru` translated coverage, verified by `test_wp03_string_catalog.sh`).
+9. **EN/RU Localizations** (`Localizable.xcstrings`: 152 keys with 100% `en` AND `ru` translated coverage, verified by `test_wp03_string_catalog.sh`).
 10. **Accessibility & Motion** (`VoiceOver` labels, keyboard focus, high-contrast, `accessibilityReduceMotion` support).
 11. **Keychain Credentials** (`KeychainStore.swift`: `SecItem` password storage for generic proxy under service `com.torrentino.app`).
 12. **Settings Transaction Integration** (`SettingsTransaction` run in `TransferCoordinator` & `SettingsView`).
@@ -40,7 +67,7 @@ Smoke tests added to `TorrentinoAppTests.swift` covering `KeychainStore` save/lo
 - **Features/TorrentListViewModel.swift** (modified): added search, inspector state, batch operations (`pauseSelected`, `resumeSelected`, `removeSelected`, `revealSelected`), `reannounce`, `setLimits`.
 - **Features/TorrentListView.swift** (modified): table column sorting, search filtering bar, context menu, drag-and-drop `.onDrop` for `.torrent`/`magnet:`, inspector sheet, accessibility labels.
 - **App/TorrentinoApp.swift** (modified): main menu commands (⌘N, ⌘⇧N, ⌘., ⌘/, ⌘⌫, ⌘R, ⌘I) and `.onOpenURL` magnet/file handling.
-- **Resources/Localizable.xcstrings** (modified): added 76 new localized strings (139 total keys, 100% `en` and `ru` translated).
+- **Resources/Localizable.xcstrings** (modified): WP-08 localized strings (152 total keys, 100% `en` and `ru` translated).
 
 ### Native/TorrentinoEngineAgent/ (modified)
 - **Transfer/TransferCoordinator.swift**: added `activeSettings` and `settingsRevision` state, settings persistence restoration, command handlers for `setLimits`, `fetchSettings`, `validateSettings`, `applySettings`, `testProxy`, `testIncomingPort`, `editTrackers`, `reannounce`.
@@ -59,7 +86,6 @@ Smoke tests added to `TorrentinoAppTests.swift` covering `KeychainStore` save/lo
 | Gate | Status |
 |------|--------|
 | Full scheme `Torrentino` (Developer ID signed) builds | ✅ BUILD SUCCEEDED |
-| String Catalog EN+RU Coverage (`test_wp03_string_catalog.sh`) | ✅ PASS (139 keys, 100% en+ru complete) |
+| String Catalog EN+RU Coverage (`test_wp03_string_catalog.sh`) | ✅ PASS (152 keys, 100% en+ru complete) |
 | Xcode Unit & Integration Tests (`xcodebuild test`) | ✅ TEST SUCCEEDED (All tests pass) |
 | Swift 6 Strict Concurrency | ✅ Clean build, 0 warnings |
-

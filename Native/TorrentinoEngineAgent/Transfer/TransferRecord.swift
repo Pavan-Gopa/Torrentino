@@ -39,10 +39,57 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
     public let engineID: String?
     public let metainfoData: Data?
     public let trackers: [String]
+    public let limits: TorrentinoIPC.TransferLimits
     public let fileSelection: [RecordFileSelection]
     public let saveLocation: PersistedLocation
     public let addedAt: Int64
     public let revision: UInt64
+
+    public init(
+        id: TorrentRecordID,
+        contentIdentity: ContentIdentity,
+        displayName: String,
+        desiredState: DesiredTorrentState,
+        activity: TorrentActivity,
+        health: TorrentHealth,
+        totalBytes: Int64,
+        downloadedBytes: Int64,
+        uploadedBytes: Int64,
+        downloadBytesPerSec: Int64,
+        uploadBytesPerSec: Int64,
+        peersConnected: Int,
+        seedsTotal: Int,
+        engineID: String?,
+        metainfoData: Data?,
+        trackers: [String],
+        fileSelection: [RecordFileSelection],
+        saveLocation: PersistedLocation,
+        addedAt: Int64,
+        revision: UInt64,
+        limits: TorrentinoIPC.TransferLimits = TorrentinoIPC.TransferLimits()
+    ) {
+        self.id = id
+        self.contentIdentity = contentIdentity
+        self.displayName = displayName
+        self.desiredState = desiredState
+        self.activity = activity
+        self.health = health
+        self.totalBytes = totalBytes
+        self.downloadedBytes = downloadedBytes
+        self.uploadedBytes = uploadedBytes
+        self.downloadBytesPerSec = downloadBytesPerSec
+        self.uploadBytesPerSec = uploadBytesPerSec
+        self.peersConnected = peersConnected
+        self.seedsTotal = seedsTotal
+        self.engineID = engineID
+        self.metainfoData = metainfoData
+        self.trackers = trackers
+        self.limits = limits
+        self.fileSelection = fileSelection
+        self.saveLocation = saveLocation
+        self.addedAt = addedAt
+        self.revision = revision
+    }
 
     public var progressFraction: Double {
         guard totalBytes > 0 else { return 0 }
@@ -70,6 +117,7 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
                 uploadBytesPerSec: uploadBytesPerSec
             ),
             peers: PeerSummary(connected: peersConnected, halfOpen: 0, total: peersConnected + seedsTotal),
+            limits: limits,
             saveLocation: saveLocation,
             revision: revision
         )

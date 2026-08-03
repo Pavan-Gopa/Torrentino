@@ -49,7 +49,13 @@ struct TorrentinoApp: App {
                 Button(String(localized: "menu.file.add_url")) {
                     AppContext.transfers.showAddSheet = true
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+            CommandMenu(String(localized: "menu.edit")) {
+                Button(String(localized: "menu.edit.find")) {
+                    AppContext.transfers.focusSearch()
+                }
+                .keyboardShortcut("f", modifiers: .command)
             }
             CommandMenu(String(localized: "menu.torrent")) {
                 Button(String(localized: "torrents.action.pause")) {
@@ -81,7 +87,12 @@ struct TorrentinoApp: App {
                 Button(String(localized: "menu.torrent.inspector")) {
                     AppContext.transfers.toggleInspector()
                 }
-                .keyboardShortcut("i", modifiers: .command)
+                 .keyboardShortcut("i", modifiers: .command)
+            }
+            CommandMenu(String(localized: "menu.view")) {
+                Button(String(localized: "menu.view.toggle_inspector")) {
+                    AppContext.transfers.toggleInspector()
+                }
             }
         }
 

@@ -7,6 +7,62 @@ import Foundation
 import UserNotifications
 import TorrentinoIPC
 
+enum NotificationTransition: Equatable {
+    case torrentCompleted(TorrentRecordID, String)
+    case allComplete
+    case error(TorrentRecordID, String)
+}
+
+/// Pure transition state so completion/error behavior can be tested without
+/// asking the system notification center for permission.
+struct NotificationTransitionTracker {
+    private(set) var previousStates: [TorrentRecordID: TorrentActivity] = [:]
+    private(set) var completedTorrents: Set<TorrentRecordID> = []
+    private var previousCompletion: [TorrentRecordID: Bool] = [:]
+    private var previousHealth: [TorrentRecordID: TorrentHealth] = [:]
+    private var hasSeenActiveTorrents = false
+
+    mutating func processSnapshots(_ torrents: [TorrentSnapshot]) -> [NotificationTransition] {
+        var transitions: [NotificationTransition] = []
+
+        for torrent in torrents {
+            let hadPreviousState = previousStates[torrent.id] != nil
+            let previousWasComplete = previousCompletion[torrent.id] ?? false
+            let isComplete = torrent.progress.fraction >= 1.0 || torrent.activity == .seeding
+            previousStates[torrent.id] = torrent.activity
+            previousCompletion[torrent.id] = isComplete
+
+            if hadPreviousState,
+               !previousWasComplete,
+               isComplete,
+               !completedTorrents.contains(torrent.id) {
+                completedTorrents.insert(torrent.id)
+                transitions.append(.torrentCompleted(torrent.id, torrent.displayName))
+            }
+
+            if let previousHealth = previousHealth[torrent.id],
+               previousHealth == .healthy,
+               torrent.health != .healthy {
+                transitions.append(.error(torrent.id, torrent.displayName))
+            }
+            previousHealth[torrent.id] = torrent.health
+        }
+
+        let hasActiveNow = torrents.contains { $0.progress.fraction < 1.0 }
+        let allFinishedNow = !torrents.isEmpty && !hasActiveNow
+        if hasActiveNow {
+            hasSeenActiveTorrents = true
+        } else if hasSeenActiveTorrents && allFinishedNow {
+            transitions.append(.allComplete)
+            hasSeenActiveTorrents = false
+        } else if torrents.isEmpty {
+            hasSeenActiveTorrents = false
+        }
+
+        return transitions
+    }
+}
+
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
@@ -15,8 +71,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     var notifyOnAllComplete: Bool = true
     var notifyOnError: Bool = true
 
-    private var previousStates: [TorrentRecordID: TorrentActivity] = [:]
-    private var completedTorrents: Set<TorrentRecordID> = []
+    private var transitionTracker = NotificationTransitionTracker()
 
     override private init() {
         super.init()
@@ -28,48 +83,35 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func processSnapshots(_ torrents: [TorrentSnapshot]) {
-        var allFinished = true
-        var hasActive = false
-
-        for torrent in torrents {
-            let previous = previousStates[torrent.id]
-            previousStates[torrent.id] = torrent.activity
-
-            if torrent.progress.fraction < 1.0 {
-                allFinished = false
-                hasActive = true
-            }
-
-            // Check torrent completion transition
-            if (previous == .downloading || previous == .fetchingMetadata),
-               (torrent.activity == .seeding || torrent.progress.fraction >= 1.0),
-               !completedTorrents.contains(torrent.id) {
-                completedTorrents.insert(torrent.id)
+        for transition in transitionTracker.processSnapshots(torrents) {
+            switch transition {
+            case .torrentCompleted(_, let name):
                 if notifyOnTorrentComplete {
                     postNotification(
                         title: String(localized: "notification.complete.title"),
-                        body: String(localized: "notification.complete.body \(torrent.displayName)")
+                        body: localizedTorrentBody(key: "notification.complete.body", name: name)
                     )
                 }
-            }
-
-            // Check error status transition
-            if torrent.health != .healthy, previous == .downloading {
+            case .error(_, let name):
                 if notifyOnError {
                     postNotification(
                         title: String(localized: "notification.error.title"),
-                        body: String(localized: "notification.error.body \(torrent.displayName)")
+                        body: localizedTorrentBody(key: "notification.error.body", name: name)
+                    )
+                }
+            case .allComplete:
+                if notifyOnAllComplete {
+                    postNotification(
+                        title: String(localized: "notification.all_complete.title"),
+                        body: String(localized: "notification.all_complete.body")
                     )
                 }
             }
         }
+    }
 
-        if hasActive && allFinished && notifyOnAllComplete && !torrents.isEmpty {
-            postNotification(
-                title: String(localized: "notification.all_complete.title"),
-                body: String(localized: "notification.all_complete.body")
-            )
-        }
+    private func localizedTorrentBody(key: String, name: String) -> String {
+        String(localized: String.LocalizationValue(key)).replacingOccurrences(of: "%{torrent}", with: name)
     }
 
     private func postNotification(title: String, body: String) {

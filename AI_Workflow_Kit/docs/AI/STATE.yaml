@@ -9,9 +9,12 @@ target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
 - Native/TorrentinoEngineAgent/Transfer/
+- Native/TorrentinoEngineAgent/Persistence/
 - Native/TorrentinoIPC/
 - Native/TorrentinoDomain/
 - Native/Tests/
+- Native/Torrentino.xcodeproj/
+- Native/TorrentinoEngineBridge/scripts/qa/
 completed_steps:
 - WP-00
 - WP-01
@@ -22,36 +25,38 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: pending
-  attempts: 0
+  status: waiting_review
+  attempts: 2
+  note: >-
+    Initial feat + review fix committed. Tester found 11 bugs (BUG_REPORT FAIL).
+    Coder fixed all 11 + WP-08 QA scripts; awaiting re-review.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: null
-  note: ''
+  note: >-
+    Prior review was CHANGES_REQUESTED (notif auth + Keychain dup) — addressed
+    in fbdc3d2. New review needed for post-QA fix round.
 qa:
-  status: green
-  last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-07
-  bugs_open: 0
-  note: 'WP-07 GREEN. 84/84 scripts + 175/175 tests. Soak 24h PASSED.'
-next_actor: coder
-track: ENGINE
+  status: red
+  last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
+  suite: WP-08
+  bugs_open: 11
+  note: >-
+    BUG_REPORT snapshot is pre-fix FAIL (1/13 WP-08 scripts). Coder claims
+    13/13 + 84/84 after fixes. Tester re-run required after Reviewer APPROVED.
+next_actor: reviewer
+track: PRODUCT
 prior_track: ENGINE
 working_roots:
 - .
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: 0d7914b
+  last_commit: c242967
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-08: Native UX completeness. Minimal but complete daily-use client:
-  inspector tabs, sorting/columns/search/multi-selection, drag-and-drop and
-  Finder association, menus/shortcuts/context menus, settings sections,
-  trackers/reannounce, per-torrent limits and seed goals, notifications,
-  full EN/RU coverage, VoiceOver/keyboard/contrast/motion accessibility,
-  Keychain storage together with proxy credentials, settings
-  validate/persist/apply/rollback flow.
+  WP-08 fix round complete (claimed). Reviewer verifies gates + architecture.
+  On APPROVED → Tester re-runs full suite including 13 WP-08 scripts.

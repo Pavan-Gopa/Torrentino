@@ -129,6 +129,17 @@ public struct TransferLimits: Codable, Sendable, Equatable {
         self.ratioLimit = ratioLimit
         self.seedTimeSeconds = seedTimeSeconds
     }
+
+    /// Converts invalid negative/non-finite values to an explicit unlimited
+    /// value while preserving nil as "not supplied" on the wire.
+    public var normalized: TransferLimits {
+        TransferLimits(
+            maxDownloadBytesPerSec: maxDownloadBytesPerSec.map { max(0, $0) },
+            maxUploadBytesPerSec: maxUploadBytesPerSec.map { max(0, $0) },
+            ratioLimit: ratioLimit.map { $0.isFinite && $0 >= 0 ? $0 : 0 },
+            seedTimeSeconds: seedTimeSeconds.map { max(0, $0) }
+        )
+    }
 }
 
 /// An add source the UI hands to inspectAddSource / commitAdd.

@@ -777,6 +777,153 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(fault.code, .invalidPayload)
     }
 
+    // MARK: - Per-torrent limits and seed goals
+
+    func testTransferLimitsRoundTrip() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))")
+        let limits = TorrentinoIPC.TransferLimits(
+            maxDownloadBytesPerSec: 2_000,
+            maxUploadBytesPerSec: 1_000,
+            ratioLimit: 2.5,
+            seedTimeSeconds: 3_600
+        )
+        let result = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
+            SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits)
+        ))))
+        XCTAssertEqual(result, SuccessPayload.ack)
+
+        let snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        XCTAssertEqual(snap.torrents.first?.limits, limits)
+    }
+
+    func testTransferLimitsNegativeBecomeUnlimited() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))")
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
+            SetLimitsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                limits: TorrentinoIPC.TransferLimits(
+                    maxDownloadBytesPerSec: -1,
+                    maxUploadBytesPerSec: nil,
+                    ratioLimit: -2,
+                    seedTimeSeconds: -10
+                )
+            )
+        ))))
+
+        let snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        let normalized = try XCTUnwrap(snap.torrents.first?.limits)
+        XCTAssertEqual(normalized.maxDownloadBytesPerSec, 0)
+        XCTAssertNil(normalized.maxUploadBytesPerSec)
+        XCTAssertEqual(normalized.ratioLimit, 0)
+        XCTAssertEqual(normalized.seedTimeSeconds, 0)
+    }
+
+    func testSeedGoalsRoundTrip() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))")
+        let goals = TorrentinoIPC.TransferLimits(ratioLimit: 1.25, seedTimeSeconds: 7_200)
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
+            SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: goals)
+        ))))
+        let snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        XCTAssertEqual(snap.torrents.first?.limits.ratioLimit, 1.25)
+        XCTAssertEqual(snap.torrents.first?.limits.seedTimeSeconds, 7_200)
+    }
+
+    // MARK: - Tracker command axes
+
+    func testFetchTrackers() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))")
+        let reply = await coordinator.processCommand(encode(.fetchTrackers(FetchTrackersRequest(
+            requestID: RequestID(), recordID: recordID, cursor: nil, pageSize: 50, expectedRevision: 0
+        ))))
+        guard case .trackers(let page) = try resultPayload(from: reply) else { return XCTFail("expected tracker page") }
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertNil(page.nextCursor)
+        XCTAssertEqual(page.totalCount, 0)
+
+        let missing = await coordinator.processCommand(encode(.fetchTrackers(FetchTrackersRequest(
+            requestID: RequestID(), recordID: TorrentRecordID(rawValue: UUID()), cursor: nil, pageSize: 50, expectedRevision: 0
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: missing).result else {
+            return XCTFail("missing tracker record must fail")
+        }
+        XCTAssertEqual(fault.code, .recordNotFound)
+    }
+
+    func testEditTrackers() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "e", count: 40))")
+        let firstEdit = try resultPayload(from: await coordinator.processCommand(encode(.editTrackers(
+            EditTrackersRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                addedURLs: ["udp://one.example/announce", "https://two.example/announce"],
+                removedURLs: []
+            )
+        ))))
+        XCTAssertEqual(firstEdit, SuccessPayload.ack)
+
+        let reply = await coordinator.processCommand(encode(.fetchTrackers(FetchTrackersRequest(
+            requestID: RequestID(), recordID: recordID, cursor: nil, pageSize: 50, expectedRevision: 1
+        ))))
+        guard case .trackers(let page) = try resultPayload(from: reply) else { return XCTFail("expected tracker page") }
+        XCTAssertEqual(page.items.map(\.url), ["udp://one.example/announce", "https://two.example/announce"])
+
+        let secondEdit = try resultPayload(from: await coordinator.processCommand(encode(.editTrackers(
+            EditTrackersRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                addedURLs: [],
+                removedURLs: ["udp://one.example/announce"]
+            )
+        ))))
+        XCTAssertEqual(secondEdit, SuccessPayload.ack)
+    }
+
+    func testReannounce() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))")
+        let request = ReannounceRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID)
+        let firstReannounce = try resultPayload(from: await coordinator.processCommand(encode(.reannounce(request))))
+        XCTAssertEqual(firstReannounce, SuccessPayload.ack)
+
+        let repeated = await coordinator.processCommand(encode(.reannounce(
+            ReannounceRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID)
+        )))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: repeated).result else {
+            return XCTFail("reannounce must be rate limited")
+        }
+        XCTAssertEqual(fault.code, .rateLimited)
+
+        let missing = await coordinator.processCommand(encode(.reannounce(
+            ReannounceRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: TorrentRecordID(rawValue: UUID()))
+        )))
+        guard case .failure(let missingFault) = decode(IPCEnvelope.self, from: missing).result else {
+            return XCTFail("missing reannounce record must fail")
+        }
+        XCTAssertEqual(missingFault.code, .recordNotFound)
+    }
+
     // MARK: - Aggregated stats
 
     func testAggregateStatsAccumulate() async throws {

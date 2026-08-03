@@ -20,8 +20,13 @@ public struct TorrentSnapshot: Codable, Sendable, Equatable, Identifiable {
     public let progress: TransferProgress
     public let rates: TransferRates
     public let peers: PeerSummary
+    public let limits: TransferLimits
     public let saveLocation: PersistedLocation
     public let revision: UInt64
+
+    public var stateSortKey: String {
+        "\(desiredState.rawValue)-\(activity.rawValue)"
+    }
 
     public init(
         id: TorrentRecordID,
@@ -33,6 +38,7 @@ public struct TorrentSnapshot: Codable, Sendable, Equatable, Identifiable {
         progress: TransferProgress,
         rates: TransferRates,
         peers: PeerSummary,
+        limits: TransferLimits = TransferLimits(),
         saveLocation: PersistedLocation,
         revision: UInt64
     ) {
@@ -45,6 +51,7 @@ public struct TorrentSnapshot: Codable, Sendable, Equatable, Identifiable {
         self.progress = progress
         self.rates = rates
         self.peers = peers
+        self.limits = limits
         self.saveLocation = saveLocation
         self.revision = revision
     }

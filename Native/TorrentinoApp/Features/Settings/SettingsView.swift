@@ -154,9 +154,16 @@ struct SettingsView: View {
         Form {
             Section(String(localized: "settings.network.port")) {
                 LabeledContent(String(localized: "settings.network.listen_port")) {
-                    TextField("6881", text: $listenPort)
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
+                    VStack(alignment: .leading, spacing: 3) {
+                        TextField("6881", text: $listenPort)
+                            .frame(width: 80)
+                            .textFieldStyle(.roundedBorder)
+                        if let error = validationErrors.first(where: { $0.field == "listenPort" }) {
+                            Text(error.message)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
                 }
             }
 
@@ -265,7 +272,7 @@ struct SettingsView: View {
 
         let downRate = (Int64(maxDownKB) ?? 0) * 1024
         let upRate = (Int64(maxUpKB) ?? 0) * 1024
-        let port = UInt16(listenPort) ?? 6881
+        let port = UInt16(listenPort.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
 
         let candidate = EngineSettings(
             downloadDirectory: downloadDir,
@@ -286,12 +293,19 @@ struct SettingsView: View {
             return
         }
 
-        // Save password to Keychain securely
-        if proxyKind != .none && !proxyPassword.isEmpty {
-            KeychainStore.saveProxyPassword(proxyPassword)
-        } else if proxyKind == .none {
-            KeychainStore.deleteProxyPassword()
-        }
+        // This is a side-effect-free UI preflight. The agent repeats the same
+        // transaction with its real persistence/apply/rollback context below.
+        let preflight = SettingsTransaction.run(
+            candidate: candidate,
+            expectedRevision: nil,
+            context: SettingsTransaction.Context(
+                currentRevision: 0,
+                persist: { _, revision in revision + 1 },
+                apply: { _ in .success(()) },
+                rollback: { _, _ in }
+            )
+        )
+        guard case .applied = preflight else { return }
 
         Task {
             let command = EngineCommandV1.applySettings(ApplySettingsRequest(
@@ -301,6 +315,13 @@ struct SettingsView: View {
             ))
             do {
                 if case .settingsApply = try await viewModel.client.sendCommand(command) {
+                    // Credentials are committed only after the engine accepts
+                    // the settings transaction.
+                    if proxyKind != .none && !proxyPassword.isEmpty {
+                        _ = KeychainStore.saveProxyPassword(proxyPassword)
+                    } else if proxyKind == .none {
+                        _ = KeychainStore.deleteProxyPassword()
+                    }
                     applyStatus = String(localized: "settings.saved_successfully")
                 }
             } catch {
