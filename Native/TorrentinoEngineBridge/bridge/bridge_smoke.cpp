@@ -254,6 +254,14 @@ int main()
 		bandwidth.max_upload_bytes_per_sec = 4096;
 		const auto limits = bridge.setLimits(add_result.torrent_id, bandwidth);
 		TH_REQUIRE(limits.is_ok(), "per-torrent bandwidth limits must apply");
+		const auto appliedLimits = bridge.currentLimits(add_result.torrent_id);
+		TH_REQUIRE(appliedLimits.is_ok(), "native bandwidth limits must be readable");
+		if (appliedLimits.is_ok()) {
+			TH_REQUIRE(appliedLimits.value().max_download_bytes_per_sec == 8192,
+				"native download limit must match the applied value");
+			TH_REQUIRE(appliedLimits.value().max_upload_bytes_per_sec == 4096,
+				"native upload limit must match the applied value");
+		}
 
 		TorrentLimits invalidBandwidth;
 		invalidBandwidth.max_download_bytes_per_sec = -1;
@@ -276,6 +284,13 @@ int main()
 		TH_REQUIRE(nonFinite.error_code() == BridgeError::invalid_argument,
 			"non-finite ratio goal maps to invalid_argument");
 
+		TorrentLimits nativeRange;
+		nativeRange.seed_time_seconds = std::numeric_limits<std::int64_t>::max();
+		const auto nativeRangeFailure = bridge.setLimits(add_result.torrent_id, nativeRange);
+		TH_REQUIRE(!nativeRangeFailure.is_ok(), "out-of-native seed range must be rejected");
+		TH_REQUIRE(nativeRangeFailure.error_code() == BridgeError::invalid_argument,
+			"out-of-native seed range maps to invalid_argument");
+
 		TorrentLimits unsupported;
 		unsupported.ratio_limit = 1.5;
 		const auto ratio = bridge.setLimits(add_result.torrent_id, unsupported);
@@ -293,11 +308,32 @@ int main()
 		const auto trackers = bridge.editTrackers(add_result.torrent_id,
 			{"udp://127.0.0.1:1/announce"});
 		TH_REQUIRE(trackers.is_ok(), "tracker replacement must apply");
-		const auto invalidTracker = bridge.editTrackers(add_result.torrent_id,
-			{"not-a-tracker-url"});
-		TH_REQUIRE(!invalidTracker.is_ok(), "malformed tracker URL must be rejected");
-		TH_REQUIRE(invalidTracker.error_code() == BridgeError::invalid_argument,
-			"malformed tracker URL maps to invalid_argument");
+		const auto validIPv6Tracker = bridge.editTrackers(add_result.torrent_id,
+			{"udp://[2001:db8::1]:1/announce"});
+		TH_REQUIRE(validIPv6Tracker.is_ok(), "well-formed IPv6 tracker URL must apply");
+		const std::vector<std::string> invalidTrackerURLs = {
+			"not-a-tracker-url",
+			"https://256.1.1.1/announce",
+			"https://127.0.0/announce",
+			"https://tracker..example/announce",
+			"https://-tracker.example/announce",
+			"https://[2001:db8:::1]/announce",
+			"https://[2001:db8:0:0:0:0:0:0:1]/announce",
+			"https://[2001:db8:gg::1]/announce",
+			"https://127.0.0.1:0/announce",
+			"https://127.0.0.1:65536/announce",
+			"https://127.0.0.1:abc/announce",
+			"ftp://127.0.0.1/announce",
+			"https://127.0.0.1/ann%GGounce",
+			"https://127.0.0.1/announce%",
+			"https://127.0.0.1/ann\nounce",
+		};
+		for (const std::string& invalidURL : invalidTrackerURLs) {
+			const auto invalidTracker = bridge.editTrackers(add_result.torrent_id, {invalidURL});
+			TH_REQUIRE(!invalidTracker.is_ok(), "malformed tracker URL must be rejected");
+			TH_REQUIRE(invalidTracker.error_code() == BridgeError::invalid_argument,
+				"malformed tracker URL maps to invalid_argument");
+		}
 		const auto emptyTrackers = bridge.editTrackers(add_result.torrent_id, {});
 		TH_REQUIRE(emptyTrackers.is_ok(), "explicitly empty tracker list must apply");
 		const auto reannounce = bridge.reannounce(add_result.torrent_id);

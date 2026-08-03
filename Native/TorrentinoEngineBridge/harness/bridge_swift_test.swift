@@ -103,6 +103,15 @@ struct BridgeSwiftTest {
             // The Swift method type cannot represent a malformed element, so
             // exercise the adapter's JSON boundary directly for this contract.
             let adapter = TorrentinoEngineBridgeAdapter()
+            let nonArrayTrackers = Data(#"{"torrent-id":"ignored","trackers":{}}"#.utf8)
+            do {
+                _ = try adapter.editTrackers(withPayloadData: nonArrayTrackers)
+                fatalError("non-array tracker payload must throw invalidArgument")
+            } catch let error as NSError {
+                guard error.code == 5 else {
+                    fatalError("non-array tracker payload returned unexpected error: \(error.code)")
+                }
+            }
             let malformedTrackers = Data(#"{"torrent-id":"ignored","trackers":["udp://127.0.0.1:1/announce",7]}"#.utf8)
             do {
                 _ = try adapter.editTrackers(withPayloadData: malformedTrackers)
@@ -144,6 +153,19 @@ struct BridgeSwiftTest {
                 fatalError("real bandwidth setLimits must succeed at the IPC boundary")
             }
 
+            let beforeNativeInvalid = try Self.snapshot(from: await agent.processCommand(Self.encode(.fetchSnapshot(
+                FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+            ))))
+            guard let beforeNativeTorrent = beforeNativeInvalid.torrents.first else {
+                fatalError("native invalid-limit test requires the added record in the snapshot")
+            }
+            let nativeEngineID = String(repeating: "1", count: 40)
+            let appliedBeforeNativeInvalid = try await agentBridgeCoordinator.currentLimits(torrentID: nativeEngineID)
+            guard appliedBeforeNativeInvalid.maxDownloadBytesPerSec == 4096,
+                  appliedBeforeNativeInvalid.maxUploadBytesPerSec == 0 else {
+                fatalError("native engine limits did not reflect the accepted bandwidth request: \(appliedBeforeNativeInvalid)")
+            }
+
             let agentRatio = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
@@ -170,11 +192,32 @@ struct BridgeSwiftTest {
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: agentRecordID,
-                limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: -1)
+                // Swift permits non-negative seed goals; this value is
+                // rejected only by the native signed-range check.
+                limits: TorrentinoIPC.TransferLimits(seedTimeSeconds: Int64.max)
             ))))
             guard case .failure(let invalidFault) = Self.decode(agentInvalid).result,
-                  invalidFault.code == .invalidArgument else {
-                fatalError("real invalid limit rejection must remain invalidArgument at IPC")
+                   invalidFault.code == .invalidArgument else {
+                fatalError("native invalid limit rejection must remain invalidArgument at IPC")
+            }
+
+            let afterNativeInvalid = try Self.snapshot(from: await agent.processCommand(Self.encode(.fetchSnapshot(
+                FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+            ))))
+            guard afterNativeInvalid == beforeNativeInvalid,
+                  afterNativeInvalid.torrents.first?.revision == beforeNativeTorrent.revision,
+                  afterNativeInvalid.torrents.first?.limits == beforeNativeTorrent.limits else {
+                fatalError("native invalid limit must not change snapshot or record revision")
+            }
+            let appliedAfterNativeInvalid = try await agentBridgeCoordinator.currentLimits(torrentID: nativeEngineID)
+            guard appliedAfterNativeInvalid == appliedBeforeNativeInvalid else {
+                fatalError("native invalid limit must not change engine-applied limits")
+            }
+            let persistedAfterNativeInvalid = try await store.torrentLimits(
+                torrentID: agentRecordID.rawValue.uuidString
+            )
+            guard persistedAfterNativeInvalid == beforeNativeTorrent.limits else {
+                fatalError("native invalid limit must not change persisted limits")
             }
 
             let agentTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
@@ -263,5 +306,13 @@ struct BridgeSwiftTest {
         } catch {
             fatalError("bridge swift test reply decoding failed: \(error)")
         }
+    }
+
+    private static func snapshot(from data: Data) throws -> EngineSnapshot {
+        let envelope = decode(data)
+        guard case .success(.snapshot(let snapshot)) = envelope.result else {
+            throw NSError(domain: "torrentino.bridge.swift-test", code: 3)
+        }
+        return snapshot
     }
 }

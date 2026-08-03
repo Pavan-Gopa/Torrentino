@@ -817,49 +817,108 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(fault.code, EngineErrorCode.unsupportedOperation)
     }
 
-    func testTransferLimitsRejectInvalidValueWithoutMutation() async throws {
-        let engine = StubTransferEngine()
-        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
-        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))")
-        let accepted = TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 2_048)
-        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
-            SetLimitsRequest(
-                requestID: RequestID(),
-                idempotencyKey: IdempotencyKey(),
-                recordID: recordID,
-                limits: accepted
-            )
-        ))))
+    func testTransferLimitsRejectsNegativeWithoutMutation() async throws {
+        let scenario = try await makeAcceptedLimitsScenario()
+        try await assertRejectedLimitsWithoutMutation(
+            scenario: scenario,
+            invalid: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: -1)
+        )
+    }
 
-        let before = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
-            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
-        ))))
-        let reply = await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+    func testTransferLimitsRejectsOverflowWithoutMutation() async throws {
+        let scenario = try await makeAcceptedLimitsScenario()
+        try await assertRejectedLimitsWithoutMutation(
+            scenario: scenario,
+            invalid: TorrentinoIPC.TransferLimits(
+                maxUploadBytesPerSec: TorrentinoIPC.TransferLimits.maxBandwidthBytesPerSec + 1
+            )
+        )
+    }
+
+    func testTransferLimitsRejectsNonFiniteAtJSONBoundaryWithoutMutation() async throws {
+        let scenario = try await makeAcceptedLimitsScenario()
+        let invalid = TorrentinoIPC.TransferLimits(ratioLimit: .nan)
+        XCTAssertEqual(invalid.validationError, .nonFinite(field: "ratioLimit"))
+
+        // JSON cannot represent NaN. Rejecting it before dispatch prevents a
+        // non-finite value from bypassing the coordinator's mutation ordering.
+        let command = EngineCommandV1.setLimits(SetLimitsRequest(
             requestID: RequestID(),
             idempotencyKey: IdempotencyKey(),
-            recordID: recordID,
-            limits: TorrentinoIPC.TransferLimits(
-                maxDownloadBytesPerSec: -1,
-                maxUploadBytesPerSec: Int64.max,
-                ratioLimit: -2,
-                seedTimeSeconds: -10
-            )
-        ))))
-        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
-            return XCTFail("invalid limits must fail through the IPC result")
-        }
-        XCTAssertEqual(fault.code, .invalidArgument)
+            recordID: scenario.recordID,
+            limits: invalid
+        ))
+        XCTAssertThrowsError(try JSONEncoder().encode(IPCEnvelope.request(command)))
 
-        let after = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+        let after = try await limitState(for: scenario)
+        assertLimitStateUnchanged(scenario.before, after: after)
+    }
+
+    func testTransferLimitsRejectsInspectorParseFailureWithoutMutation() async throws {
+        let scenario = try await makeAcceptedLimitsScenario()
+        let valid = try JSONEncoder().encode(IPCEnvelope.request(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: scenario.recordID,
+            limits: scenario.accepted
+        ))))
+        guard var malformed = String(data: valid, encoding: .utf8) else {
+            return XCTFail("setLimits request must encode as UTF-8 JSON")
+        }
+        let validNumber = "\"maxDownloadBytesPerSec\":2048"
+        guard malformed.contains(validNumber) else {
+            return XCTFail("encoded limit field did not match the expected wire shape")
+        }
+        malformed = malformed.replacingOccurrences(
+            of: validNumber,
+            with: "\"maxDownloadBytesPerSec\":\"not-a-number\""
+        )
+
+        let reply = await scenario.coordinator.processCommand(Data(malformed.utf8))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("Inspector parse failure must be rejected as a typed payload fault")
+        }
+        XCTAssertEqual(fault.code, .invalidPayload)
+
+        let after = try await limitState(for: scenario)
+        assertLimitStateUnchanged(scenario.before, after: after)
+    }
+
+    func testTransferLimitsEmptyAndZeroMeanUnlimited() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "0", count: 40))")
+
+        let empty = TorrentinoIPC.TransferLimits()
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: empty
+        )))))
+        let emptySnapshot = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
             FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
         ))))
-        XCTAssertEqual(after, before, "rejected limits must not publish or mutate a snapshot")
-        let applied = await engineRef.limits(for: "stub-1")
-        XCTAssertEqual(applied, accepted)
-        let persisted = try await store.torrentLimits(torrentID: recordID.rawValue.uuidString)
-        XCTAssertEqual(persisted, accepted)
-        XCTAssertNotNil(TorrentinoIPC.TransferLimits(ratioLimit: .nan).validationError)
+        XCTAssertEqual(emptySnapshot.torrents.first?.limits, empty)
+        let emptyApplied = await engineRef.limits(for: "stub-1")
+        XCTAssertEqual(emptyApplied, empty)
+        let emptyPersisted = try await store.torrentLimits(torrentID: recordID.rawValue.uuidString)
+        XCTAssertEqual(emptyPersisted, empty)
+
+        let zero = TorrentinoIPC.TransferLimits(
+            maxDownloadBytesPerSec: 0,
+            maxUploadBytesPerSec: 0,
+            ratioLimit: 0,
+            seedTimeSeconds: 0
+        )
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: zero
+        )))))
+        let zeroSnapshot = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        XCTAssertEqual(zeroSnapshot.torrents.first?.limits, zero)
+        let zeroApplied = await engineRef.limits(for: "stub-1")
+        XCTAssertEqual(zeroApplied, zero)
+        let zeroPersisted = try await store.torrentLimits(torrentID: recordID.rawValue.uuidString)
+        XCTAssertEqual(zeroPersisted, zero)
     }
 
     func testSeedGoalsRoundTrip() async throws {
@@ -1203,6 +1262,114 @@ final class TransferSmokeTests: TestProfileCase {
     }
 
     // MARK: - Helpers
+
+    private typealias LimitState = (
+        snapshot: EngineSnapshot,
+        applied: TorrentinoIPC.TransferLimits?,
+        persisted: TorrentinoIPC.TransferLimits?
+    )
+
+    private struct AcceptedLimitsScenario {
+        let coordinator: TransferCoordinator
+        let store: PersistenceStore
+        let engine: StubTransferEngine
+        let recordID: TorrentRecordID
+        let accepted: TorrentinoIPC.TransferLimits
+        let before: LimitState
+    }
+
+    private func makeAcceptedLimitsScenario() async throws -> AcceptedLimitsScenario {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))"
+        )
+        let accepted = TorrentinoIPC.TransferLimits(
+            maxDownloadBytesPerSec: 2_048,
+            maxUploadBytesPerSec: 1_024
+        )
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            limits: accepted
+        )))))
+        let before = try await limitState(
+            coordinator: coordinator,
+            store: store,
+            engine: engineRef,
+            recordID: recordID
+        )
+        return AcceptedLimitsScenario(
+            coordinator: coordinator,
+            store: store,
+            engine: engineRef,
+            recordID: recordID,
+            accepted: accepted,
+            before: before
+        )
+    }
+
+    private func assertRejectedLimitsWithoutMutation(
+        scenario: AcceptedLimitsScenario,
+        invalid: TorrentinoIPC.TransferLimits
+    ) async throws {
+        let reply = await scenario.coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: scenario.recordID,
+            limits: invalid
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("invalid limits must fail through the IPC result")
+        }
+        XCTAssertEqual(fault.code, .invalidArgument)
+
+        let after = try await limitState(
+            coordinator: scenario.coordinator,
+            store: scenario.store,
+            engine: scenario.engine,
+            recordID: scenario.recordID
+        )
+        assertLimitStateUnchanged(scenario.before, after: after)
+    }
+
+    private func limitState(
+        coordinator: TransferCoordinator,
+        store: PersistenceStore,
+        engine: StubTransferEngine,
+        recordID: TorrentRecordID
+    ) async throws -> LimitState {
+        let snapshot = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        return (
+            snapshot: snapshot,
+            applied: await engine.limits(for: "stub-1"),
+            persisted: try await store.torrentLimits(torrentID: recordID.rawValue.uuidString)
+        )
+    }
+
+    private func limitState(for scenario: AcceptedLimitsScenario) async throws -> LimitState {
+        try await limitState(
+            coordinator: scenario.coordinator,
+            store: scenario.store,
+            engine: scenario.engine,
+            recordID: scenario.recordID
+        )
+    }
+
+    private func assertLimitStateUnchanged(_ before: LimitState, after: LimitState) {
+        XCTAssertEqual(after.snapshot, before.snapshot, "rejected limits must not mutate a snapshot")
+        let beforeTorrent = before.snapshot.torrents.first
+        let afterTorrent = after.snapshot.torrents.first
+        XCTAssertEqual(afterTorrent?.revision, beforeTorrent?.revision, "record revision must not change")
+        XCTAssertEqual(afterTorrent?.limits, beforeTorrent?.limits, "snapshot limits must not change")
+        XCTAssertEqual(after.applied, before.applied, "engine-applied limits must not change")
+        XCTAssertEqual(after.persisted, before.persisted, "persisted limits must not change")
+    }
 
     private func makeCoordinator(engine: StubTransferEngine, bus: TransferEventBus) async throws -> (TransferCoordinator, PersistenceStore, StubTransferEngine) {
         let store = PersistenceStore(dataDirectory: profile.rootURL)

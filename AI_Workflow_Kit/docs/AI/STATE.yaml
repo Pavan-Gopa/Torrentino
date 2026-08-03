@@ -1,8 +1,7 @@
 current_step: WP-08
 step_description: >-
-  Native UX completeness — final validation polish: native invalidArgument
-  through full IPC stack, stronger tracker URL validation + tests, split
-  invalid-limit XCTest cases.
+  Native UX completeness — final validation polish under review (native
+  invalidArgument IPC path, tracker URL validation, split invalid-limit tests).
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
@@ -27,25 +26,25 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: in_progress
+  status: waiting_review
   attempts: 3
   note: >-
-    Validation review PARTIAL A/B/C. Only FEEDBACK §5 items 1-3. Attempt 3 of
-    narrowed validation series.
+    Coder claims items 1-3 closed. Orchestrator restored accidental Legacy/Tauri
+    dirty tree before commit (frozen). Product-only commit for review.
 review:
-  status: changes_requested
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
+  verdict: null
   note: >-
-    Need native-invalid through full IPC path; stricter host/IPv6/percent
-    tracker validation + tests; split independent invalid-limit XCTests.
+    Re-review FEEDBACK §5 items 1-3 only. Confirm Legacy untouched. Full suite
+    should be 97/97 after Legacy restore (coder saw 96/97 due to Legacy drift).
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-08
   bugs_open: open
-  note: Full suite timed out in review (300s); Tester will run properly after APPROVED.
-next_actor: coder
+  note: Tester after APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -53,10 +52,9 @@ working_roots:
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: 8db5aca
+  last_commit: pending
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Only FEEDBACK.md §5 items 1-3. No session/reconnect reopen. No WP-09+.
-  waiting_review handoff. No git commit.
+  Final validation handoff awaiting review.

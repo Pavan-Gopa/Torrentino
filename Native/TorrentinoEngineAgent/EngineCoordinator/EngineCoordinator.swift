@@ -68,6 +68,14 @@ public actor EngineCoordinator {
         try voidCall(payload) { try adapter.setLimitsWithPayloadData($0) }
     }
 
+    /// Reads the native handle's current bandwidth limits without changing it.
+    /// The raw -1 unlimited sentinel is retained for integration assertions.
+    public func currentLimits(torrentID: String) throws -> AppliedTorrentLimitsDTO {
+        let payload = try encode(TorrentIDPayload(torrentID: torrentID))
+        let response = try envelope { try adapter.currentLimits(withPayloadData: payload) }
+        return try decode(AppliedTorrentLimitsDTO.self, from: response)
+    }
+
     public func editTrackers(torrentID: String, trackers: [String]) throws {
         let payload = try encode(TrackersPayload(torrentID: torrentID, trackers: trackers))
         try voidCall(payload) { try adapter.editTrackers(withPayloadData: $0) }

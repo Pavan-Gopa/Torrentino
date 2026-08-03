@@ -1,57 +1,60 @@
-# FEEDBACK - WP-08 Validation Polish Review
+# FEEDBACK - WP-08 Validation Polish Implementation Handoff
 
-Date: 2026-08-03
-WP: WP-08 - validation polish, prior §5 items 1-3
-Focus commit: 8db5aca
-Reviewed range: 70fd9b5..HEAD
-Role: Verification Engineer (Code Reviewer)
-Scope: Invalid limits, real bridge integration coverage, native tracker validation
+Date: 2026-08-04
+WP: WP-08 - FEEDBACK section 5 items 1-3
+Role: Implementation Engineer (Coder)
+Scope: native invalidArgument IPC path, native tracker URL validation, split invalid-limit tests
 
-### 1. Build & tests
+## 1. Build and tests
 
-- `graphify query "TransferLimits validate handleSetLimits InspectorView setLimits editTrackers EngineBridgeAdapter bridge_swift_test bridge_smoke unsupportedOperation invalidArgument"`: PASS; 372 relevant nodes resolved and no missing/stale-graph blocker was observed.
-- `git log --oneline 70fd9b5..HEAD`: `8db5aca`, `6a74179`.
-- `git diff --stat 70fd9b5..HEAD`: 16 files, 662 insertions, 135 deletions.
-- `git diff --check 70fd9b5..HEAD`: PASS.
-- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: BUILD SUCCEEDED.
-- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: TEST SUCCEEDED.
+- `graphify query "TransferLimits validate handleSetLimits bridge_swift_test editTrackers EngineBridge tracker URL validation invalidArgument TransferSmokeTests"`: PASS; scoped graph query completed before source inspection.
+- `graphify update .`: PASS; graph rebuilt after code changes. Graphify reported two existing zero-node JSON files (`acl-manifests.json`, `capabilities.json`) and continued successfully.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: PASS.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: PASS; all XCTest targets passed, including the new TransferSmokeTests.
 - `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: PASS.
 - `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`: PASS.
 - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp08_per_torrent_limits.sh`: PASS.
 - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp08_trackers_reannounce.sh`: PASS.
-- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_bridge_swift.sh`: PASS.
-- Optional `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: not completed; the 300-second run timed out during a repeated WP-04 Swift harness invocation. No full-suite result is claimed.
-- No git commit or push performed by the reviewer.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: 96/97 PASS. The only failure is `test_wp03_legacy_untouched.sh`, which detects pre-existing tracked changes under `Legacy/Tauri/`; Legacy/Tauri was not modified or reverted by this implementation.
+- `git diff --check`: PASS.
+- No git commit or push performed.
 
-### 2. WP compliance (A/B/C table)
+## 2. WP-08 items closed
 
-| Item | Status | Evidence and residual risk |
-| --- | --- | --- |
-| A - invalid limits | PARTIAL | `TransferLimits.normalized` is removed and no longer used. `TransferCoordinator.handleSetLimits` validates before persistence, native mutation, revision bump, and publication (`TransferCoordinator.swift:997-1040`). Native checks signed-int range and finite/non-negative goals (`EngineBridge.cpp:807-835`), and Inspector parse failures surface an `invalidArgument` command error (`InspectorView.swift:262-350`). The rejection test uses one composite value whose first failure is negative, so overflow/non-finite/parse-fail and explicit zero semantics are not independently proven with prior-state assertions. |
-| B - real integration coverage | PARTIAL | The Swift harness proves real bandwidth success, positive ratio/seed `unsupportedOperation`, native direct `invalidArgument`, tracker replacement, empty replacement, reannounce, and a malformed non-string adapter payload. The agent IPC invalid case (`bridge_swift_test.swift:169-177`) is rejected by `TransferCoordinator` validation before `BridgeTransferEngine -> EngineCoordinator -> adapter -> EngineBridge`; the direct native invalid case (`bridge_swift_test.swift:78-86`) does not produce an IPC result. Non-array payload rejection is implemented but not exercised. Thus the required native invalid-to-IPC typed path is not fully proven. |
-| C - native tracker validation | PARTIAL | The adapter rejects non-array and non-string elements (`EngineBridgeAdapter.mm:135-155`), C++ checks scheme, authority, port, whitespace, and controls (`EngineBridge.cpp:95-159`), and empty replacement is tested. The host check accepts any non-empty string made of a small character set, while the IPv6 check only checks characters and the presence of a colon; malformed percent escapes, invalid IPv6 group counts, and malformed host forms can pass. There are no native tests for non-array payloads or these host/IPv6 edge cases. |
+### Item 1 - native invalidArgument through full IPC
 
-### 3. Architecture
+- `bridge_swift_test.swift` now sends `seedTimeSeconds: Int64.max` through `TransferCoordinator -> BridgeTransferEngine -> EngineCoordinator -> EngineBridgeAdapter -> EngineBridge`.
+- Swift coordinator validation accepts the non-negative seed value; native `EngineBridge` rejects it as outside the native signed range and the result remains typed IPC `invalidArgument`.
+- The harness asserts unchanged snapshot, per-record revision, native handle-applied limits through the read-only `currentLimits` bridge DTO, and persisted limits.
+- The same harness directly asserts adapter `invalidArgument` for a non-array `trackers` value and a non-string tracker element.
+- Evidence: Swift bridge harness in `Native/TorrentinoEngineBridge/harness/bridge_swift_test.swift`; `test_bridge_swift.sh` PASS.
 
-- Swift 6 Complete and warnings-as-errors build successfully.
-- `TransferLimits` and bridge DTOs remain immutable, `Codable`, and `Sendable`; validation is before durable state and engine mutation on the IPC command path.
-- UI remains a projection and sends mutations through the IPC command lane.
-- `TransferCoordinator` remains the record/revision publisher and preserves typed `unsupportedOperation` and `invalidArgument` faults instead of mapping them to `engineBusy`.
-- `EngineCoordinator` remains the Swift actor owner of the ObjC++ adapter; C++ and libtorrent types remain behind the PIMPL facade.
-- No WP-09+ or Legacy/Tauri product path was reopened. Previously passing session settings and reconnect items were not re-reviewed.
+### Item 2 - native tracker URL validation
 
-### 4. Comments
+- `EngineBridge.cpp` now validates percent escapes, controls/whitespace, scheme syntax and whitelist, DNS labels, IPv4 octets, bracketed IPv6 group/compression structure, and ports from 1 through 65535.
+- Empty tracker replacement remains valid.
+- `bridge_smoke.cpp` covers malformed IPv4/DNS hosts, malformed and overlong IPv6, invalid ports, unsupported schemes, controls, bad percent escapes, valid IPv6, and empty-list success.
+- Evidence: native `bridge_smoke` tracker assertions; `test_bridge_headless.sh` PASS.
 
-- The implementation removes the prior limit laundering and the source-level WP-08 QA checks pass.
-- The relevant QA checks are mostly source-contract checks; they do not establish the missing native invalid-to-IPC path or the untested native tracker edge cases.
-- `TransferCoordinator.engineFault` still accepts `operation` and `recordID` without using them (`TransferCoordinator.swift:874-887`); minor readability issue, not the verdict driver.
+### Item 3 - split invalid-limit XCTests
 
-### 5. If changes_requested - concrete list only
+- Independent tests now cover `testTransferLimitsRejectsNegativeWithoutMutation`, `testTransferLimitsRejectsOverflowWithoutMutation`, `testTransferLimitsRejectsNonFiniteAtJSONBoundaryWithoutMutation`, and `testTransferLimitsRejectsInspectorParseFailureWithoutMutation`.
+- Each rejection checks the prior snapshot, record revision, Stub engine-applied limits, and persistence.
+- `testTransferLimitsEmptyAndZeroMeanUnlimited` explicitly covers empty and zero unlimited values.
+- Evidence: `TransferSmokeTests` in `Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift`; full `xcodebuild test` PASS.
 
-1. [P1] Extend `bridge_swift_test.swift` with one request that traverses `TransferCoordinator -> BridgeTransferEngine -> EngineCoordinator -> adapter -> EngineBridge` and receives a native `invalidArgument` in the IPC result. The current agent invalid-limit case exits at `TransferCoordinator.swift:997-1004`; use a native-rejected value that passes the Swift coordinator boundary, assert the typed IPC fault, and assert snapshot, revision, engine, and persistence remain unchanged. Add direct adapter assertions for both a non-array `trackers` value and a non-string element.
-2. [P1] Strengthen `EngineBridge.cpp:66-92,95-159` tracker URL validation at the native boundary. Validate host syntax/IPv4 and IPv6 structure and percent escapes, not only non-empty allowed characters; add native tests for malformed hosts, invalid IPv6, invalid ports, controls, unsupported schemes, and preserve the valid empty-list case.
-3. [P2] Split `TransferSmokeTests.swift:820-862` into independent negative, overflow, non-finite, and parse-failure/Inspector cases. Assert for every rejected input that the prior snapshot, record revision, engine-applied limits, and persisted limits remain unchanged; add explicit empty/zero unlimited coverage.
+## 3. Architecture
 
---------------------------------------------------------------------------------
+- `EngineBridge` remains the only libtorrent-facing PIMPL translation unit. The new applied-limit read is a read-only native-handle query used to verify mutation invariants.
+- `EngineBridgeAdapter` continues to expose only Foundation JSON/NSError surfaces; `EngineCoordinator` owns the adapter inside its actor and decodes immutable Sendable DTOs.
+- `BridgeTransferEngine` remains the production `TransferEngine` implementation. `TransferCoordinator` remains the record/revision/persistence authority and rolls persistence back when native mutation rejects a candidate.
+- Tracker validation is enforced at the native boundary in addition to existing Swift URL normalization and adapter JSON shape checks.
+- No session settings or reconnect work was reopened. No WP-09+ or Legacy/Tauri product path was changed.
 
-RESULT: CHANGES_REQUESTED
+## 4. Comments
+
+- Comments added for the native-only signed-range validation, raw native limit semantics, URL parser edge cases, and JSON non-finite rejection are in English and explain non-obvious validation behavior.
+- The full QA suite's single WP-03 failure is unrelated pre-existing `Legacy/Tauri` working-tree drift; it was intentionally left untouched per scope.
+- Required WP-08 verification is green. Waiting for review.
+
+RESULT: waiting_review

@@ -41,7 +41,15 @@ if "request.limits" not in body:
 if "validationError" not in body or "invalidArgument" not in body:
     issues.append("handleSetLimits has no strict validation or typed invalidArgument fault")
 
-for name in ("testTransferLimitsRoundTrip", "testTransferLimitsRejectInvalidValueWithoutMutation", "testSeedGoalsRoundTrip"):
+for name in (
+    "testTransferLimitsRoundTrip",
+    "testTransferLimitsRejectsNegativeWithoutMutation",
+    "testTransferLimitsRejectsOverflowWithoutMutation",
+    "testTransferLimitsRejectsNonFiniteAtJSONBoundaryWithoutMutation",
+    "testTransferLimitsRejectsInspectorParseFailureWithoutMutation",
+    "testTransferLimitsEmptyAndZeroMeanUnlimited",
+    "testSeedGoalsRoundTrip",
+):
     if f"func {name}" not in tests:
         issues.append(f"missing unit axis {name}")
 

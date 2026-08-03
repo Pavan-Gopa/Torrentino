@@ -231,6 +231,18 @@ public struct HealthDTO: Codable, Sendable, Equatable {
     }
 }
 
+/// Raw per-torrent bandwidth limits reported by libtorrent. `0` means
+/// unlimited for the pinned native handle getter.
+public struct AppliedTorrentLimitsDTO: Codable, Sendable, Equatable {
+    public let maxDownloadBytesPerSec: Int64
+    public let maxUploadBytesPerSec: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case maxDownloadBytesPerSec = "max-download-bytes-per-sec"
+        case maxUploadBytesPerSec = "max-upload-bytes-per-sec"
+    }
+}
+
 /// Resume data response (`ResumeDataDTO`).
 public struct ResumeDataDTO: Codable, Sendable, Equatable {
     public let torrentID: String

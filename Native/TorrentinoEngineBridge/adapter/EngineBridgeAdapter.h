@@ -77,7 +77,12 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 /// the bridge with the typed UnsupportedOperation error when non-zero because
 /// libtorrent ABI 2 has no per-torrent setter for those goals.
 - (nullable NSData *)setLimitsWithPayloadData:(NSData *)payloadData
-															 error:(NSError *_Nullable *_Nullable)error;
+																 error:(NSError *_Nullable *_Nullable)error;
+
+/// Returns the raw native bandwidth limits for {"torrent-id"}. This pinned
+/// libtorrent ABI reports 0 for an unlimited getter value.
+- (nullable NSData *)currentLimitsWithPayloadData:(NSData *)payloadData
+																 error:(NSError *_Nullable *_Nullable)error;
 
 /// Replaces the complete tracker URL list for {"torrent-id", "trackers"}.
 - (nullable NSData *)editTrackersWithPayloadData:(NSData *)payloadData

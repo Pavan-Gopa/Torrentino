@@ -55,7 +55,7 @@ bool valid_tracker_port(std::string_view port)
 	}
 	unsigned int value = 0;
 	for (const char character : port) {
-		if (!std::isdigit(static_cast<unsigned char>(character))) {
+		if (character < '0' || character > '9') {
 			return false;
 		}
 		value = value * 10u + static_cast<unsigned int>(character - '0');
@@ -63,37 +63,204 @@ bool valid_tracker_port(std::string_view port)
 	return value > 0 && value <= 65535;
 }
 
-bool valid_tracker_host(std::string_view host)
+bool is_ascii_hex_digit(char character)
+{
+	return (character >= '0' && character <= '9')
+		|| (character >= 'a' && character <= 'f')
+		|| (character >= 'A' && character <= 'F');
+}
+
+bool valid_percent_escapes(std::string_view value)
+{
+	for (std::size_t index = 0; index < value.size(); ++index) {
+		if (value[index] != '%') {
+			continue;
+		}
+		if (index + 2 >= value.size()
+			|| !is_ascii_hex_digit(value[index + 1])
+			|| !is_ascii_hex_digit(value[index + 2])) {
+			return false;
+		}
+		index += 2;
+	}
+	return true;
+}
+
+bool valid_tracker_ipv4(std::string_view host)
 {
 	if (host.empty()) {
 		return false;
 	}
-	for (const char character : host) {
-		if (!std::isalnum(static_cast<unsigned char>(character))
-			&& character != '.' && character != '-' && character != '_' && character != '%') {
+
+	std::size_t start = 0;
+	int segments = 0;
+	while (start <= host.size()) {
+		const std::size_t end = host.find('.', start);
+		const std::size_t length = end == std::string_view::npos
+			? host.size() - start : end - start;
+		if (length == 0 || length > 3) {
 			return false;
 		}
+
+		unsigned int value = 0;
+		for (std::size_t index = start; index < start + length; ++index) {
+			const char character = host[index];
+			if (character < '0' || character > '9') {
+				return false;
+			}
+			value = value * 10u + static_cast<unsigned int>(character - '0');
+		}
+		if (value > 255) {
+			return false;
+		}
+		++segments;
+
+		if (end == std::string_view::npos) {
+			break;
+		}
+		start = end + 1;
+	}
+	return segments == 4;
+}
+
+bool valid_tracker_host(std::string_view host)
+{
+	if (host.empty() || host.size() > 253 || host.find('%') != std::string_view::npos) {
+		return false;
+	}
+
+	// A dotted host made only of decimal characters is an IPv4 literal, not a
+	// DNS name. Treating it as such prevents malformed addresses such as
+	// 999.1.1.1 or 127.0.0 from passing as ordinary hostnames.
+	if (host.find('.') != std::string_view::npos) {
+		bool decimalDotted = true;
+		for (const char character : host) {
+			if ((character < '0' || character > '9') && character != '.') {
+				decimalDotted = false;
+				break;
+			}
+		}
+		if (decimalDotted) {
+			return valid_tracker_ipv4(host);
+		}
+	}
+
+	// A trailing root label is valid DNS syntax, but an otherwise empty name
+	// or an empty interior label is not.
+	if (host.back() == '.') {
+		host.remove_suffix(1);
+		if (host.empty() || host.back() == '.') {
+			return false;
+		}
+	}
+	if (host.empty()) {
+		return false;
+	}
+
+	std::size_t start = 0;
+	while (start < host.size()) {
+		const std::size_t end = host.find('.', start);
+		const std::size_t length = end == std::string_view::npos
+			? host.size() - start : end - start;
+		if (length == 0 || length > 63) {
+			return false;
+		}
+		const std::string_view label = host.substr(start, length);
+		if ((label.front() < '0' || label.front() > '9')
+			&& (label.front() < 'A' || label.front() > 'Z')
+			&& (label.front() < 'a' || label.front() > 'z')) {
+			return false;
+		}
+		if ((label.back() < '0' || label.back() > '9')
+			&& (label.back() < 'A' || label.back() > 'Z')
+			&& (label.back() < 'a' || label.back() > 'z')) {
+			return false;
+		}
+		for (const char character : label) {
+			const bool asciiAlphaNumeric = (character >= '0' && character <= '9')
+				|| (character >= 'A' && character <= 'Z')
+				|| (character >= 'a' && character <= 'z');
+			if (!asciiAlphaNumeric && character != '-') {
+				return false;
+			}
+		}
+		if (end == std::string_view::npos) {
+			break;
+		}
+		start = end + 1;
 	}
 	return true;
 }
 
 bool valid_tracker_ipv6_literal(std::string_view host)
 {
-	bool hasColon = false;
-	for (const char character : host) {
-		if (character == ':') {
-			hasColon = true;
-			continue;
-		}
-		if (!std::isxdigit(static_cast<unsigned char>(character)) && character != '.') {
-			return false;
-		}
+	if (host.empty() || host.find('%') != std::string_view::npos) {
+		return false;
 	}
-	return hasColon;
+
+	const std::size_t compression = host.find("::");
+	if (compression != std::string_view::npos
+		&& (host.find("::", compression + 1) != std::string_view::npos
+			|| host.find(":::") != std::string_view::npos)) {
+		return false;
+	}
+
+	const auto countGroups = [](std::string_view part, bool allowIPv4Tail, int& count) {
+		if (part.empty()) {
+			return true;
+		}
+		std::size_t start = 0;
+		while (start < part.size()) {
+			const std::size_t end = part.find(':', start);
+			const std::size_t length = end == std::string_view::npos
+				? part.size() - start : end - start;
+			if (length == 0) {
+				return false;
+			}
+			const std::string_view token = part.substr(start, length);
+			if (token.find('.') != std::string_view::npos) {
+				if (!allowIPv4Tail || end != std::string_view::npos
+					|| !valid_tracker_ipv4(token)) {
+					return false;
+				}
+				count += 2;
+			} else {
+				if (length > 4) {
+					return false;
+				}
+				for (const char character : token) {
+					if (!is_ascii_hex_digit(character)) {
+						return false;
+					}
+				}
+				++count;
+			}
+			if (end == std::string_view::npos) {
+				break;
+			}
+			start = end + 1;
+		}
+		return true;
+	};
+
+	if (compression == std::string_view::npos) {
+		int groups = 0;
+		return countGroups(host, true, groups) && groups == 8;
+	}
+
+	const std::string_view left = host.substr(0, compression);
+	const std::string_view right = host.substr(compression + 2);
+	int groups = 0;
+	return countGroups(left, false, groups)
+		&& countGroups(right, true, groups)
+		&& groups < 8;
 }
 
 bool valid_tracker_url(std::string_view url)
 {
+	if (url.empty() || !valid_percent_escapes(url)) {
+		return false;
+	}
 	for (const char character : url) {
 		if (std::iscntrl(static_cast<unsigned char>(character))
 			|| std::isspace(static_cast<unsigned char>(character))) {
@@ -106,7 +273,18 @@ bool valid_tracker_url(std::string_view url)
 		return false;
 	}
 	std::string scheme(url.substr(0, separator));
+	if (scheme.empty()
+		|| ((scheme.front() < 'A' || scheme.front() > 'Z')
+			&& (scheme.front() < 'a' || scheme.front() > 'z'))) {
+		return false;
+	}
 	for (char& character : scheme) {
+		const bool asciiAlphaNumeric = (character >= '0' && character <= '9')
+			|| (character >= 'A' && character <= 'Z')
+			|| (character >= 'a' && character <= 'z');
+		if (!asciiAlphaNumeric && character != '+' && character != '-' && character != '.') {
+			return false;
+		}
 		character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
 	}
 	if (scheme != "http" && scheme != "https" && scheme != "udp") {
@@ -825,6 +1003,15 @@ struct EngineBridge::Impl {
 			return Result<void>::failed(BridgeError::invalid_argument,
 				"setLimits: seed time must be non-negative");
 		}
+		// Swift intentionally validates seed goals only as non-negative because
+		// this native boundary owns the signed range of its ABI-facing values.
+		// Rejecting an unrepresentable value here gives the full IPC path a native
+		// invalidArgument case without persisting or applying it.
+		if (limits.seed_time_seconds.has_value()
+			&& *limits.seed_time_seconds > std::numeric_limits<int>::max()) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"setLimits: seed time is outside the native signed range");
+		}
 		// libtorrent 2.x exposes per-torrent bandwidth setters, but its ABI 2
 		// public handle has no per-torrent ratio or seed-time setter. Refusing
 		// those fields is safer than persisting a goal the engine will ignore.
@@ -853,6 +1040,32 @@ struct EngineBridge::Impl {
 		} catch (...) {
 			return Result<void>::failed(BridgeError::internal,
 				"setLimits failed: unknown exception");
+		}
+	}
+
+	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		const Result<void> startedResult = requireStartedLocked();
+		if (!startedResult.is_ok()) {
+			return Result<AppliedTorrentLimits>::failed(
+				startedResult.error_code(), startedResult.error_message());
+		}
+		const Result<lt::torrent_handle> found = findHandleLocked(id);
+		if (!found.is_ok()) {
+			return Result<AppliedTorrentLimits>::failed(found.error_code(), found.error_message());
+		}
+		try {
+			AppliedTorrentLimits result;
+			result.max_download_bytes_per_sec = found.value().download_limit();
+			result.max_upload_bytes_per_sec = found.value().upload_limit();
+			return Result<AppliedTorrentLimits>::ok(std::move(result));
+		} catch (const std::exception& e) {
+			return Result<AppliedTorrentLimits>::failed(
+				BridgeError::engine_failure, std::string("currentLimits failed: ") + e.what());
+		} catch (...) {
+			return Result<AppliedTorrentLimits>::failed(
+				BridgeError::internal, "currentLimits failed: unknown exception");
 		}
 	}
 
@@ -1210,6 +1423,19 @@ Result<void> EngineBridge::setLimits(const TorrentRecordID& id,
 	} catch (...) {
 		return Result<void>::failed(BridgeError::internal,
 			detail::internal_message("setLimits: unknown exception"));
+	}
+}
+
+Result<AppliedTorrentLimits> EngineBridge::currentLimits(const TorrentRecordID& id) noexcept
+{
+	try {
+		return impl_->currentLimits(id);
+	} catch (const std::exception& e) {
+		return Result<AppliedTorrentLimits>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<AppliedTorrentLimits>::failed(
+			BridgeError::internal,
+			detail::internal_message("currentLimits: unknown exception"));
 	}
 }
 

@@ -85,6 +85,14 @@ struct TorrentLimits {
 	std::optional<std::int64_t> seed_time_seconds;
 };
 
+// Raw limits reported by the native handle. This libtorrent ABI reports 0 for
+// an unlimited getter value; keeping the native result lets integration tests
+// prove a rejected mutation did not change live engine state.
+struct AppliedTorrentLimits {
+	std::int64_t max_download_bytes_per_sec = -1;
+	std::int64_t max_upload_bytes_per_sec = -1;
+};
+
 struct AddSpecification {
 	// Exactly one of torrent_file / magnet_uri must be non-empty.
 	std::vector<char> torrent_file;
@@ -252,6 +260,7 @@ public:
 	Result<void> resume(const TorrentRecordID& id) noexcept;
 	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
 	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits) noexcept;
+	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id) noexcept;
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;
 	Result<void> reannounce(const TorrentRecordID& id) noexcept;
 	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id, bool delete_files) noexcept;

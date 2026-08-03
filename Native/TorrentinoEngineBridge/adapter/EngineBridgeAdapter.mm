@@ -15,6 +15,7 @@
 
 using torrentino::bridge::AddResult;
 using torrentino::bridge::AddSpecification;
+using torrentino::bridge::AppliedTorrentLimits;
 using torrentino::bridge::BootReport;
 using torrentino::bridge::BridgeError;
 using torrentino::bridge::EngineAlertDTO;
@@ -284,6 +285,14 @@ NSDictionary* healthToJSON(const HealthDTO& health)
 	};
 }
 
+NSDictionary* appliedLimitsToJSON(const AppliedTorrentLimits& limits)
+{
+	return @{
+		jsonKey("max-download-bytes-per-sec") : @(limits.max_download_bytes_per_sec),
+		jsonKey("max-upload-bytes-per-sec") : @(limits.max_upload_bytes_per_sec),
+	};
+}
+
 RemovalToken removalTokenFromJSON(NSDictionary* dict)
 {
 	RemovalToken token;
@@ -490,7 +499,7 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 }
 
 - (nullable NSData *)setLimitsWithPayloadData:(NSData *)payloadData
-															 error:(NSError *_Nullable *_Nullable)error
+																 error:(NSError *_Nullable *_Nullable)error
 {
 	return runBridge([&]() -> NSData* {
 		NSDictionary* dict = toJSON(payloadData, error);
@@ -499,6 +508,19 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		}
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
 		return voidResultToData(_engine->setLimits(id, torrentLimitsFromJSON(dict)), error);
+	}, error);
+}
+
+- (nullable NSData *)currentLimitsWithPayloadData:(NSData *)payloadData
+																 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		return resultToData(_engine->currentLimits(id), appliedLimitsToJSON, error);
 	}, error);
 }
 
