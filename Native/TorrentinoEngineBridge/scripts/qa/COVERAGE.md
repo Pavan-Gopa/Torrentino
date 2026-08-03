@@ -1,14 +1,76 @@
-# Torrentino QA Coverage — WP-07 (Core transfer vertical slice)
+# Torrentino QA Coverage — WP-08 (Native UX completeness)
 
-Updated: 2026-08-03 (Test Engineer, WP-07 QA cycle)
+Updated: 2026-08-04 (Test Engineer, WP-08 QA cycle)
 Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
-**Last full suite:** 2026-08-03 — **84/84 PASS (GREEN)** — see `REPORT.md`
-**Full XCTest run:** `TorrentinoIPCTests` (74) + `TorrentinoAppTests` (9) + `TorrentinoDomainTests` (19) + `TorrentinoEngineAgentPersistenceTests` (16) + `TransferSmokeTests` (57) — **175/175 PASS**
+**Last full suite:** 2026-08-04 — **99/100 PASS; 1 ENVIRONMENTAL Legacy FAIL (waived)** — see `REPORT.md`
+**Full XCTest run:** **201/201 PASS** — see `REPORT.md`
+
+## WP-08 Feature Matrix
+
+| # | Feature | Dedicated QA / XCTest / bridge evidence | Happy | Error / invalid | Edge | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Inspector tabs, selection sync, Cmd+I | `test_wp08_inspector_tabs.sh`; `TorrentListProjection` XCTest | tabs and selected row projection | no-selection path is source-covered | four tabs and shortcut | covered / PASS |
+| 2 | Sorting, columns, search, multi-select, batch actions | `test_wp08_sorting_search.sh`; `testTorrentListProjectionSearchFilterAndSort` | six sortable columns and search | command-lane batch actions | case-insensitive query and filter projection | covered / PASS |
+| 3 | Drag/drop and Finder associations | `test_wp08_dnd_association.sh` | `.torrent` and magnet drop/open handlers | non-torrent and non-magnet inputs rejected | UTI extension + `magnet` URL scheme in Info.plist | covered / PASS |
+| 4 | Native menus and shortcuts | `test_wp08_menus_shortcuts.sh` | File/Edit/Torrent/View menus | duplicate shortcut detection | Cmd+N, Cmd+Shift+N, Cmd+., Cmd+/, Cmd+Delete, Cmd+R, Cmd+I, Cmd+F | covered / PASS |
+| 5 | Settings sections and transaction | `test_wp08_settings_sections.sh`, `test_wp08_settings_transaction.sh`; IPC transaction tests | validate/persist/apply | validation, revision conflict, persist/apply rollback | revision fetch and inline errors | covered / PASS |
+| 6 | Session settings live apply | `test_wp08_session_settings.sh`; 4 new `TransferSmokeTests`; `bridge_smoke` | all session fields reach live engine | invalid candidate and apply failure do not mutate | proxy metadata, all rate/toggle fields, revision persistence | covered / PASS |
+| 7 | Tracker edit/replace/reannounce | `test_wp08_trackers_reannounce.sh`; 3 `TransferSmokeTests`; bridge harness | fetch, replace, empty replacement, reannounce | malformed URL, missing record, cooldown | deduplicated additions and typed rate limit | covered / PASS |
+| 8 | Per-torrent bandwidth and typed goals | `test_wp08_per_torrent_limits.sh`; limit XCTest; bridge harness | bandwidth round-trip | invalidArgument, unsupported ratio/seed | empty/zero unlimited, non-finite and native overflow | covered / PASS |
+| 9 | Notifications | `test_wp08_notifications.sh`; completion/all-complete/error XCTest | authoritative snapshot transition processing | error transition | de-duplication and all-complete edge | covered / PASS |
+| 10 | Full EN/RU catalog | `test_wp08_localization_full.sh` | 183 keys with EN+RU values | missing source references fail | 18 long Russian values | covered / PASS |
+| 11 | Accessibility and reconnect focus | `test_wp08_accessibility.sh`, `test_wp08_focus_reconnect.sh` | labels, contrast, reduce motion, focus hooks | inline errors; reconnect snapshot recovery | sheet dismissal and connectionGeneration | covered / PASS (source level) |
+| 12 | Keychain credential boundary | `test_wp08_keychain.sh`; 4 Keychain XCTest methods | save/load/delete | load after delete returns nil | detached Security calls, no UserDefaults, password omitted from IPC candidate | covered / PASS |
+| 13 | 100/500 row performance | `test_wp08_fixture_perf.sh`; 2 AppTests with `measure` | 100/500 fixture and projection | empty fixture is bounded | sorted/filter projection at 500 rows | covered / PASS |
+| 14 | Full-stack invalidArgument and malformed trackers | `test_wp08_bridge_integration.sh`; `bridge_swift_test.swift` | native bandwidth and tracker IPC success | `Int64.max`, malformed array/element, invalid URL | snapshot/revision/engine/persistence no-mutation assertions | covered / PASS |
+| 15 | Bridge integration | `test_wp08_bridge_integration.sh`; `test_bridge_headless.sh`; `test_bridge_swift.sh` | bandwidth, tracker replace, reannounce | unsupported and invalid typed faults | real Swift -> ObjC++ -> C++ path | covered / PASS |
+
+## WP-08 Gate Matrix
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| Keyboard-only core flow | `test_wp08_menus_shortcuts.sh`, Cmd+F/Cmd+I/selection source contracts | PASS (source level) |
+| VoiceOver audit | `test_wp08_accessibility.sh`, explicit labels and hidden-checkbox label | PASS (source minimum; runtime UI audit residual) |
+| Light/Dark/Increase Contrast/Reduce Motion | dynamic AppKit colors; contrast/reduce-motion source contracts | PASS (source level) |
+| Focus restoration after sheet/reconnect | `test_wp08_focus_reconnect.sh`, `connectionGeneration` and AppKit first responder path | PASS (source minimum; runtime UI audit residual) |
+| Zero missing String Catalog keys | `test_wp08_localization_full.sh` | PASS |
+| Russian long-string layout | 18 catalog cases and fixed Settings/Inspector frames | PASS (source evidence; no pixel snapshot) |
+| No routine modal alerts | `test_wp08_accessibility.sh` rejects app `.alert` usage | PASS (source level) |
+| 100-500 row performance | fixture/projection `measure` XCTest and QA contract | PASS |
+| Settings transaction and honest live apply | session-settings XCTest + native bridge smoke | PASS |
+| Limits/trackers/reannounce engine path and typed faults | dedicated XCTest plus real bridge harness | PASS |
+| Keychain credentials boundary | detached Security API checks and save/load/delete XCTest | PASS |
+| Legacy product tree clean in history | prior approved range is clean; working-tree check is Human research dirt | PASS (environmental working-tree fail waived) |
+
+## WP-08 Execution
+
+| Layer | Result |
+| --- | --- |
+| WP-01..WP-07 regression scripts | 83/84 PASS; `test_wp03_legacy_untouched.sh` environmental FAIL only |
+| Existing WP-08 scripts | 13/13 PASS |
+| New WP-08 scripts | 3/3 PASS: `bridge_integration`, `focus_reconnect`, `session_settings` |
+| Full QA suite | 99/100 PASS; PRODUCT GREEN under Legacy waiver |
+| `xcodebuild build` | BUILD SUCCEEDED |
+| `xcodebuild test` | TEST SUCCEEDED, 201/201 |
+| `test_bridge_headless.sh` | PASS |
+| `test_bridge_swift.sh` | PASS |
+
+## Remaining Audit Residuals
+
+| Gap | Severity | Notes |
+| --- | --- | --- |
+| Runtime VoiceOver / AppKit focus audit | P2 | Deterministic source contracts and XCTest projection coverage pass; signed UI automation was not run in this headless QA cycle. |
+| Full 24h soak burn-in | N/A | Wall-clock gate; existing WP-01 smoke and sanitizer regressions pass. |
+| Legacy working-tree dirt | ENVIRONMENTAL | `Legacy/Tauri` tracked changes belong to Human research. Do not restore or edit; Orchestrator waiver applies. |
+
+---
+
+## Regression Base (WP-01..WP-07)
 
 ## Coverage policy
 
 - Monotonic: old WP-01..WP-06 scripts are never deleted; each WP adds tests.
-- Full suite always runs WP-01 + WP-02 + WP-03 + WP-04 + WP-05 + WP-06 + WP-07.
+- Full suite always runs WP-01 + WP-02 + WP-03 + WP-04 + WP-05 + WP-06 + WP-07 + WP-08.
 - Exit 0 = pass; isolated cleanup on EXIT.
 - ADR-010: every public API ≥3 unit axes; every actor ≥1 stress; every parser ≥1 negative/fuzz.
 - WP-07 surface is the core transfer vertical slice (`Native/TorrentinoEngineAgent/Transfer/`,

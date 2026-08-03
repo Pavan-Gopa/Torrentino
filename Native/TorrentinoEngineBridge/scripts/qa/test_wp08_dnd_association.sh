@@ -34,6 +34,14 @@ if [[ ${#INFO_FILES[@]} -gt 0 ]]; then
 			*) qa_die "${key} missing from source Info.plist" ;;
 		esac
 	done
+	case "${info_text}" in
+		*"com.bittorrent.torrent"*"torrent"*) qa_ok "torrent UTI and extension are associated" ;;
+		*) qa_die "torrent UTI/extension association is incomplete" ;;
+	esac
+	case "${info_text}" in
+		*"CFBundleURLSchemes"*"magnet"*) qa_ok "magnet URL scheme is associated" ;;
+		*) qa_die "magnet URL scheme association is incomplete" ;
+	esac
 else
 	grep -Eq 'CFBundleDocumentTypes|INFOPLIST_KEY_CFBundleDocumentTypes' "${PBXPROJ}" \
 		|| qa_die "CFBundleDocumentTypes missing from generated app Info.plist configuration"

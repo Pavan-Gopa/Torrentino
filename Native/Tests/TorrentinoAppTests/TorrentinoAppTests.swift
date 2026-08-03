@@ -281,6 +281,25 @@ final class TorrentinoAppTests: TestProfileCase {
         })
     }
 
+    func testTorrentListProjectionSearchFilterAndSort() {
+        let rows = FixtureLibrary.snapshot(count: 100)
+        let projected = TorrentListProjection.project(
+            Array(rows.reversed()),
+            query: "dEmO aRcHiVe 042",
+            filter: .all,
+            sortOrder: [KeyPathComparator(\TorrentSnapshot.displayName)]
+        )
+        XCTAssertEqual(projected.map(\.displayName), ["Demo Archive 042 - Backup"])
+
+        let seeding = TorrentListProjection.project(rows, filter: .seeding)
+        XCTAssertFalse(seeding.isEmpty)
+        XCTAssertTrue(seeding.allSatisfy { $0.activity == .seeding })
+
+        let paused = TorrentListProjection.project(rows, filter: .paused)
+        XCTAssertFalse(paused.isEmpty)
+        XCTAssertTrue(paused.allSatisfy { $0.desiredState == .paused })
+    }
+
     func testFixtureLibrary100And500Performance() {
         XCTAssertEqual(FixtureLibrary.snapshot(count: 100).count, 100)
         XCTAssertEqual(FixtureLibrary.snapshot(count: 500).count, 500)

@@ -1,4 +1,97 @@
-# QA Verification Report — WP-07 Core Transfer Vertical Slice (final run)
+# QA Verification Report — WP-08 Native UX Completeness (final run)
+
+**Date:** 2026-08-04
+**Role:** Test Engineer (test code and defect detection only)
+**Verdict:** **PRODUCT GREEN / ENVIRONMENTAL LEGACY FAIL WAIVED**
+
+---
+
+## Executive Summary
+
+WP-08 is product-green. All product checks pass; the only non-zero result is the
+pre-existing tracked working-tree dirt reported by
+`test_wp03_legacy_untouched.sh` under `Legacy/Tauri`. It is Human research and
+was not read, edited, restored, staged, or committed by QA.
+
+| Layer | Previous baseline | This run | Result |
+| --- | --- | --- | --- |
+| WP-01..WP-07 regression | 84 scripts | 83/84 PASS; 1 environmental Legacy FAIL | PRODUCT PASS / waiver |
+| Existing WP-08 QA scripts | 13 scripts | 13/13 PASS | PASS |
+| New WP-08 QA scripts | 0 | 3/3 PASS | PASS |
+| Full QA suite | 84/84 in prior report | 99/100; one environmental failure | PRODUCT GREEN |
+| Full scheme XCTest | 175/175 in prior report | 201/201 PASS | PASS |
+| Headless bridge | prior PASS | PASS | PASS |
+| Swift bridge | prior PASS | PASS | PASS |
+| Product changes by QA | none | none | scope PASS |
+
+## New Coverage
+
+| Deliverable | What it detects | Result |
+| --- | --- | --- |
+| `TransferSmokeTests` session settings axes | fetch revision, live apply of all fields, persistence, invalid/revision no-mutation, engine rollback | PASS |
+| `TorrentinoAppTests.testTorrentListProjectionSearchFilterAndSort` | case-insensitive search, filter projections, stable sort ordering | PASS |
+| `test_wp08_session_settings.sh` | UI -> IPC -> agent -> EngineCoordinator -> native session field mapping | PASS |
+| `test_wp08_focus_reconnect.sh` | sheet/reconnect generation and AppKit first-responder restoration contract | PASS |
+| `test_wp08_bridge_integration.sh` | retention of real Swift/ObjC++/C++ limit, tracker, reannounce, settings and typed-fault scenarios | PASS |
+| strengthened DND/Keychain scripts | actual UTI/scheme association and detached credential boundary | PASS |
+
+## WP-08 Feature Results
+
+| Feature | Evidence | Result |
+| --- | --- | --- |
+| Inspector tabs, selection sync, Cmd+I | `test_wp08_inspector_tabs.sh` | PASS |
+| Sorting, columns, search, multi-selection, batch actions | `test_wp08_sorting_search.sh` plus projection XCTest | PASS |
+| Drag/drop and Finder association | `test_wp08_dnd_association.sh` and source Info.plist | PASS |
+| File/Edit/Torrent/View menus and shortcuts | `test_wp08_menus_shortcuts.sh` | PASS |
+| Settings sections and transaction | `test_wp08_settings_sections.sh`, `test_wp08_settings_transaction.sh` | PASS |
+| Session settings live apply | `test_wp08_session_settings.sh`, XCTest, native bridge | PASS |
+| Tracker edit/replace/reannounce | `test_wp08_trackers_reannounce.sh`, XCTest, bridge | PASS |
+| Per-torrent bandwidth and typed unsupported goals | `test_wp08_per_torrent_limits.sh`, XCTest, bridge | PASS |
+| Completion/all-complete/error notifications | `test_wp08_notifications.sh` and AppTests | PASS |
+| Full EN/RU catalog | `test_wp08_localization_full.sh` | PASS; 183 keys, 18 long RU cases |
+| Accessibility, contrast, reduce motion | `test_wp08_accessibility.sh` | PASS at source level |
+| Focus restore and reconnect generation | `test_wp08_focus_reconnect.sh` | PASS at source level |
+| Keychain boundary | `test_wp08_keychain.sh` and AppTests | PASS |
+| 100/500 row projection performance | `test_wp08_fixture_perf.sh` and measured AppTests | PASS |
+| Full-stack invalidArgument and malformed trackers | `test_wp08_bridge_integration.sh`, `bridge_swift_test.swift` | PASS |
+
+## Gate Matrix
+
+| Gate | Evidence | Status |
+| --- | --- | --- |
+| Keyboard-only core flow | menus, Cmd+F, Cmd+I, table selection source contracts | PASS (source minimum) |
+| VoiceOver audit | explicit labels and labeled file checkbox | PASS (source minimum; runtime audit residual) |
+| Light/Dark/Increase Contrast/Reduce Motion | dynamic colors and behavior source contracts | PASS (source minimum) |
+| Focus restoration after sheet/reconnect | connectionGeneration and first-responder path | PASS (source minimum; runtime audit residual) |
+| Zero missing String Catalog keys | full source-reference scan | PASS |
+| Russian long-string layout | catalog and fixed window sizing evidence | PASS (source evidence; no pixel snapshot) |
+| No routine modal alerts | app source scan | PASS |
+| 100-500 row performance | fixture/projection `measure` tests | PASS |
+| Settings transaction and live engine honesty | transaction + live engine XCTest and bridge | PASS |
+| Limits/trackers/reannounce typed engine path | XCTest and bridge harness | PASS |
+| Keychain credentials boundary | detached Security calls, no UserDefaults, negative load | PASS |
+| Legacy product tree clean in history | approved product range remains clean | PASS; working-tree environmental fail waived |
+
+## Environmental Waiver
+
+`test_wp03_legacy_untouched.sh` reports tracked changes in:
+
+- `Legacy/Tauri/src-tauri/src/gui.rs`
+- `Legacy/Tauri/ui/app.js`
+- `Legacy/Tauri/ui/styles.css`
+
+These are pre-existing Human research changes. They are not product-range
+commits and are not a product defect. The Orchestrator waiver applies: this
+failure alone does not make WP-08 product red.
+
+## Residual Audit Items
+
+- Runtime VoiceOver/AppKit focus automation was not run in this headless QA cycle; source-level minimums pass.
+- Full 24-hour soak is a wall-clock qualification and remains outside this run.
+
+---
+
+## Historical WP-07 Core Transfer Vertical Slice Report
 
 **Date:** 2026-08-03
 **Role:** Test Engineer (QA)

@@ -777,6 +777,176 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(fault.code, .invalidPayload)
     }
 
+    // MARK: - Session settings transaction and live apply
+
+    func testSessionSettingsFetchApplyLiveAndPersist() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let initial = try await fetchSettings(coordinator)
+        XCTAssertEqual(initial.revision, 1)
+
+        let candidate = EngineSettings(
+            downloadDirectory: profile.rootURL.appendingPathComponent("settings-downloads").path,
+            maxDownloadBytesPerSec: 32_768,
+            maxUploadBytesPerSec: 16_384,
+            listenPort: 49_001,
+            dhtEnabled: false,
+            lsdEnabled: false,
+            upnpEnabled: true,
+            natPmpEnabled: false,
+            encryptionEnabled: false,
+            proxy: ProxyConfiguration(
+                kind: .socks5,
+                host: "127.0.0.1",
+                port: 10_801,
+                username: "qa-user"
+            )
+        )
+        let reply = await coordinator.processCommand(encode(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: candidate,
+            expectedRevision: initial.revision
+        ))))
+        guard case .settingsApply(let applied) = try resultPayload(from: reply) else {
+            return XCTFail("expected settingsApply success")
+        }
+        XCTAssertEqual(applied.revision, initial.revision + 1)
+
+        let applications = await engineRef.settingsApplications()
+        XCTAssertEqual(applications, [candidate], "all live session fields must reach the engine")
+        let persisted = try await store.loadSettings()
+        XCTAssertEqual(persisted?.settings, candidate)
+        XCTAssertEqual(persisted?.revision, applied.revision)
+
+        let fetched = try await fetchSettings(coordinator)
+        XCTAssertEqual(fetched, SettingsFetchResult(settings: candidate, revision: applied.revision))
+    }
+
+    func testSessionSettingsApplyFailureRollsBack() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let initial = try await fetchSettings(coordinator)
+        let first = EngineSettings(
+            downloadDirectory: profile.rootURL.appendingPathComponent("first-settings").path,
+            maxDownloadBytesPerSec: 8_192,
+            maxUploadBytesPerSec: 4_096,
+            listenPort: 49_002,
+            dhtEnabled: true,
+            lsdEnabled: false,
+            upnpEnabled: false,
+            natPmpEnabled: true,
+            encryptionEnabled: true
+        )
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: first,
+            expectedRevision: initial.revision
+        )))))
+
+        let second = EngineSettings(
+            downloadDirectory: profile.rootURL.appendingPathComponent("second-settings").path,
+            maxDownloadBytesPerSec: 16_384,
+            maxUploadBytesPerSec: 2_048,
+            listenPort: 49_003,
+            dhtEnabled: false,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: false,
+            encryptionEnabled: false
+        )
+        await engineRef.failNextSettingsApplication()
+        let failed = await coordinator.processCommand(encode(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: second,
+            expectedRevision: initial.revision + 1
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: failed).result else {
+            return XCTFail("expected typed apply failure")
+        }
+        XCTAssertEqual(fault.code, .engineBusy)
+
+        let fetched = try await fetchSettings(coordinator)
+        XCTAssertEqual(fetched, SettingsFetchResult(settings: first, revision: initial.revision + 1))
+        let persisted = try await store.loadSettings()
+        XCTAssertEqual(persisted?.settings, first)
+        XCTAssertEqual(persisted?.revision, initial.revision + 1)
+        let applications = await engineRef.settingsApplications()
+        XCTAssertEqual(applications, [first, first], "failed apply must invoke the live-engine rollback")
+    }
+
+    func testSessionSettingsInvalidCandidateDoesNotMutate() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let initial = try await fetchSettings(coordinator)
+        let invalid = EngineSettings(
+            downloadDirectory: profile.rootURL.path,
+            maxDownloadBytesPerSec: 1_024,
+            maxUploadBytesPerSec: 2_048,
+            listenPort: 0,
+            dhtEnabled: false,
+            lsdEnabled: false,
+            upnpEnabled: false,
+            natPmpEnabled: false,
+            encryptionEnabled: true
+        )
+        let reply = await coordinator.processCommand(encode(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: invalid,
+            expectedRevision: initial.revision
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("expected validation failure")
+        }
+        XCTAssertEqual(fault.code, .settingsValidationFailed)
+        let applications = await engineRef.settingsApplications()
+        XCTAssertTrue(applications.isEmpty)
+        let persisted = try await store.loadSettings()
+        XCTAssertNil(persisted)
+        let fetched = try await fetchSettings(coordinator)
+        XCTAssertEqual(fetched, initial)
+    }
+
+    func testSessionSettingsRevisionConflictDoesNotMutate() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let initial = try await fetchSettings(coordinator)
+        let candidate = EngineSettings(
+            downloadDirectory: profile.rootURL.path,
+            maxDownloadBytesPerSec: 4_096,
+            maxUploadBytesPerSec: 4_096,
+            listenPort: 49_004,
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: false,
+            natPmpEnabled: false,
+            encryptionEnabled: true
+        )
+        let reply = await coordinator.processCommand(encode(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: candidate,
+            expectedRevision: 99
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("expected revision conflict")
+        }
+        XCTAssertEqual(fault.code, .settingsRevisionConflict)
+        let applications = await engineRef.settingsApplications()
+        XCTAssertTrue(applications.isEmpty)
+        let persisted = try await store.loadSettings()
+        XCTAssertNil(persisted)
+        let fetched = try await fetchSettings(coordinator)
+        XCTAssertEqual(fetched, initial)
+    }
+
     // MARK: - Per-torrent limits and seed goals
 
     func testTransferLimitsRoundTrip() async throws {
@@ -1473,6 +1643,15 @@ final class TransferSmokeTests: TestProfileCase {
         return snapshot
     }
 
+    private func fetchSettings(_ coordinator: TransferCoordinator) async throws -> SettingsFetchResult {
+        let reply = await coordinator.processCommand(encode(.fetchSettings(FetchSettingsRequest(requestID: RequestID()))))
+        let payload = try resultPayload(from: reply)
+        guard case .settingsFetch(let result) = payload else {
+            throw NSError(domain: "test", code: 8, userInfo: [NSLocalizedDescriptionKey: "unexpected \(payload)"])
+        }
+        return result
+    }
+
     private func filesPage(_ coordinator: TransferCoordinator, recordID: TorrentRecordID, cursor: FileCursor?, pageSize: Int = 200) async throws -> Page<FileEntry> {
         let reply = await coordinator.processCommand(encode(.fetchFiles(
             FetchFilesRequest(requestID: RequestID(), recordID: recordID, cursor: cursor, pageSize: pageSize, expectedRevision: 0)
@@ -1521,6 +1700,7 @@ private actor StubTransferEngine: TransferEngine {
     private var appliedTrackers: [String: [String]] = [:]
     private var reannouncedIDs: [String] = []
     private var failSettingsApply = false
+    private var failNextSettingsApply = false
     private var failTorrentMutation = false
     private var unsupportedTorrentMutation = false
     /// When non-nil, add() throws for every magnet whose URI contains the
@@ -1534,6 +1714,10 @@ private actor StubTransferEngine: TransferEngine {
     }
 
     func apply(settings: EngineSettings) async throws {
+        if failNextSettingsApply {
+            failNextSettingsApply = false
+            throw EngineStubError.settingsApplyFailed
+        }
         if failSettingsApply { throw EngineStubError.settingsApplyFailed }
         settingsHistory.append(settings)
         started = true
@@ -1565,6 +1749,10 @@ private actor StubTransferEngine: TransferEngine {
 
     func setSettingsApplyFailure(_ value: Bool) {
         failSettingsApply = value
+    }
+
+    func failNextSettingsApplication() {
+        failNextSettingsApply = true
     }
 
     func setUnsupportedTorrentMutation(_ value: Bool) {

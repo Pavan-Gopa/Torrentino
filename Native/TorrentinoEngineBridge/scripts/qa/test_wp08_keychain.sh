@@ -12,11 +12,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
 KEYCHAIN="${NATIVE_DIR}/TorrentinoApp/Features/Settings/KeychainStore.swift"
 APP_DIR="${NATIVE_DIR}/TorrentinoApp"
 APP_TESTS="${NATIVE_DIR}/Tests/TorrentinoAppTests/TorrentinoAppTests.swift"
+SETTINGS_VIEW="${NATIVE_DIR}/TorrentinoApp/Features/Settings/SettingsView.swift"
 
 [[ -f "${KEYCHAIN}" ]] || qa_die "KeychainStore.swift is missing"
 [[ -f "${APP_TESTS}" ]] || qa_die "TorrentinoAppTests.swift is missing"
+[[ -f "${SETTINGS_VIEW}" ]] || qa_die "SettingsView.swift is missing"
 
-python3 - "${KEYCHAIN}" "${APP_DIR}" "${APP_TESTS}" <<'PY'
+python3 - "${KEYCHAIN}" "${APP_DIR}" "${APP_TESTS}" "${SETTINGS_VIEW}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -24,6 +26,7 @@ from pathlib import Path
 keychain = Path(sys.argv[1]).read_text(encoding="utf-8")
 app_dir = Path(sys.argv[2])
 tests = Path(sys.argv[3]).read_text(encoding="utf-8")
+settings_view = Path(sys.argv[4]).read_text(encoding="utf-8")
 issues = []
 
 for api in ("SecItemAdd", "SecItemCopyMatching", "SecItemDelete"):
@@ -34,6 +37,12 @@ for key in ("kSecClassGenericPassword", "kSecAttrService", "kSecAttrAccount", "k
         issues.append(f"missing Keychain attribute {key}")
 if '"com.torrentino.app"' not in keychain or '"proxy_password"' not in keychain:
     issues.append("proxy Keychain service/account are not pinned")
+if keychain.count("Task.detached") < 3:
+    issues.append("all three Keychain operations must leave the MainActor via Task.detached")
+if "@MainActor" in keychain:
+    issues.append("KeychainStore must not be MainActor-isolated")
+if "password: nil" not in settings_view:
+    issues.append("SettingsView candidate must omit proxy password from IPC settings")
 
 for source_file in app_dir.rglob("*.swift"):
     source = re.sub(r'//.*', '', source_file.read_text(encoding="utf-8"))

@@ -1,8 +1,18 @@
-# BUG REPORT - WP-08 Native UX Completeness
+# BUG REPORT - WP-08 Native UX Completeness (historical record)
 
-Date: 2026-08-03
+Date: 2026-08-04
 Role: Test Engineer (detect and report only)
-Verdict: FAIL
+Verdict: NO CURRENT PRODUCT BUGS; historical findings superseded
+
+The current WP-08 run is PRODUCT GREEN. All 16 WP-08 scripts, the full scheme
+XCTest run (201/201), and both bridge runners pass. The only full-suite failure
+is the environmental `test_wp03_legacy_untouched.sh` check caused by Human
+research dirt in `Legacy/Tauri`; it is waived and was not touched by QA.
+
+The findings below are retained for traceability from the 2026-08-03 run and
+are not current defects.
+
+## Historical Findings (Superseded)
 
 ## Execution Summary
 
