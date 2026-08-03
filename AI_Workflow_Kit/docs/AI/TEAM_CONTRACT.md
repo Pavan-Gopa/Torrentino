@@ -7,7 +7,7 @@
 3. `AI_Workflow_Kit/docs/TORRENTINO_STEPS.md` — condensed WP cards
 4. `AI_Workflow_Kit/docs/DECISIONS.md` — ADR log
 5. `AI_Workflow_Kit/docs/PROJECT_CONTEXT.md` — repo map + build commands
-6. `Legacy/Tauri/` — frozen reference, never modify
+6. `Legacy/Tauri/` — **HARD BAN** (Human-only research). Agents never read for implementation, never edit, never stage/commit, never "fix" drift
 
 ## Roles
 
@@ -66,7 +66,14 @@ Human ↔ Orchestrator only (control plane)
 7. **Коммитит только Orchestrator.** Воркеры (Coder, Reviewer, Tester) делают работу, оставляют файлы в working tree. Orchestrator проверяет результат и коммитит + пушит. Воркеры НЕ делают `git commit` / `git push`.
 8. No silent architecture redesign by Coder.
 9. No fake data / fake states in production code.
-10. Legacy code (`Legacy/Tauri/`) is **frozen** — never modify.
+10. **`Legacy/Tauri/` HARD BAN (all roles, no exceptions):**
+    - Do **not** modify, create, delete, move, reformat, or "fix" anything under `Legacy/`.
+    - Do **not** use Legacy as implementation reference, copy-paste source, or design authority for Native work.
+    - Do **not** `git add` / commit / restore / checkout Legacy except **Orchestrator** undoing accidental dirty tree back to HEAD.
+    - Do **not** open Legacy files to "understand how it worked" — Native plan + current Native code + DECISIONS are enough.
+    - Human alone may touch Legacy offline for personal research; agents must ignore that worktree noise and never "help" with it.
+    - If `git status` shows Legacy dirty: **leave it alone**, report to Orchestrator in handoff; do not revert unless you are Orchestrator restoring frozen tree.
+    - Reviewer/Tester may only **detect** Legacy path changes via `git diff -- Legacy/` (no file edits). Untouched Legacy is a hard gate.
 11. **Never** `git add -A` on a parent directory outside Torrentino.
 12. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
 13. **Readable, well-commented code** — see § Comments below.

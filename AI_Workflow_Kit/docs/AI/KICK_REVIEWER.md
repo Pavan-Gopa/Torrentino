@@ -45,7 +45,7 @@ graphify query "<вопрос о модулях, зависимостях, ин�
 - [ ] C++ types не видны из Swift API (PIMPL соблюдён)
 - [ ] DTO immutable и Sendable
 - [ ] UI не является источником истины
-- [ ] Legacy/Tauri/ не модифицирован
+- [ ] Legacy/Tauri/ HARD BAN: zero product diff under Legacy/ (detect via git only; never edit/restore Legacy yourself)
 - [ ] No Homebrew runtime links
 
 ## Комментарии и читаемость
@@ -104,7 +104,7 @@ graphify query "<вопрос о модулях, зависимостях, ин�
   - C++ hidden behind PIMPL?
   - DTO immutable/Sendable?
   - UI not source of truth?
-  - Legacy untouched?
+  - Legacy/Tauri HARD BAN honored (git diff -- Legacy/ empty in product range)?
   *Comment:*
   ### 4. Comments & readability
   - New modules/types have role header?

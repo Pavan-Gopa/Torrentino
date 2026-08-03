@@ -122,3 +122,23 @@
 - Объявлять WP green без unit-тестов (с WP-03).
 - Заменять integration-тест smoke-проверкой.
 - Пропускать concurrency stress для shared mutable state.
+
+---
+
+## ADR-013 — Legacy/Tauri HARD BAN for all agents
+
+**Date:** 2026-08-04
+**Status:** Accepted (Human directive)
+**Context:** Human researches Legacy/Tauri independently offline. Agents previously risked dirtying or "fixing" that tree; `test_wp03_legacy_untouched` then failed.
+
+**Decision:**
+- `Legacy/` (including `Legacy/Tauri/`) is **out of scope for every agent role** (Coder, Reviewer, Tester, Architect, Orchestrator product work).
+- Agents must **not** read Legacy for implementation guidance, copy code from it, edit it, stage it, or "help" with Human research changes.
+- Orchestrator may only `git checkout -- Legacy/` to undo **accidental** agent dirt; never commit Legacy product changes.
+- Reviewer/Tester may only **detect** Legacy path drift via git; never modify Legacy files.
+- Authoritative sources for Native work: plan, DECISIONS, STATE, Native tree only.
+
+**Consequences:**
+- All kick templates restate the ban.
+- Product commits must show empty `git diff -- Legacy/` for agent work.
+- Human Legacy research dirt is ignored by agents and reported to Orchestrator if it confuses gates.

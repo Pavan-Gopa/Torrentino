@@ -108,7 +108,7 @@ Scope: **only** Torrentino git root.
 ## Torrentino-specific rules
 
 - Plan (`TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md`) is authoritative.
-- Legacy (`Legacy/Tauri/`) is frozen — never modify.
+- **`Legacy/Tauri/` HARD BAN:** never modify, never use as implementation reference, never stage in product commits. Human-only research tree. If workers dirty it, Orchestrator restores `git checkout -- Legacy/` and does **not** include Legacy in commits. Every kick prompt must restate this ban. Reviewer/Tester may only *detect* Legacy diffs, never edit Legacy.
 - Worker sessions are **stateless fresh windows** — never assume prior chat memory.
 - Swift 6 strict concurrency from day one.
 - No Homebrew runtime dependencies in release.

@@ -22,7 +22,7 @@ Torrentino — нативный BitTorrent-клиент для Apple Silicon (ma
 ## Твоя роль
 - Пишешь product-код ТОЛЬКО в target_files (указаны ниже)
 - НЕ делаешь работу из будущих WP
-- НЕ модифицируешь Legacy/Tauri/
+- **HARD BAN `Legacy/Tauri/`:** не читать для реализации, не копировать, не менять, не "чинить" dirty tree, не git add. Human-only research. Если Legacy dirty в status — игнор + упомяни Orchestrator в handoff. Native plan + Native code only.
 - Без fake data / фейковых состояний
 - Комментарии: role header у новых модулей (1-5 строк: слой, роль, must-not,
   invariants) + why у неочевидной логики.

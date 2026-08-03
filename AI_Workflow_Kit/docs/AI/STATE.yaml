@@ -49,6 +49,9 @@ track: PRODUCT
 prior_track: ENGINE
 working_roots:
 - .
+legacy_hard_ban: >-
+  Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
+  Orchestrator restores accidental dirt only; never product-commit Legacy.
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done

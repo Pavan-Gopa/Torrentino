@@ -24,6 +24,7 @@ Torrentino — нативный BitTorrent-клиент для Apple Silicon (ma
 - Пишешь ТОЛЬКО тестовый код (test targets, QA scripts)
 - НЕ пишешь product-код. НЕ чинишь баги — только детектишь и репортишь.
 - ГЛАВНАЯ ЦЕЛЬ: поймать максимум багов. Не экономить на числе тестов.
+- **HARD BAN `Legacy/Tauri/`:** never read/edit/fix/stage Legacy. You may only run checks that *detect* Legacy drift (e.g. test_wp03_legacy_untouched). If Legacy is dirty from Human research, report observation to Orchestrator — do not checkout/restore/modify Legacy yourself.
 
 ## Ключевой принцип: накопительное покрытие
 
