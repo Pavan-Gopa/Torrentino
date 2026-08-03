@@ -1,9 +1,10 @@
-current_step: WP-07
+current_step: WP-08
 step_description: >-
-  Core transfer vertical slice. Add .torrent/magnet/HTTP, duplicate detection,
-  preflight, file selection, start paused/immediately, pause/resume, aggregated
-  stats, native table/sidebar/status bar, bounded counts, path normalization,
-  HTTP limits, negative parser/path corpus.
+  Native UX completeness. Inspector tabs, sorting/columns/search/multi-selection,
+  drag-and-drop/Finder association, menus/shortcuts/context menus, settings
+  sections, trackers/reannounce, per-torrent limits/seed goals, notifications,
+  EN/RU, VoiceOver/keyboard/contrast/motion, Keychain + proxy credentials,
+  settings validate/persist/apply/rollback.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
@@ -19,6 +20,7 @@ completed_steps:
 - WP-04
 - WP-05
 - WP-06
+- WP-07
 implementation:
   status: pending
   attempts: 0
@@ -30,25 +32,26 @@ review:
 qa:
   status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-06
+  suite: WP-07
   bugs_open: 0
-  note: 'WP-06 GREEN. 71/71 scripts + 118/118 tests. Soak 24h PASSED.'
+  note: 'WP-07 GREEN. 84/84 scripts + 175/175 tests. Soak 24h PASSED.'
 next_actor: coder
 track: ENGINE
 prior_track: ENGINE
 working_roots:
 - .
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-07
-  last_post_tag: torrentino/WP-06-done
-  last_commit: b9582f7
+  last_pre_tag: torrentino/pre-WP-08
+  last_post_tag: torrentino/WP-07-done
+  last_commit: 0d7914b
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-07: Core transfer vertical slice. First end-to-end usable flow:
-  add .torrent/magnet/HTTP source, duplicate detection, preflight validation,
-  file selection, start paused/immediately, pause/resume, aggregated stats,
-  native SwiftUI table/sidebar/status bar, bounded metainfo/file count,
-  path normalization/traversal rejection, HTTP scheme/redirect/size/deadline
-  limits, negative parser/path corpus before first payload write.
+  WP-08: Native UX completeness. Minimal but complete daily-use client:
+  inspector tabs, sorting/columns/search/multi-selection, drag-and-drop and
+  Finder association, menus/shortcuts/context menus, settings sections,
+  trackers/reannounce, per-torrent limits and seed goals, notifications,
+  full EN/RU coverage, VoiceOver/keyboard/contrast/motion accessibility,
+  Keychain storage together with proxy credentials, settings
+  validate/persist/apply/rollback flow.
