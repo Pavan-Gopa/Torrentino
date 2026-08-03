@@ -52,7 +52,8 @@ if 'let port = UInt16(listenPort) ?? 6881' in view:
 
 validation_at = view.find('let errors = SettingsRules.validate(candidate)')
 persist_at = view.find('KeychainStore.saveProxyPassword')
-send_at = view.find('viewModel.client.sendCommand')
+apply_at = view.find('EngineCommandV1.applySettings')
+send_at = view.find('viewModel.client.sendCommand', apply_at)
 if validation_at < 0 or (persist_at >= 0 and validation_at > persist_at):
     issues.append("SettingsRules.validate is not before credential persistence")
 if validation_at < 0 or (send_at >= 0 and validation_at > send_at):

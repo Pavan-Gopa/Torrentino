@@ -289,6 +289,7 @@ actor PersistenceStore {
         PersistenceSidecar.removeAll(kind: .resume, owner: torrentID, dataDirectory: dataDirectory)
         PersistenceSidecar.removeAll(kind: .metainfo, owner: torrentID, dataDirectory: dataDirectory)
         try? removeSessionValue(key: Self.torrentLimitsKey(torrentID))
+        try? removeSessionValue(key: Self.torrentTrackersKey(torrentID))
     }
 
     func markTorrentForRecheck(torrentID: String) throws {
@@ -426,6 +427,18 @@ actor PersistenceStore {
     func torrentLimits(torrentID: String) throws -> TorrentinoIPC.TransferLimits? {
         guard let payload = try sessionValue(key: Self.torrentLimitsKey(torrentID)) else { return nil }
         return try JSONDecoder().decode(TorrentinoIPC.TransferLimits.self, from: payload.data)
+    }
+
+    func setTorrentTrackers(torrentID: String, trackers: [String]) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let data = try JSONEncoder().encode(trackers)
+        try setSessionValue(key: Self.torrentTrackersKey(torrentID), data: data)
+    }
+
+    func torrentTrackers(torrentID: String) throws -> [String]? {
+        guard let payload = try sessionValue(key: Self.torrentTrackersKey(torrentID)) else { return nil }
+        return try JSONDecoder().decode([String].self, from: payload.data)
     }
 
     func persistSettings(_ settings: EngineSettings, revision: SettingsRevision) throws {
@@ -919,6 +932,10 @@ actor PersistenceStore {
 
     private static func torrentLimitsKey(_ torrentID: String) -> String {
         "torrent_limits.\(torrentID)"
+    }
+
+    private static func torrentTrackersKey(_ torrentID: String) -> String {
+        "torrent_trackers.\(torrentID)"
     }
 
     private func applyPragmas(_ database: SQLiteConnection) throws {

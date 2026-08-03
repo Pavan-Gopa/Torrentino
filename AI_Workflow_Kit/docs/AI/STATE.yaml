@@ -16,6 +16,8 @@ target_files:
 - Native/Tests/
 - Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
+- Native/TorrentinoEngineBridge/bridge/
+- Native/TorrentinoEngineBridge/adapter/
 completed_steps:
 - WP-00
 - WP-01
@@ -26,29 +28,30 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: in_progress
+  status: waiting_review
   attempts: 3
   note: >-
-    Reviewer CHANGES_REQUESTED on post-QA fix round. Attempt 3 (last before
-    mandatory scope-narrow / Architect). Fix P1 runtime wiring first, then P2.
+    Attempt 3 coder handoff uncommitted→committed. Claims Swift/UI/persistence
+    wiring done; QA 97/97. Remaining known gap: linked C++ bridge still lacks
+    real setLimits/editTrackers/reannounce/session settings APIs (typed
+    unsupported). target_files expanded to bridge/ + adapter/ for follow-up if
+    Reviewer still requires full engine path.
 review:
-  status: changes_requested
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
+  verdict: null
   note: >-
-    Static/unit/WP-08 scripts pass, but several behaviors stop at UI/agent
-    model boundary and are not production-effective (settings engine apply,
-    limits bridge, trackers/reannounce engine path, notifications not wired,
-    localization keys shown raw, a11y/focus gaps, MainActor Keychain I/O).
+    Re-review attempt 3. Prior CHANGES_REQUESTED items largely Swift-side.
+    Decide: APPROVE Swift UX + typed unsupported bridge, OR CHANGES_REQUESTED
+    requiring bridge/C++ implementation (now in target_files).
 qa:
-  status: red
+  status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-08
   bugs_open: open
   note: >-
-    Historical BUG_REPORT stale. Re-test only after Reviewer APPROVED on this
-    fix round.
-next_actor: coder
+    Coder claims 97/97 including 13/13 WP-08. Tester re-run after APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -56,11 +59,10 @@ working_roots:
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: 6589283
+  last_commit: pending
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Attempt 3. Address FEEDBACK.md §5 items 1-9. Priority: all P1 must be real
-  runtime paths (engine/bridge), not snapshot echoes. P2 if time. No WP-09+.
-  Fill FEEDBACK §1-4, RESULT waiting_review. No git commit.
+  Attempt 3 awaiting review. If CR on bridge only → implement C++/ObjC bridge
+  APIs now that target_files include bridge/ and adapter/.

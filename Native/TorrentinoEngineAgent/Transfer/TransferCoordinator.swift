@@ -119,6 +119,9 @@ public actor TransferCoordinator {
             let metainfo = metainfoData.flatMap { try? Preflight.validateTorrentData($0) }
             let desired = DesiredTorrentState(rawValue: torrent.state) ?? .paused
             let limits = (try? await persistence.torrentLimits(torrentID: torrent.id)) ?? TorrentinoIPC.TransferLimits()
+            let trackers = (try? await persistence.torrentTrackers(torrentID: torrent.id))
+                ?? metainfo?.trackers
+                ?? []
             let record = TransferRecord(
                 id: recordID,
                 contentIdentity: identity,
@@ -135,7 +138,7 @@ public actor TransferCoordinator {
                 seedsTotal: 0,
                 engineID: nil,
                 metainfoData: metainfoData,
-                trackers: metainfo?.trackers ?? [],
+                trackers: trackers,
                 fileSelection: [],
                 saveLocation: defaultSaveLocation,
                 addedAt: torrent.addedAt,
@@ -696,6 +699,7 @@ public actor TransferCoordinator {
         guard !changed.isEmpty else { return }
         for recordID in changed {
             bumpRecordRevision(recordID)
+            appendEngineChange(.updated(recordID))
         }
         await publishDelta()
     }
@@ -707,7 +711,7 @@ public actor TransferCoordinator {
             return true
         }
         do {
-            try await engine.start()
+            try await engine.start(configuration: activeSettings)
             return true
         } catch {
             log.warning("ensureEngineStarted failed: \(String(describing: error))")
@@ -729,13 +733,21 @@ public actor TransferCoordinator {
     /// Bumps the engine-wide revision, records the change, and publishes a
     /// contiguous delta event covering every change since the last publish.
     private func bumpEngineRevision(change: Change) {
+        appendEngineChange(change)
+        Task {
+            await self.publishDelta()
+        }
+    }
+
+    /// Records a change without scheduling a second publish task. The status
+    /// pump batches several per-record engine updates into one authoritative
+    /// delta, otherwise a live status update could be silently invisible to UI
+    /// subscribers because engineRevision never advanced.
+    private func appendEngineChange(_ change: Change) {
         engineRevision += 1
         changeLog.append((engineRevision, change))
         if changeLog.count > changeLogLimit {
             changeLog.removeFirst(changeLog.count - changeLogLimit)
-        }
-        Task {
-            await self.publishDelta()
         }
     }
 
@@ -952,6 +964,9 @@ extension TransferCoordinator {
         }
         // Negative values become zero and nil remains unlimited at the engine boundary.
         let normalized = request.limits.normalized
+        guard let engineID = await liveEngineID(for: request.recordID) else {
+            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        }
         do {
             try await persistence.setTorrentLimits(
                 torrentID: request.recordID.rawValue.uuidString,
@@ -960,7 +975,17 @@ extension TransferCoordinator {
         } catch {
             return .failure(.storeError(underlying: error))
         }
-        records[request.recordID] = record.with(limits: normalized)
+        do {
+            try await engine.setLimits(torrentID: engineID, limits: normalized)
+        } catch {
+            // Persistence must not report a limit that the live engine rejected.
+            try? await persistence.setTorrentLimits(
+                torrentID: request.recordID.rawValue.uuidString,
+                limits: record.limits
+            )
+            return .failure(.engineBusy(details: "setLimits rejected by engine"))
+        }
+        records[request.recordID] = (records[request.recordID] ?? record).with(limits: normalized)
         bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)
@@ -984,12 +1009,22 @@ extension TransferCoordinator {
                     guard let self else {
                         return .failure(.internalError(details: "settings coordinator deallocated"))
                     }
-                    await self.setActiveSettings(candidate, revision: previousRevision + 1)
-                    return .success(())
+                    do {
+                        try await self.engine.apply(settings: candidate)
+                        await self.invalidateEngineBindings()
+                        await self.setActiveSettings(candidate, revision: previousRevision + 1)
+                        return .success(())
+                    } catch {
+                        return .failure(.engineBusy(details: "settings apply rejected by engine"))
+                    }
                 },
                 rollback: { [weak self] _, _ in
+                    if let self {
+                        try await self.engine.apply(settings: previousSettings)
+                        await self.invalidateEngineBindings()
+                        await self.setActiveSettings(previousSettings, revision: previousRevision)
+                    }
                     try await persistence.persistSettings(previousSettings, revision: previousRevision)
-                    await self?.setActiveSettings(previousSettings, revision: previousRevision)
                 }
             )
         )
@@ -1021,6 +1056,14 @@ extension TransferCoordinator {
                 return .failure(.rateLimited(recordID: recordID, retryAfter: Self.reannounceCooldown - elapsed))
             }
         }
+        guard let engineID = await liveEngineID(for: recordID) else {
+            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        }
+        do {
+            try await engine.reannounce(torrentID: engineID)
+        } catch {
+            return .failure(.engineBusy(details: "reannounce rejected by engine"))
+        }
         lastReannounceAt[recordID] = now
         return .success(.ack)
     }
@@ -1029,15 +1072,70 @@ extension TransferCoordinator {
         guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
+        let additions = request.addedURLs.compactMap(Self.normalizedTrackerURL)
+        let removals = request.removedURLs.compactMap(Self.normalizedTrackerURL)
+        guard additions.count == request.addedURLs.count,
+              removals.count == request.removedURLs.count else {
+            return .failure(.invalidPayload(details: "tracker URL is invalid"))
+        }
         var updated = record.trackers
-        for added in request.addedURLs {
+        for added in additions {
             if !updated.contains(added) { updated.append(added) }
         }
-        updated.removeAll { request.removedURLs.contains($0) }
-        records[request.recordID] = record.withTrackers(updated)
+        updated.removeAll { removals.contains($0) }
+        guard updated.count <= TransferLimits.maxTrackers else {
+            return .failure(.invalidPayload(details: "tracker limit exceeded"))
+        }
+        guard let engineID = await liveEngineID(for: request.recordID) else {
+            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        }
+        do {
+            try await persistence.setTorrentTrackers(
+                torrentID: request.recordID.rawValue.uuidString,
+                trackers: updated
+            )
+        } catch {
+            return .failure(.storeError(underlying: error))
+        }
+        do {
+            try await engine.editTrackers(torrentID: engineID, trackers: updated)
+        } catch {
+            try? await persistence.setTorrentTrackers(
+                torrentID: request.recordID.rawValue.uuidString,
+                trackers: record.trackers
+            )
+            return .failure(.engineBusy(details: "tracker edit rejected by engine"))
+        }
+        records[request.recordID] = (records[request.recordID] ?? record).withTrackers(updated)
         bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)
+    }
+
+    private func liveEngineID(for recordID: TorrentRecordID) async -> String? {
+        guard await ensureEngineStarted() else { return nil }
+        if let engineID = records[recordID]?.engineID {
+            return engineID
+        }
+        await pumpOnce()
+        return records[recordID]?.engineID
+    }
+
+    private func invalidateEngineBindings() {
+        for (recordID, record) in records where record.engineID != nil {
+            records[recordID] = record.with(engineID: nil, health: .healthy)
+        }
+    }
+
+    private static func normalizedTrackerURL(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https", "udp"].contains(scheme),
+              components.host?.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 
     private func handlePrepareRemoval(_ request: PrepareRemovalRequest) async -> EngineCommandResult {

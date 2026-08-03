@@ -171,6 +171,13 @@ struct InspectorView: View {
                     .accessibilityLabel(String(localized: "inspector.activity.reannounce.hint"))
                 }
 
+                if let commandError = viewModel.commandError {
+                    Label(commandError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+
                 List(trackers, id: \.url) { tracker in
                     HStack {
                         Image(systemName: "network")
@@ -250,6 +257,12 @@ struct InspectorView: View {
                         )
                         Task { await viewModel.setLimits(torrent.id, limits: limits) }
                     }
+                    if let commandError = viewModel.commandError {
+                        Label(commandError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
                 }
             } else {
                 Text(String(localized: "inspector.no_selection"))
@@ -277,9 +290,13 @@ struct InspectorView: View {
             pageSize: 50,
             expectedRevision: torrent.revision
         ))
-        if let response = try? await viewModel.client.sendCommand(command),
-           case .trackers(let page) = response {
+        do {
+            guard case .trackers(let page) = try await viewModel.client.sendCommand(command) else {
+                throw EngineClientError.protocolMismatch(details: "unexpected fetchTrackers reply")
+            }
             trackers = page.items
+        } catch {
+            viewModel.surfaceCommandError(error, fallback: "trackers.failed")
         }
     }
 

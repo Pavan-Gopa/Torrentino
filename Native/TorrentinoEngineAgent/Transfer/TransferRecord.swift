@@ -191,12 +191,16 @@ public struct TransferTorrentStatus: Sendable, Equatable {
 /// the WP-04 libtorrent bridge; tests use an in-memory stub.
 public protocol TransferEngine: Sendable {
     var isStarted: Bool { get async }
-    func start() async throws
+    func start(configuration: EngineSettings?) async throws
+    func apply(settings: EngineSettings) async throws
     func add(specification: AddSpecificationDTO) async throws -> AddResultDTO
     func pause(torrentID: String) async throws
     func resume(torrentID: String) async throws
     func recheck(torrentID: String) async throws
     func remove(torrentID: String) async throws
+    func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws
+    func editTrackers(torrentID: String, trackers: [String]) async throws
+    func reannounce(torrentID: String) async throws
     /// Live per-torrent status (progress/rates/peers). Called by the pump.
     func statusUpdate() async throws -> [TransferTorrentStatus]
     /// Engine-wide aggregate health (used when per-torrent rates are

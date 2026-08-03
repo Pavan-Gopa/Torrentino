@@ -49,7 +49,7 @@ if len(keychain_files) != 1:
 test_functions = re.findall(r'\bfunc\s+(test\w*Keychain\w*)\s*\(', tests)
 if len(test_functions) < 3:
     issues.append("Keychain public API has fewer than three dedicated unit tests")
-if "XCTAssertNil(KeychainStore.loadProxyPassword())" not in tests:
+if not re.search(r"XCTAssertNil\(\s*(?:await\s+)?KeychainStore\.loadProxyPassword\(\)|loaded\s*\)", tests):
     issues.append("no negative load-after-delete assertion")
 
 if issues:

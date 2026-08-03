@@ -1307,14 +1307,61 @@ private actor StubTransferEngine: TransferEngine {
     private var started = false
     private var nextID = 0
     private var statuses: [String: TransferTorrentStatus] = [:]
+    private var settingsHistory: [EngineSettings] = []
+    private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
+    private var appliedTrackers: [String: [String]] = [:]
+    private var reannouncedIDs: [String] = []
+    private var failSettingsApply = false
+    private var failTorrentMutation = false
     /// When non-nil, add() throws for every magnet whose URI contains the
     /// marker (per-record engine fault injection).
     private var failAddMarker: String?
 
     var isStarted: Bool { started }
 
-    func start() async throws {
+    func start(configuration: EngineSettings?) async throws {
         started = true
+    }
+
+    func apply(settings: EngineSettings) async throws {
+        if failSettingsApply { throw EngineStubError.settingsApplyFailed }
+        settingsHistory.append(settings)
+        started = true
+    }
+
+    func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws {
+        if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
+        appliedLimits[torrentID] = limits
+    }
+
+    func editTrackers(torrentID: String, trackers: [String]) async throws {
+        if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
+        appliedTrackers[torrentID] = trackers
+    }
+
+    func reannounce(torrentID: String) async throws {
+        if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
+        reannouncedIDs.append(torrentID)
+    }
+
+    func setSettingsApplyFailure(_ value: Bool) {
+        failSettingsApply = value
+    }
+
+    func settingsApplications() -> [EngineSettings] {
+        settingsHistory
+    }
+
+    func limits(for torrentID: String) -> TorrentinoIPC.TransferLimits? {
+        appliedLimits[torrentID]
+    }
+
+    func trackers(for torrentID: String) -> [String]? {
+        appliedTrackers[torrentID]
+    }
+
+    func reannounceCount(for torrentID: String) -> Int {
+        reannouncedIDs.filter { $0 == torrentID }.count
     }
 
     func failAdds(containing marker: String?) {
@@ -1351,6 +1398,8 @@ private actor StubTransferEngine: TransferEngine {
 
 private enum EngineStubError: Error {
     case addFailed
+    case settingsApplyFailed
+    case torrentMutationFailed
 }
 
 // MARK: - URLProtocol stub

@@ -10,6 +10,9 @@
 //           call; shutdown() is idempotent and safe to call from deinit paths.
 
 import Foundation
+#if canImport(TorrentinoIPC)
+import TorrentinoIPC
+#endif
 
 /// Swift actor owning the native engine through the ObjC++ bridge adapter.
 /// All calls are serialized; each returns Sendable, immutable DTOs.
@@ -47,6 +50,39 @@ public actor EngineCoordinator {
         started = true
         return try decode(BootReportDTO.self, from: response)
     }
+
+    #if canImport(TorrentinoIPC)
+    /// Applies the agent's complete settings candidate to the live session.
+    /// The bridge owns the libtorrent session, so reconfiguration is a
+    /// deterministic stop/start on this actor; records are re-added by the
+    /// transfer coordinator after a successful restart.
+    public func apply(settings: EngineSettings) throws {
+        if started {
+            adapter.shutdown()
+            started = false
+        }
+        _ = try start(configuration: Self.sessionConfiguration(for: settings))
+    }
+
+    /// Per-torrent controls are deliberately exposed on the coordinator so
+    /// the transfer lane cannot fall back to a DTO-only mutation. The adapter
+    /// implementation is the only place that may eventually translate these
+    /// JSON operation payloads into libtorrent calls.
+    public func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) throws {
+        throw EngineCoordinatorError.unsupportedOperation(
+            "setLimits is not supported by the linked engine bridge")
+    }
+
+    public func editTrackers(torrentID: String, trackers: [String]) throws {
+        throw EngineCoordinatorError.unsupportedOperation(
+            "editTrackers is not supported by the linked engine bridge")
+    }
+
+    public func reannounce(torrentID: String) throws {
+        throw EngineCoordinatorError.unsupportedOperation(
+            "reannounce is not supported by the linked engine bridge")
+    }
+    #endif
 
     /// Adds a torrent from a .torrent file bytes or a magnet URI (exactly one).
     public func add(specification: AddSpecificationDTO) throws -> AddResultDTO {
@@ -126,6 +162,24 @@ public actor EngineCoordinator {
         adapter.shutdown()
         started = false
     }
+
+    #if canImport(TorrentinoIPC)
+    private static func sessionConfiguration(for settings: EngineSettings) -> SessionConfigurationDTO {
+        SessionConfigurationDTO(
+            listenPort: Int(settings.listenPort),
+            downloadDir: settings.downloadDirectory,
+            enableDHT: settings.dhtEnabled,
+            maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
+            maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
+            proxy: SessionProxyDTO(
+                kind: settings.proxy.kind.rawValue,
+                host: settings.proxy.host,
+                port: settings.proxy.port,
+                username: settings.proxy.username
+            )
+        )
+    }
+    #endif
 
     // MARK: - Envelope helpers (JSON wire schema, frozen)
 

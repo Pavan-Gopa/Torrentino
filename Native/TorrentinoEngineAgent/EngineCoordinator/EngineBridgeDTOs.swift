@@ -26,6 +26,21 @@ extension CodingUserInfoKey {
 // ---------------------------------------------------------------------------
 
 /// Startup configuration passed to the engine (`SessionConfiguration`).
+public struct SessionProxyDTO: Codable, Sendable, Equatable {
+    public let kind: String
+    public let host: String
+    public let port: UInt16
+    public let username: String?
+
+    public init(kind: String = "none", host: String = "", port: UInt16 = 0,
+                username: String? = nil) {
+        self.kind = kind
+        self.host = host
+        self.port = port
+        self.username = username
+    }
+}
+
 public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
     /// 0 = ephemeral loopback port (hermetic; WP-01 rule).
     public let listenPort: Int
@@ -35,6 +50,12 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
     public let peerIDPrefix: String
     public let operationTimeoutMS: UInt32
     public let alertQueueSize: UInt32
+    /// Settings metadata carried to the bridge configuration boundary. Older
+    /// bridge binaries ignore unknown keys; the Swift coordinator still keeps
+    /// the complete authoritative candidate together.
+    public let maxDownloadBytesPerSec: Int64
+    public let maxUploadBytesPerSec: Int64
+    public let proxy: SessionProxyDTO
 
     public init(
         listenPort: Int = 0,
@@ -43,7 +64,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         maxConnections: Int = 120,
         peerIDPrefix: String = "-TT0400-",
         operationTimeoutMS: UInt32 = 10_000,
-        alertQueueSize: UInt32 = 8_000
+        alertQueueSize: UInt32 = 8_000,
+        maxDownloadBytesPerSec: Int64 = 0,
+        maxUploadBytesPerSec: Int64 = 0,
+        proxy: SessionProxyDTO = SessionProxyDTO()
     ) {
         self.listenPort = listenPort
         self.downloadDir = downloadDir
@@ -52,6 +76,24 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         self.peerIDPrefix = peerIDPrefix
         self.operationTimeoutMS = operationTimeoutMS
         self.alertQueueSize = alertQueueSize
+        self.maxDownloadBytesPerSec = maxDownloadBytesPerSec
+        self.maxUploadBytesPerSec = maxUploadBytesPerSec
+        self.proxy = proxy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.listenPort = try container.decode(Int.self, forKey: .listenPort)
+        self.downloadDir = try container.decodeIfPresent(String.self, forKey: .downloadDir)
+        self.enableDHT = try container.decode(Bool.self, forKey: .enableDHT)
+        self.maxConnections = try container.decode(Int.self, forKey: .maxConnections)
+        self.peerIDPrefix = try container.decode(String.self, forKey: .peerIDPrefix)
+        self.operationTimeoutMS = try container.decode(UInt32.self, forKey: .operationTimeoutMS)
+        self.alertQueueSize = try container.decode(UInt32.self, forKey: .alertQueueSize)
+        self.maxDownloadBytesPerSec = try container.decodeIfPresent(Int64.self, forKey: .maxDownloadBytesPerSec) ?? 0
+        self.maxUploadBytesPerSec = try container.decodeIfPresent(Int64.self, forKey: .maxUploadBytesPerSec) ?? 0
+        self.proxy = try container.decodeIfPresent(SessionProxyDTO.self, forKey: .proxy)
+            ?? SessionProxyDTO()
     }
 
     enum CodingKeys: String, CodingKey {
@@ -62,6 +104,9 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         case peerIDPrefix = "peer-id-prefix"
         case operationTimeoutMS = "operation-timeout-ms"
         case alertQueueSize = "alert-queue-size"
+        case maxDownloadBytesPerSec = "max-download-bytes-per-sec"
+        case maxUploadBytesPerSec = "max-upload-bytes-per-sec"
+        case proxy = "proxy"
     }
 }
 

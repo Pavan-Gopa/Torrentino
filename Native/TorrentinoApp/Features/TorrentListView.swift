@@ -14,7 +14,7 @@ struct TorrentListView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
 
-    @State private var selectedFilter: SidebarFilter? = .all
+    @State private var selectedFilter: TorrentListFilter? = .all
     @State private var sortOrder = [KeyPathComparator(\TorrentSnapshot.displayName)]
 
     var body: some View {
@@ -29,6 +29,7 @@ struct TorrentListView: View {
                     .frame(minHeight: 120)
             }
             .searchable(text: $viewModel.searchText, prompt: String(localized: "torrents.search.prompt"))
+            .background(SearchFieldFocusBridge(request: viewModel.searchFocusRequest))
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -60,7 +61,15 @@ struct TorrentListView: View {
             handleDrop(providers)
         }
         .onChange(of: viewModel.searchFocusRequest) { _ in
-            NSApp.sendAction(#selector(NSSearchField.selectText(_:)), to: nil, from: nil)
+            SearchFieldFocusBridge.focusFirstResponder()
+        }
+        .onChange(of: viewModel.showAddSheet) { isPresented in
+            if !isPresented { viewModel.focusSearch() }
+        }
+        .onChange(of: viewModel.connectionGeneration) { _ in
+            // Reconnect tears down the AppKit responder chain; request the
+            // same explicit first-responder restoration used by Cmd+F.
+            viewModel.focusSearch()
         }
         .transaction { transaction in
             if reduceMotion { transaction.animation = nil }
@@ -73,10 +82,13 @@ struct TorrentListView: View {
     private var filterSidebar: some View {
         List(selection: Binding(get: { selectedFilter }, set: { selectedFilter = $0 })) {
             Section(String(localized: "torrents.sidebar.library")) {
-                ForEach(SidebarFilter.allCases, id: \.self) { filter in
-                    Label(filter.title, systemImage: filter.icon)
-                        .badge(viewModel.statusBar.count(matching: filter))
-                        .accessibilityLabel("\(filter.title), \(viewModel.statusBar.count(matching: filter)) items")
+                ForEach(TorrentListFilter.allCases, id: \.self) { filter in
+                        Label(filter.title, systemImage: filter.icon)
+                            .badge(viewModel.statusBar.count(matching: filter))
+                        .accessibilityLabel(
+                            "\(filter.title), \(viewModel.statusBar.count(matching: filter)) " +
+                            String(localized: "torrents.accessibility.items")
+                        )
                 }
             }
         }
@@ -86,17 +98,15 @@ struct TorrentListView: View {
     // MARK: - Table Filtering & Sorting
 
     private var filteredTorrents: [TorrentSnapshot] {
-        var result = selectedFilter.map { filter in
-            viewModel.torrents.filter { viewModel.statusBar.matches($0, filter) }
-        } ?? viewModel.torrents
-
-        if !viewModel.searchText.isEmpty {
-            let query = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            result = result.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
-        }
-
-        result.sort(using: sortOrder)
-        return result
+        let query = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = query.isEmpty
+            ? viewModel.torrents
+            : viewModel.torrents.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+        return TorrentListProjection.project(
+            candidates,
+            filter: selectedFilter ?? .all,
+            sortOrder: sortOrder
+        )
     }
 
     // MARK: - Table
@@ -114,7 +124,7 @@ struct TorrentListView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .accessibilityLabel("Torrent \(torrent.displayName)")
+                .accessibilityLabel("\(String(localized: "torrents.accessibility.torrent")): \(torrent.displayName)")
             }
             .width(min: 200, ideal: 320)
 
@@ -275,7 +285,11 @@ struct TorrentListView: View {
             Text(Self.byteRate(stats.uploadBytesPerSec))
                 .monospacedDigit()
             Spacer()
-            if viewModel.usingFixture, let note = viewModel.connectionNote {
+            if let note = viewModel.commandError {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if viewModel.usingFixture, let note = viewModel.connectionNote {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -318,26 +332,54 @@ struct TorrentListView: View {
     // MARK: - Drag & Drop Handler
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                accepted = true
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    guard let data = item as? Data,
-                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                    guard let url = Self.fileURL(from: item),
+                          url.isFileURL,
                           url.pathExtension.lowercased() == "torrent" else { return }
                     Task { @MainActor in
                         await viewModel.addTorrentFile(url, startPaused: false)
                     }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+                accepted = true
                 provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
-                    guard let text = item as? String, text.hasPrefix("magnet:") else { return }
+                    guard let rawText = Self.text(from: item) else { return }
+                    let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard text.hasPrefix("magnet:") else { return }
                     Task { @MainActor in
                         await viewModel.addMagnet(text, startPaused: false)
                     }
                 }
             }
         }
-        return true
+        return accepted
+    }
+
+    nonisolated private static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL { return url }
+        if let url = item as? NSURL { return url as URL }
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+        if let data = item as? NSData {
+            return URL(dataRepresentation: data as Data, relativeTo: nil)
+        }
+        if let string = item as? String {
+            return URL(fileURLWithPath: string)
+        }
+        return nil
+    }
+
+    nonisolated private static func text(from item: NSSecureCoding?) -> String? {
+        if let text = item as? String { return text }
+        if let text = item as? NSString { return text as String }
+        if let data = item as? Data { return String(data: data, encoding: .utf8) }
+        if let data = item as? NSData { return String(data: data as Data, encoding: .utf8) }
+        return nil
     }
 
     // MARK: - Formatting helpers
@@ -374,37 +416,48 @@ struct TorrentListView: View {
     }
 }
 
-// MARK: - Sidebar filters
+/// AppKit bridge for the SwiftUI `.searchable` field. SwiftUI does not expose
+/// an NSResponder binding, so Cmd+F and reconnect/sheet restoration locate the
+/// actual search field and make it first responder explicitly.
+private struct SearchFieldFocusBridge: NSViewRepresentable {
+    let request: Int
 
-private enum SidebarFilter: String, CaseIterable, Identifiable, Hashable {
-    case all
-    case downloading
-    case seeding
-    case paused
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
 
-    var id: String { rawValue }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard request > 0 else { return }
+        Self.focusFirstResponder(in: nsView.window)
+    }
 
-    var title: String {
-        switch self {
-        case .all: return String(localized: "torrents.filter.all")
-        case .downloading: return String(localized: "torrents.filter.downloading")
-        case .seeding: return String(localized: "torrents.filter.seeding")
-        case .paused: return String(localized: "torrents.filter.paused")
+    static func focusFirstResponder() {
+        focusFirstResponder(in: NSApp.keyWindow ?? NSApp.mainWindow)
+    }
+
+    private static func focusFirstResponder(in window: NSWindow?) {
+        guard let window else { return }
+        DispatchQueue.main.async {
+            guard let searchField = Self.searchField(in: window.contentView) else { return }
+            window.makeFirstResponder(searchField)
+            searchField.selectText(nil)
         }
     }
 
-    var icon: String {
-        switch self {
-        case .all: return "tray.full"
-        case .downloading: return "arrow.down.circle"
-        case .seeding: return "arrow.up.circle"
-        case .paused: return "pause.circle"
+    private static func searchField(in view: NSView?) -> NSSearchField? {
+        guard let view else { return nil }
+        if let searchField = view as? NSSearchField { return searchField }
+        for child in view.subviews {
+            if let searchField = searchField(in: child) { return searchField }
         }
+        return nil
     }
 }
 
+// MARK: - Sidebar filters
+
 private extension TorrentStatusBarModel {
-    func count(matching filter: SidebarFilter) -> Int {
+    func count(matching filter: TorrentListFilter) -> Int {
         switch filter {
         case .all: return total
         case .downloading: return downloading
@@ -413,15 +466,8 @@ private extension TorrentStatusBarModel {
         }
     }
 
-    func matches(_ torrent: TorrentSnapshot, _ filter: SidebarFilter) -> Bool {
-        switch filter {
-        case .all: return true
-        case .downloading:
-            return torrent.desiredState != .paused
-                && [.downloading, .fetchingMetadata, .checking, .queued].contains(torrent.activity)
-        case .seeding: return torrent.activity == .seeding
-        case .paused: return torrent.desiredState == .paused
-        }
+    func matches(_ torrent: TorrentSnapshot, _ filter: TorrentListFilter) -> Bool {
+        filter.matches(torrent)
     }
 }
 
@@ -458,7 +504,7 @@ private struct FileRow: View {
                     set: { onToggle(entry.relativePath, $0 ? .normal : .skip) }
                 ))
                 .labelsHidden()
-                .accessibilityLabel(String(localized: "torrents.files.selection"))
+                .accessibilityLabel("\(String(localized: "torrents.files.selection")): \(entry.relativePath)")
                 .toggleStyle(.checkbox)
             }
         }

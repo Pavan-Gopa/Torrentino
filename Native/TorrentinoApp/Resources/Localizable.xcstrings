@@ -2584,6 +2584,188 @@
           }
         }
       }
+    },
+    "settings.bandwidth.unlimited_suffix": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "KB/s (0 = unlimited)" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "КБ/с (0 = без ограничений)" } }
+      }
+    },
+    "settings.load_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not load settings from the engine" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось загрузить настройки из движка" } }
+      }
+    },
+    "settings.keychain_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Settings applied, but the proxy password could not be saved" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Настройки применены, но пароль прокси не удалось сохранить" } }
+      }
+    },
+    "settings.validation_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine rejected these settings" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Движок отклонил эти настройки" } }
+      }
+    },
+    "settings.engine_apply_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine could not apply these settings" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Движок не смог применить эти настройки" } }
+      }
+    },
+    "settings.field.download_directory": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Download directory" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Папка загрузки" } }
+      }
+    },
+    "settings.field.max_download": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Maximum download speed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Максимальная скорость скачивания" } }
+      }
+    },
+    "settings.field.max_upload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Maximum upload speed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Максимальная скорость раздачи" } }
+      }
+    },
+    "settings.field.listen_port": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Listening port" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Порт прослушивания" } }
+      }
+    },
+    "settings.field.proxy_host": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Proxy host" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Хост прокси" } }
+      }
+    },
+    "settings.field.proxy_port": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Proxy port" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Порт прокси" } }
+      }
+    },
+    "settings.field.value": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Value" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Значение" } }
+      }
+    },
+    "settings.validation.download_directory_required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The download directory must not be empty" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Папка загрузки не может быть пустой" } }
+      }
+    },
+    "settings.validation.download_limit_non_negative": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The download limit must be zero or greater" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Ограничение скачивания должно быть неотрицательным" } }
+      }
+    },
+    "settings.validation.upload_limit_non_negative": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The upload limit must be zero or greater" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Ограничение раздачи должно быть неотрицательным" } }
+      }
+    },
+    "settings.validation.listen_port_range": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The listening port must be between 1 and 65535" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Порт прослушивания должен быть от 1 до 65535" } }
+      }
+    },
+    "settings.validation.proxy_host_required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "A proxy host is required when a proxy is enabled" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Для включенного прокси требуется указать хост" } }
+      }
+    },
+    "settings.validation.proxy_port_range": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The proxy port must be between 1 and 65535" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Порт прокси должен быть от 1 до 65535" } }
+      }
+    },
+    "settings.validation.number_required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Enter a valid non-negative number" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Введите корректное неотрицательное число" } }
+      }
+    },
+    "error.rate_limited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "This tracker request is rate-limited; try again shortly" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Запрос к трекерам ограничен; повторите попытку позже" } }
+      }
+    },
+    "error.engine_operation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine could not complete this operation" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Движок не смог выполнить эту операцию" } }
+      }
+    },
+    "reannounce.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not contact the trackers" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось связаться с трекерами" } }
+      }
+    },
+    "limits.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not apply torrent limits" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось применить ограничения торрента" } }
+      }
+    },
+    "trackers.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not load trackers" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось загрузить трекеры" } }
+      }
+    },
+    "torrents.accessibility.torrent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Torrent" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Торрент" } }
+      }
+    },
+    "torrents.accessibility.items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "items" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "элементов" } }
+      }
     }
   },
   "version": "1.0"

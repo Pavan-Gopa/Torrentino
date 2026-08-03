@@ -113,7 +113,7 @@ public struct Metainfo: Sendable, Equatable {
 }
 
 /// Shared transfer limits (WP-07 bounded counts).
-public enum TransferLimits {
+public enum TransferLimits: Sendable {
     /// Max payload file count (plan: 10 000).
     public static let maxFiles = 10_000
     /// Max .torrent size accepted from any source (HTTP limit is identical).

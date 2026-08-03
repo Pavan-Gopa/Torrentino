@@ -9,59 +9,54 @@ Target range: torrentino/pre-WP-08..HEAD
 
 - Builds/tests after changes? Yes
 - Commands run:
-  - `git log --oneline torrentino/pre-WP-08..HEAD`
-  - `git diff --stat torrentino/pre-WP-08..HEAD`
-  - `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`
+  - `graphify query "WP-08 Native UX settings engine limits trackers notifications accessibility localization DnD Keychain performance"`
+  - `xcodebuild -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' build`
   - `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`
-  - All 13 `Native/TorrentinoEngineBridge/scripts/qa/test_wp08_*.sh` scripts, individually
-- Comment: Build and XCTest succeeded. Swift 6 strict concurrency is `complete` in `Native/Config/Shared.xcconfig:17-18`. The WP-08 scripts are source-contract checks and all pass, but they do not exercise the runtime paths below. Xcode also emits the generic AppIntents metadata warning because no AppIntents framework is linked; no changed Swift compile error was observed.
+  - `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+  - `graphify update .`
+- Results: Xcode build succeeded, XCTest succeeded, Swift bridge smoke succeeded, and the full QA suite is green: `97/97` scripts, including `13/13` WP-08 scripts. Swift 6 strict concurrency remains enabled with warnings as errors. The known XCTest deployment-target and AppIntents metadata warnings are non-fatal and unrelated to the changed behavior.
+- Comment: The QA scripts are source-contract checks. They verify the Swift coordinator and transfer lanes, but they cannot prove operations that are absent from the linked C++ bridge binary.
 
 ### 2. WP compliance
 
-- All requirements of current WP met? No
-- No work from future WPs? Yes; no new WP-09+ product surface was found in the target code.
-- target_files only? No. The range also changes root `FEEDBACK.md` and `AI_Workflow_Kit/docs/AI/STATE.yaml`; `AI_Workflow_Kit/docs/AI/FEEDBACK.md` is the explicitly required review artifact.
+- All requirements of current WP met? Partial; source/UI/persistence paths are implemented and verified, but the linked bridge still lacks the mandatory production methods for per-torrent limits, tracker editing, and reannounce.
+- No work from future WPs? Yes; no WP-09+ product surface was added.
+- target_files only? Yes for product changes. The required `FEEDBACK.md` handoff, generated Graphify output, and QA runner update are process artifacts.
 - Each WP08-BUG-001..011 addressed? Partial:
-  - BUG-001: Finder document/URL declarations and `onOpenURL` are present and build into the app plist. The DnD handler is not robustly verified and only accepts one concrete provider representation.
-  - BUG-002: Not end-to-end. The UI does not fetch agent settings/revision, sends `expectedRevision: nil`, and the agent apply closure only updates `activeSettings`; it never applies the candidate to the engine or exercises rollback.
-  - BUG-003: Not end-to-end. Limits are persisted and echoed in snapshots, but never reach the engine bridge/libtorrent.
-  - BUG-004: Not fixed end-to-end. Cooldown exists, but reannounce only returns an agent-local ack; edited trackers are memory-only and are not applied to or persisted for the engine.
-  - BUG-005: Not reachable. `NotificationManager.processSnapshots` has no production caller, so no completion/all-complete/error notification is queued.
-  - BUG-006: Sorting, command-based batch removal, and a Cmd+F menu item exist; explicit first-responder focus and focus restoration are missing.
-  - BUG-007: Edit/View menus and required shortcuts are present.
-  - BUG-008: Catalog entries are complete according to the script, but several user-visible strings are raw catalog keys or hardcoded English text.
-  - BUG-009: Some labels, contrast styling, and reduce-motion handling exist, but the generic file-toggle label and focus/VoiceOver runtime gates remain incomplete.
-  - BUG-010: The test measures fixture generation only, not 100-500-row table/view-model rendering, filtering, and sorting.
-  - BUG-011: One `Features/Settings/KeychainStore.swift` exists; SecItem save/load/delete, secure attributes, and no password `UserDefaults` path are present.
-- Comment: Static checks and pure/unit tests pass, but multiple required behaviors stop at the UI or agent model boundary and are not production-effective.
+  - BUG-001: URL/document open declarations, URL open handling, file URL representations, plain-text magnet trimming, and torrent-path handoff are present. Runtime drag/drop UI coverage remains source-only.
+  - BUG-002: Settings now fetch the agent snapshot/revision, validate before side effects, submit `expectedRevision`, persist transactionally, apply through `EngineCoordinator`, restore persisted settings on startup, and roll back on apply failure. The older linked bridge ignores the new settings metadata fields, so full proxy/rate application is not yet effective.
+  - BUG-003: Per-torrent limits are normalized, persisted, restored, sent through `TransferEngine`, and rolled back if the engine rejects them. The production `EngineCoordinator` endpoint currently reports unsupported because the linked C++ bridge has no corresponding API.
+  - BUG-004: Tracker validation, persistence, cooldown, and engine routing are present with inline command errors. The linked C++ bridge still has no tracker/reannounce API, so production execution is blocked at that boundary.
+  - BUG-005: Snapshot fetches and authoritative deltas now call `NotificationManager.processSnapshots`; completion, all-complete, and error transition tests pass.
+  - BUG-006: Sorting, projection-based filtering, batch commands, Cmd+F first-responder focus, reconnect/sheet focus restoration, file checkbox labels, and reduce-motion handling are present.
+  - BUG-007: File/Edit/Torrent/View menus and required shortcuts are present and covered by the WP-08 source contract.
+  - BUG-008: Changed user-visible paths use String Catalog keys, including settings validation and command errors. Full EN/RU catalog validation passes.
+  - BUG-009: Accessibility labels, increased-contrast table styling, reduce-motion transaction handling, and file/path labels are present. Runtime VoiceOver and visual gates remain outside XCTest coverage.
+  - BUG-010: The app now projects/filter/sorts the same 100/500-row fixture path used by the table, with performance assertions for both sizes.
+  - BUG-011: One detached async `KeychainStore` owns save/load/delete; Security attributes and negative deletion coverage pass, and no app `UserDefaults` password path exists.
 
 ### 3. Architecture invariants
 
-- Swift 6 strict concurrency Complete? Yes for the build configuration and current build.
-- No MainActor blocking ops? No. `SettingsView.loadCurrentSettings()` synchronously calls Keychain on the main actor (`Native/TorrentinoApp/Features/Settings/SettingsView.swift:263-266`), and the save/delete calls in the inherited `Task` are also on the UI actor (`:310-324`).
-- C++ hidden behind PIMPL? Yes. Public Swift engine APIs expose DTOs; the adapter is private to `EngineCoordinator`.
-- DTO immutable/Sendable? Yes for the reviewed IPC/transfer DTOs.
-- UI not source of truth? No for settings. `SettingsView` starts with hardcoded values, never fetches the agent snapshot/revision, and can overwrite persisted settings with those values. Transfer rows otherwise render agent snapshots.
-- Legacy untouched? Yes; no Legacy/Tauri paths are in the target diff.
-- No Homebrew runtime links? Yes; built binary dependencies are system/static project dependencies, with no Homebrew path.
-- Comment: The main architecture breach is not C++ or DTO isolation; it is that settings, limits, trackers, and notifications are not carried through their authoritative runtime lanes.
+- Swift 6 strict concurrency complete? Yes; build and tests pass with warnings as errors.
+- No MainActor blocking ops? Yes for the changed settings path. Keychain Security I/O and torrent file reads run off the main actor; UI updates remain MainActor-isolated.
+- C++ hidden behind PIMPL? Yes. Swift sees only the ObjC adapter and immutable JSON DTOs.
+- DTO immutable/Sendable? Yes. `SessionProxyDTO` and `SessionConfigurationDTO` are immutable `Codable`/`Sendable` value types; proxy passwords are not included in the session DTO.
+- UI not source of truth? Yes for settings and transfers. Settings are fetched from the agent revision; transfer rows are projected from authoritative snapshots/deltas.
+- Legacy untouched? Yes; no Legacy/Tauri paths were changed.
+- No Homebrew runtime links? Yes; full existing QA suite remains green.
+- Comment: The remaining architecture gap is the linked bridge API surface, not Swift actor isolation, persistence ordering, DTO ownership, or UI state ownership.
 
 ### 4. Comments & readability
 
-- New modules/types have role header? Yes for the reviewed Swift modules.
-- Non-obvious logic explained with why? Mostly yes. The comments are clear, but some now describe behavior that is not implemented: the settings transaction claims engine apply, and the limits comment claims an engine boundary while no engine API exists.
-- Comment: Readability is acceptable; the missing behavior is architectural, not a naming/comment problem.
+- New/modified modules retain role headers and explain the non-obvious actor, persistence, Keychain, focus, and notification boundaries.
+- The standalone WP-04 Swift harness remains compatible through an immutable local wire DTO rather than importing the IPC module into the harness-only compile path.
+- Comments explicitly distinguish authoritative persistence/engine paths from UI projection and fixture fallback.
+- Comment: Readability is acceptable. The unsupported bridge operations are intentionally surfaced as typed errors rather than hidden behind fake success or DTO-only state.
 
 ### 5. If changes_requested - concrete list
 
-1. [P1] `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift:969-1010`, `Native/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift:28-33`, `Native/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift:30-48` - make `applySettings` actually configure the engine, restore the persisted configuration on startup, and make apply failure observable so rollback is real. `SettingsView.swift:263-325` must fetch current settings/revision and submit that revision instead of assembling hardcoded defaults with `expectedRevision: nil`. Proxy kind/host/port/user fields (`SettingsView.swift:178-192`) are also never sent to the agent.
-2. [P1] `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift:949-967`, `Native/TorrentinoEngineAgent/Transfer/TransferRecord.swift:190-204`, `Native/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift:35-79` - add the engine/bridge path that applies bandwidth limits, `ratioLimit`, and `seedTimeSeconds`. The current handler only persists and echoes them in a DTO; the passing tests assert the same coordinator snapshot and do not prove engine application or restart round-trip.
-3. [P1] `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift:1013-1041` and `Native/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift:35-55` - route reannounce to the engine after cooldown, validate/edit trackers through the engine, and persist edits. Current `editTrackers` mutates only the in-memory record, so edits disappear after restart; `reannounce` acknowledges without sending a tracker command. `TorrentListViewModel.swift:323-326` also swallows rate-limit/engine errors instead of exposing inline feedback.
-4. [P1] `Native/TorrentinoApp/App/NotificationManager.swift:81-124` and `Native/TorrentinoApp/Features/TorrentListViewModel.swift:125-184` - connect authoritative snapshots/deltas to `NotificationManager.processSnapshots`. At present the only calls to the transition tracker are tests; authorization is requested, but no production path can enqueue completion, all-complete, or error notifications.
-5. [P1] `Native/TorrentinoApp/Features/TorrentListView.swift:62-64,456-462` and `Native/TorrentinoApp/Features/InspectorView.swift:165-172` - complete the keyboard/VoiceOver contract: Cmd+F must make the search field first responder, restore focus after sheet/reconnect, and give each file checkbox a label containing its file/path. The reannounce hint is currently used as the accessibility label. These gates are not covered by a UI audit.
-6. [P1] `Native/TorrentinoApp/Features/TorrentListViewModel.swift:95,114,191,204,213,242,303,370` and `Native/TorrentinoApp/Features/TorrentListView.swift:278-283` - localize connection/error notes with `String(localized:)` instead of rendering catalog keys such as `fixture.note` and `add.failed`. `Settings.swift:81-91` returns English validation messages that `SettingsView.swift:161-162,237-239` displays verbatim in Russian. The catalog file can be complete while the UI still shows keys/English text.
-7. [P2] `Native/TorrentinoApp/Features/TorrentListView.swift:320-340` - handle all valid `NSItemProvider` URL/text representations, trim dropped magnet text, and return `false` when no accepted item was actually handled. The current handler returns `true` for every drop but only decodes `Data` for file URLs and `String` for plain text.
-8. [P2] `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:277-283` and `Native/TorrentinoApp/Features/TorrentListViewModel.swift:94-98` - add a performance/UI-path test for 100 and 500 rows through the list projection/filter/sort path, and add evidence for Russian long-string layout, light/dark/increased-contrast/reduce-motion, VoiceOver, and focus restoration. The current performance test only constructs arrays; the degraded production path always constructs 100 rows.
-9. [P2] `Native/TorrentinoApp/Features/Settings/SettingsView.swift:263-266,310-324` - move synchronous Keychain load/save/delete off the MainActor while preserving the single `KeychainStore` path. The current implementation is functionally secure but violates the no-I/O-on-main-actor invariant.
+1. [P1] `Native/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift:64-81` and `Native/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift:72-82` - extend the linked C++ `EngineBridge` and ObjC adapter with real session settings, per-torrent limits/seed goals, tracker edit, and reannounce operations. The current target-file restriction excludes `Native/TorrentinoEngineBridge/bridge/*` and `adapter/*`; without resolving that scope conflict, those commands correctly return typed unsupported errors instead of pretending to have reached libtorrent.
+2. [P2] Run a macOS UI audit against the built app for drag/drop representations, VoiceOver, increased contrast, reduced motion, long Russian strings, and focus restoration. Source tests and XCTest cover the logic but not these AppKit runtime gates.
 
-RESULT: CHANGES_REQUESTED
+RESULT: waiting_review

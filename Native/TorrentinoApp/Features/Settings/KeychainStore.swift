@@ -1,7 +1,8 @@
 // Layer: UI (Keychain storage for proxy credentials).
 // Role: SecItem wrapper for storing, retrieving, and deleting proxy passwords safely.
 // Must-not: store passwords in UserDefaults or log them in plaintext.
-// Invariants: service is "com.torrentino.app"; account is "proxy_password"; thread-safe.
+// Invariants: service is "com.torrentino.app"; account is "proxy_password";
+// every public operation performs Security I/O in a detached task.
 
 import Foundation
 import Security
@@ -11,9 +12,15 @@ public enum KeychainStore {
     private static let account = "proxy_password"
 
     @discardableResult
-    public static func saveProxyPassword(_ password: String) -> Bool {
+    public static func saveProxyPassword(_ password: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            saveProxyPasswordSynchronously(password)
+        }.value
+    }
+
+    private static func saveProxyPasswordSynchronously(_ password: String) -> Bool {
         guard let data = password.data(using: .utf8) else { return false }
-        deleteProxyPassword()
+        _ = deleteProxyPasswordSynchronously()
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -25,7 +32,13 @@ public enum KeychainStore {
         return status == errSecSuccess
     }
 
-    public static func loadProxyPassword() -> String? {
+    public static func loadProxyPassword() async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            loadProxyPasswordSynchronously()
+        }.value
+    }
+
+    private static func loadProxyPasswordSynchronously() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -42,7 +55,13 @@ public enum KeychainStore {
     }
 
     @discardableResult
-    public static func deleteProxyPassword() -> Bool {
+    public static func deleteProxyPassword() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            deleteProxyPasswordSynchronously()
+        }.value
+    }
+
+    private static func deleteProxyPasswordSynchronously() -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

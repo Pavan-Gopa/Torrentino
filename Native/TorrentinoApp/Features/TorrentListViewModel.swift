@@ -23,11 +23,13 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var instanceID: UUID?
     @Published private(set) var usingFixture = false
     @Published private(set) var connectionNote: String?
+    @Published private(set) var commandError: String?
     /// Table row selection; single-selection UI keeps at most one element.
     @Published var selection: Set<TorrentRecordID> = []
     @Published private(set) var files: [FileEntry] = []
     @Published private(set) var filesLoading = false
     @Published private(set) var fileRevision: UInt64 = 0
+    @Published private(set) var connectionGeneration: UInt64 = 0
     @Published var showAddSheet = false
     @Published var showInspector = false
     @Published var searchText = ""
@@ -90,9 +92,10 @@ final class TorrentListViewModel: ObservableObject {
             try await fetchFullSnapshot()
             usingFixture = false
             connectionNote = nil
+            connectionGeneration &+= 1
         } catch {
             usingFixture = true
-            connectionNote = "fixture.note"
+            connectionNote = String(localized: "fixture.note")
             torrents = FixtureLibrary.snapshot(count: 100)
             engineRevision = UInt64(torrents.count)
             if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
@@ -111,7 +114,7 @@ final class TorrentListViewModel: ObservableObject {
             do {
                 try await client.subscribeEvents(handler: eventHandler)
             } catch {
-                connectionNote = "subscribe.failed"
+                connectionNote = String(localized: "subscribe.failed")
             }
         }
     }
@@ -125,6 +128,7 @@ final class TorrentListViewModel: ObservableObject {
     // MARK: - Event application (reconciliation)
 
     private func apply(_ events: [EngineEventV1]) {
+        var changedAuthoritativeState = false
         for event in events {
             switch event {
             case .torrentDelta(let payload):
@@ -138,12 +142,15 @@ final class TorrentListViewModel: ObservableObject {
                 for recordID in delta.removed { remove(recordID) }
                 engineRevision = delta.engineRevision
                 torrents = torrents.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+                changedAuthoritativeState = true
             case .torrentAdded(let payload):
                 upsert(payload.snapshot)
                 engineRevision = max(engineRevision, payload.engineRevision)
+                changedAuthoritativeState = true
             case .torrentRemoved(let payload):
                 remove(payload.recordID)
                 engineRevision = max(engineRevision, payload.engineRevision)
+                changedAuthoritativeState = true
             case .snapshotRequired:
                 Task { try? await fetchFullSnapshot() }
             case .inspectionInvalidated(let payload):
@@ -155,6 +162,9 @@ final class TorrentListViewModel: ObservableObject {
                  .operationCompleted, .recoverableIssue, .settingsChanged:
                 break
             }
+        }
+        if changedAuthoritativeState && !usingFixture {
+            NotificationManager.shared.processSnapshots(torrents)
         }
     }
 
@@ -181,6 +191,7 @@ final class TorrentListViewModel: ObservableObject {
         instanceID = snapshot.instanceID
         usingFixture = false
         connectionNote = nil
+        NotificationManager.shared.processSnapshots(torrents)
     }
 
     func addMagnet(_ uri: String, startPaused: Bool) async {
@@ -188,7 +199,7 @@ final class TorrentListViewModel: ObservableObject {
             let inspection = try await inspect(source: .magnet(uri))
             await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
         } catch {
-            connectionNote = "add.failed"
+            connectionNote = String(localized: "add.failed")
         }
     }
 
@@ -201,7 +212,7 @@ final class TorrentListViewModel: ObservableObject {
             let inspection = try await inspect(source: .torrentFileData(data))
             await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
         } catch {
-            connectionNote = "add.failed"
+            connectionNote = String(localized: "add.failed")
         }
     }
 
@@ -210,7 +221,7 @@ final class TorrentListViewModel: ObservableObject {
             let inspection = try await inspect(source: .torrentFileURL(urlString))
             await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
         } catch {
-            connectionNote = "add.failed"
+            connectionNote = String(localized: "add.failed")
         }
     }
 
@@ -239,7 +250,7 @@ final class TorrentListViewModel: ObservableObject {
             guard case .commitAdd(let result) = try await client.sendCommand(command) else { return }
             selection = [result.recordID]
         } catch {
-            connectionNote = "add.failed"
+            connectionNote = String(localized: "add.failed")
         }
     }
 
@@ -300,7 +311,7 @@ final class TorrentListViewModel: ObservableObject {
                     ))
                     _ = try await client.sendCommand(commit)
                 } catch {
-                    connectionNote = "remove.failed"
+                    connectionNote = String(localized: "remove.failed")
                 }
             }
         }
@@ -322,12 +333,22 @@ final class TorrentListViewModel: ObservableObject {
 
     func reannounce(_ recordID: TorrentRecordID) async {
         let command = EngineCommandV1.reannounce(ReannounceRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
-        _ = try? await client.sendCommand(command)
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "reannounce.failed")
+        }
     }
 
     func setLimits(_ recordID: TorrentRecordID, limits: TransferLimits) async {
         let command = EngineCommandV1.setLimits(SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits))
-        _ = try? await client.sendCommand(command)
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "limits.failed")
+        }
     }
 
     // MARK: - Files pane (paginated, off-main friendly)
@@ -367,7 +388,7 @@ final class TorrentListViewModel: ObservableObject {
             fileCursor = page.nextCursor
             fileRevision = page.revision
         } catch {
-            connectionNote = "files.failed"
+            connectionNote = String(localized: "files.failed")
         }
     }
 
@@ -383,7 +404,31 @@ final class TorrentListViewModel: ObservableObject {
                 expectedRevision: torrent.revision
             )
         )
-        _ = try? await client.sendCommand(command)
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "files.failed")
+        }
+    }
+
+    func surfaceCommandError(_ error: Error, fallback: String) {
+        let message = localizedCommandError(error, fallback: fallback)
+        commandError = message
+        connectionNote = message
+    }
+
+    private func localizedCommandError(_ error: Error, fallback: String) -> String {
+        if let clientError = error as? EngineClientError,
+           case .fault(let fault) = clientError {
+            switch fault.code {
+            case .rateLimited: return String(localized: "error.rate_limited")
+            case .engineBusy, .engineNotReady, .operationTimeout:
+                return String(localized: "error.engine_operation")
+            default: break
+            }
+        }
+        return String(localized: String.LocalizationValue(fallback))
     }
 }
 

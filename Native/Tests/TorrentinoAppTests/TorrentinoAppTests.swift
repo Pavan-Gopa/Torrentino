@@ -184,31 +184,38 @@ final class TorrentinoAppTests: TestProfileCase {
 
     // MARK: - WP-08 Smoke Tests
 
-    func testKeychainSave() {
-        _ = KeychainStore.deleteProxyPassword()
-        defer { _ = KeychainStore.deleteProxyPassword() }
-        XCTAssertTrue(KeychainStore.saveProxyPassword("test_proxy_password_123"))
+    func testKeychainSave() async {
+        _ = await KeychainStore.deleteProxyPassword()
+        let saved = await KeychainStore.saveProxyPassword("test_proxy_password_123")
+        XCTAssertTrue(saved)
+        _ = await KeychainStore.deleteProxyPassword()
     }
 
-    func testKeychainLoad() {
-        _ = KeychainStore.deleteProxyPassword()
-        defer { _ = KeychainStore.deleteProxyPassword() }
+    func testKeychainLoad() async {
+        _ = await KeychainStore.deleteProxyPassword()
         let password = "test_proxy_password_123"
-        XCTAssertTrue(KeychainStore.saveProxyPassword(password))
-        XCTAssertEqual(KeychainStore.loadProxyPassword(), password)
+        let saved = await KeychainStore.saveProxyPassword(password)
+        let loaded = await KeychainStore.loadProxyPassword()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(loaded, password)
+        _ = await KeychainStore.deleteProxyPassword()
     }
 
-    func testKeychainDelete() {
-        _ = KeychainStore.deleteProxyPassword()
+    func testKeychainDelete() async {
+        _ = await KeychainStore.deleteProxyPassword()
         let password = "test_proxy_password_123"
-        XCTAssertTrue(KeychainStore.saveProxyPassword(password))
-        XCTAssertTrue(KeychainStore.deleteProxyPassword())
-        XCTAssertNil(KeychainStore.loadProxyPassword())
+        let saved = await KeychainStore.saveProxyPassword(password)
+        let deleted = await KeychainStore.deleteProxyPassword()
+        let loaded = await KeychainStore.loadProxyPassword()
+        XCTAssertTrue(saved)
+        XCTAssertTrue(deleted)
+        XCTAssertNil(loaded)
     }
 
-    func testKeychainLoadMissingReturnsNil() {
-        _ = KeychainStore.deleteProxyPassword()
-        XCTAssertNil(KeychainStore.loadProxyPassword())
+    func testKeychainLoadMissingReturnsNil() async {
+        _ = await KeychainStore.deleteProxyPassword()
+        let loaded = await KeychainStore.loadProxyPassword()
+        XCTAssertNil(loaded)
     }
 
     func testSettingsTransactionValidation() {
@@ -280,6 +287,21 @@ final class TorrentinoAppTests: TestProfileCase {
         measure {
             _ = FixtureLibrary.snapshot(count: 100)
             _ = FixtureLibrary.snapshot(count: 500)
+        }
+    }
+
+    func testTorrentListProjection100And500Performance() {
+        let rows100 = FixtureLibrary.snapshot(count: 100)
+        let rows500 = FixtureLibrary.snapshot(count: 500)
+        let sortOrder = [KeyPathComparator(\TorrentSnapshot.displayName)]
+        let projected100 = TorrentListProjection.project(rows100, filter: .all, sortOrder: sortOrder)
+        let projected500 = TorrentListProjection.project(rows500, query: "Archive", filter: .all, sortOrder: sortOrder)
+        XCTAssertEqual(projected100.count, 100)
+        XCTAssertEqual(projected500.count, 500)
+        XCTAssertEqual(projected500, projected500.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending })
+        measure {
+            _ = TorrentListProjection.project(rows100, query: "Archive", filter: .all, sortOrder: sortOrder)
+            _ = TorrentListProjection.project(rows500, query: "Archive", filter: .all, sortOrder: sortOrder)
         }
     }
 

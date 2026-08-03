@@ -18,6 +18,7 @@ public enum EngineCoordinatorError: Error, Sendable, Equatable, CustomStringConv
     case io
     case stopped
     case internalError
+    case unsupportedOperation(String)
     /// The adapter failed to produce or consume a JSON envelope.
     case malformedPayload(String)
 
@@ -48,6 +49,7 @@ public enum EngineCoordinatorError: Error, Sendable, Equatable, CustomStringConv
         case .stopped: return "Operation aborted because the engine is shutting down."
         case .internalError: return "Internal engine error."
         case .malformedPayload(let detail): return "Malformed engine payload: \(detail)"
+        case .unsupportedOperation(let operation): return "Unsupported engine operation: \(operation)"
         }
     }
 
