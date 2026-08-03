@@ -18,6 +18,7 @@ public enum EngineErrorCode: String, Codable, Sendable, Equatable, CaseIterable 
 
     // Envelope shape
     case invalidPayload
+    case invalidArgument
     case oversizedPayload
     case unknownCommand
     case invalidRequest
@@ -117,6 +118,16 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             code: .invalidPayload,
             severity: .error,
             recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func invalidArgument(details: String, recordID: TorrentRecordID? = nil) -> EngineFault {
+        EngineFault(
+            code: .invalidArgument,
+            severity: .error,
+            affectedRecord: recordID,
+            recoveryActions: ["edit_limits"],
             redactedContext: details
         )
     }

@@ -11,6 +11,7 @@
 //          failures throw (or fatalError) instead of being swallowed.
 
 import Foundation
+import TorrentinoIPC
 
 @main
 struct BridgeSwiftTest {
@@ -48,6 +49,165 @@ struct BridgeSwiftTest {
             try await coordinator.resume(torrentID: torrentID)
             try await coordinator.recheck(torrentID: torrentID)
 
+            // --- per-torrent limits: real Swift -> ObjC++ -> C++ path --------
+            try await coordinator.setLimits(
+                torrentID: torrentID,
+                limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 8192, maxUploadBytesPerSec: 4096)
+            )
+
+            do {
+                try await coordinator.setLimits(
+                    torrentID: torrentID,
+                    limits: TorrentinoIPC.TransferLimits(ratioLimit: 1.5)
+                )
+                fatalError("positive ratio goal must throw unsupportedOperation")
+            } catch EngineCoordinatorError.unsupportedOperation {
+                // Expected: this capability is not exposed by the pinned ABI.
+            }
+
+            do {
+                try await coordinator.setLimits(
+                    torrentID: torrentID,
+                    limits: TorrentinoIPC.TransferLimits(seedTimeSeconds: 3600)
+                )
+                fatalError("positive seed-time goal must throw unsupportedOperation")
+            } catch EngineCoordinatorError.unsupportedOperation {
+                // Expected: this capability is not exposed by the pinned ABI.
+            }
+
+            do {
+                try await coordinator.setLimits(
+                    torrentID: torrentID,
+                    limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: -1)
+                )
+                fatalError("negative bandwidth limit must throw invalidArgument")
+            } catch EngineCoordinatorError.invalidArgument {
+                // Expected: invalid values stay invalid at the native boundary.
+            }
+
+            // --- trackers: replacement, explicit empty list and reannounce --
+            try await coordinator.editTrackers(
+                torrentID: torrentID,
+                trackers: ["udp://127.0.0.1:1/announce", "https://127.0.0.1/announce"]
+            )
+            try await coordinator.editTrackers(torrentID: torrentID, trackers: [])
+            try await coordinator.reannounce(torrentID: torrentID)
+
+            do {
+                try await coordinator.editTrackers(torrentID: torrentID, trackers: ["not-a-tracker-url"])
+                fatalError("malformed tracker URL must throw invalidArgument")
+            } catch EngineCoordinatorError.invalidArgument {
+                // Expected: the C++ boundary validates tracker syntax.
+            }
+
+            // The Swift method type cannot represent a malformed element, so
+            // exercise the adapter's JSON boundary directly for this contract.
+            let adapter = TorrentinoEngineBridgeAdapter()
+            let malformedTrackers = Data(#"{"torrent-id":"ignored","trackers":["udp://127.0.0.1:1/announce",7]}"#.utf8)
+            do {
+                _ = try adapter.editTrackers(withPayloadData: malformedTrackers)
+                fatalError("non-string tracker payload element must throw invalidArgument")
+            } catch let error as NSError {
+                guard error.code == 5 else {
+                    fatalError("malformed tracker payload returned unexpected error: \(error.code)")
+                }
+            }
+
+            // --- IPC/agent boundary over the same real bridge ---------------
+            // This keeps the unsupported and invalid mappings honest at the
+            // command result boundary instead of proving them only in C++.
+            let agentRoot = URL(fileURLWithPath: tmp).appendingPathComponent("agent-state", isDirectory: true)
+            let store = PersistenceStore(dataDirectory: agentRoot)
+            _ = try await store.open()
+            let agentBridgeCoordinator = EngineCoordinator()
+            let agentEngine = BridgeTransferEngine(coordinator: agentBridgeCoordinator)
+            let agent = TransferCoordinator(
+                engine: agentEngine,
+                persistence: store,
+                eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+                agentVersion: "swift-bridge-test",
+                defaultSaveLocation: PersistedLocation(path: agentRoot.path),
+                pumpIntervalNanoseconds: nil
+            )
+            let agentRecordID = try await Self.addMagnet(
+                to: agent,
+                uri: "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"
+            )
+
+            let agentBandwidth = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 4096)
+            ))))
+            guard case .success(.ack) = Self.decode(agentBandwidth).result else {
+                fatalError("real bandwidth setLimits must succeed at the IPC boundary")
+            }
+
+            let agentRatio = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                limits: TorrentinoIPC.TransferLimits(ratioLimit: 1.25)
+            ))))
+            guard case .failure(let ratioFault) = Self.decode(agentRatio).result,
+                  ratioFault.code == .unsupportedOperation else {
+                fatalError("real ratio rejection must remain unsupportedOperation at IPC")
+            }
+
+            let agentSeed = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                limits: TorrentinoIPC.TransferLimits(seedTimeSeconds: 3600)
+            ))))
+            guard case .failure(let seedFault) = Self.decode(agentSeed).result,
+                  seedFault.code == .unsupportedOperation else {
+                fatalError("real seed-time rejection must remain unsupportedOperation at IPC")
+            }
+
+            let agentInvalid = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: -1)
+            ))))
+            guard case .failure(let invalidFault) = Self.decode(agentInvalid).result,
+                  invalidFault.code == .invalidArgument else {
+                fatalError("real invalid limit rejection must remain invalidArgument at IPC")
+            }
+
+            let agentTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                addedURLs: ["udp://127.0.0.1:1/announce"],
+                removedURLs: []
+            ))))
+            guard case .success(.ack) = Self.decode(agentTrackers).result else {
+                fatalError("real tracker replacement must succeed at IPC")
+            }
+            let agentEmptyTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                addedURLs: [],
+                removedURLs: ["udp://127.0.0.1:1/announce"]
+            ))))
+            guard case .success(.ack) = Self.decode(agentEmptyTrackers).result else {
+                fatalError("real empty tracker replacement must succeed at IPC")
+            }
+            let agentReannounce = await agent.processCommand(Self.encode(.reannounce(ReannounceRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID
+            ))))
+            guard case .success(.ack) = Self.decode(agentReannounce).result else {
+                fatalError("real reannounce must succeed at IPC")
+            }
+            await agentBridgeCoordinator.shutdown()
+            try await store.close(clean: true)
+
             // --- negative: an unknown id must surface notFound, proving the
             // id (not a hardcoded empty payload) reaches the engine.
             do {
@@ -68,6 +228,40 @@ struct BridgeSwiftTest {
             print("bridge swift test: PASS")
         } catch {
             fatalError("bridge swift test: FAIL: \(error)")
+        }
+    }
+
+    private static func addMagnet(to coordinator: TransferCoordinator, uri: String) async throws -> TorrentRecordID {
+        let inspectionReply = await coordinator.processCommand(Self.encode(.inspectAddSource(
+            InspectAddSourceRequest(requestID: RequestID(), source: .magnet(uri))
+        )))
+        guard case .success(.addSourceInspection(let inspection)) = Self.decode(inspectionReply).result else {
+            throw NSError(domain: "torrentino.bridge.swift-test", code: 1)
+        }
+        let commitReply = await coordinator.processCommand(Self.encode(.commitAdd(CommitAddRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            operationID: inspection.operationID
+        ))))
+        guard case .success(.commitAdd(let result)) = Self.decode(commitReply).result else {
+            throw NSError(domain: "torrentino.bridge.swift-test", code: 2)
+        }
+        return result.recordID
+    }
+
+    private static func encode(_ command: EngineCommandV1) -> Data {
+        do {
+            return try JSONEncoder().encode(IPCEnvelope.request(command))
+        } catch {
+            fatalError("bridge swift test command encoding failed: \(error)")
+        }
+    }
+
+    private static func decode(_ data: Data) -> IPCEnvelope {
+        do {
+            return try JSONDecoder().decode(IPCEnvelope.self, from: data)
+        } catch {
+            fatalError("bridge swift test reply decoding failed: \(error)")
         }
     }
 }

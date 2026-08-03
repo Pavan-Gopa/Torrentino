@@ -71,21 +71,61 @@ clang++ -std=c++17 -O1 -fexceptions \
 	-c "${BRIDGE_DIR}/bridge/EngineBridge.cpp" \
 	-o "${BRIDGE_OBJ}"
 
+echo "==> building TorrentinoIPC module [Swift 6, strict concurrency]"
+swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
+	-module-name TorrentinoDomain \
+	-emit-module -emit-module-path "${BUILD_DIR}/TorrentinoDomain.swiftmodule" \
+	-emit-library -o "${BUILD_DIR}/libTorrentinoDomain.dylib" \
+	"${NATIVE_DIR}/TorrentinoDomain/"*.swift
+
+swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
+	-module-name TorrentinoIPC \
+	-emit-module -emit-module-path "${BUILD_DIR}/TorrentinoIPC.swiftmodule" \
+	-emit-library -o "${BUILD_DIR}/libTorrentinoIPC.dylib" \
+	"${NATIVE_DIR}/TorrentinoIPC/"*.swift
+
 echo "==> building + linking swift integration test"
 BINARY="${BUILD_DIR}/bridge-swift-test"
+AGENT_SOURCES=(
+	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineBridgeDTOs.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinatorError.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/AdvisoryLock.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/AtomicGeneration.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/FailpointInjector.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/PersistenceError.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/PersistenceStore.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/OperationJournal.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/QuarantineManager.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/ShutdownCoordinator.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/SQLiteConnection.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/StartupReconciler.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/BencodeParser.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/HTTPSourceFetcher.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MagnetParser.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Metainfo.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Preflight.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TorrentAdder.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferEventBus.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferRecord.swift"
+)
 swiftc -o "${BINARY}" \
 	-swift-version 6 -strict-concurrency=complete \
 	-parse-as-library \
+	-I "${BUILD_DIR}" \
+	-L "${BUILD_DIR}" -lTorrentinoIPC -lTorrentinoDomain \
 	-import-objc-header "${NATIVE_DIR}/TorrentinoEngineAgent/TorrentinoEngineAgent-Bridging-Header.h" \
 	-I "${NATIVE_DIR}/TorrentinoEngineBridge/adapter" \
 	"${BRIDGE_DIR}/harness/bridge_swift_test.swift" \
-	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift" \
-	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineBridgeDTOs.swift" \
-	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinatorError.swift" \
+	"${AGENT_SOURCES[@]}" \
 	"${ADAPTER_OBJ}" "${BRIDGE_OBJ}" \
 	"${LT_PREFIX}/lib/libtorrent-rasterbar.a" \
 	"${OPENSSL_PREFIX}/lib/libssl.a" \
 	"${OPENSSL_PREFIX}/lib/libcrypto.a" \
+	-lsqlite3 \
+	-Xlinker -rpath -Xlinker "${BUILD_DIR}" \
 	-Xlinker -lc++ \
 	-framework Foundation \
 	-framework CoreFoundation \

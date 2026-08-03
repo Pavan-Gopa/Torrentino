@@ -145,6 +145,10 @@ public actor BridgeTransferEngine: TransferEngine {
            case .unsupportedOperation(let details) = coordinatorError {
             return EngineFault.unsupportedOperation(operation: operation, details: details)
         }
+        if let coordinatorError = error as? EngineCoordinatorError,
+           case .invalidArgument = coordinatorError {
+            return EngineFault.invalidArgument(details: "operation=\(operation)")
+        }
         return error
     }
 

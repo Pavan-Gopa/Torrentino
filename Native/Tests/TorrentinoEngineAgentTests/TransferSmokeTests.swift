@@ -785,9 +785,7 @@ final class TransferSmokeTests: TestProfileCase {
         let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))")
         let limits = TorrentinoIPC.TransferLimits(
             maxDownloadBytesPerSec: 2_000,
-            maxUploadBytesPerSec: 1_000,
-            ratioLimit: 2.5,
-            seedTimeSeconds: 3_600
+            maxUploadBytesPerSec: 1_000
         )
         let result = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
             SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits)
@@ -819,32 +817,49 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(fault.code, EngineErrorCode.unsupportedOperation)
     }
 
-    func testTransferLimitsNegativeBecomeUnlimited() async throws {
+    func testTransferLimitsRejectInvalidValueWithoutMutation() async throws {
+        let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
         let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))")
+        let accepted = TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 2_048)
         _ = try resultPayload(from: await coordinator.processCommand(encode(.setLimits(
             SetLimitsRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: recordID,
-                limits: TorrentinoIPC.TransferLimits(
-                    maxDownloadBytesPerSec: -1,
-                    maxUploadBytesPerSec: nil,
-                    ratioLimit: -2,
-                    seedTimeSeconds: -10
-                )
+                limits: accepted
             )
         ))))
 
-        let snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+        let before = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
             FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
         ))))
-        let normalized = try XCTUnwrap(snap.torrents.first?.limits)
-        XCTAssertEqual(normalized.maxDownloadBytesPerSec, 0)
-        XCTAssertNil(normalized.maxUploadBytesPerSec)
-        XCTAssertEqual(normalized.ratioLimit, 0)
-        XCTAssertEqual(normalized.seedTimeSeconds, 0)
+        let reply = await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            limits: TorrentinoIPC.TransferLimits(
+                maxDownloadBytesPerSec: -1,
+                maxUploadBytesPerSec: Int64.max,
+                ratioLimit: -2,
+                seedTimeSeconds: -10
+            )
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("invalid limits must fail through the IPC result")
+        }
+        XCTAssertEqual(fault.code, .invalidArgument)
+
+        let after = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
+        ))))
+        XCTAssertEqual(after, before, "rejected limits must not publish or mutate a snapshot")
+        let applied = await engineRef.limits(for: "stub-1")
+        XCTAssertEqual(applied, accepted)
+        let persisted = try await store.torrentLimits(torrentID: recordID.rawValue.uuidString)
+        XCTAssertEqual(persisted, accepted)
+        XCTAssertNotNil(TorrentinoIPC.TransferLimits(ratioLimit: .nan).validationError)
     }
 
     func testSeedGoalsRoundTrip() async throws {
@@ -912,10 +927,18 @@ final class TransferSmokeTests: TestProfileCase {
                 idempotencyKey: IdempotencyKey(),
                 recordID: recordID,
                 addedURLs: [],
-                removedURLs: ["udp://one.example/announce"]
+                removedURLs: ["udp://one.example/announce", "https://two.example/announce"]
             )
         ))))
         XCTAssertEqual(secondEdit, SuccessPayload.ack)
+
+        let empty = await coordinator.processCommand(encode(.fetchTrackers(FetchTrackersRequest(
+            requestID: RequestID(), recordID: recordID, cursor: nil, pageSize: 50, expectedRevision: 2
+        ))))
+        guard case .trackers(let emptyPage) = try resultPayload(from: empty) else {
+            return XCTFail("expected empty tracker page")
+        }
+        XCTAssertTrue(emptyPage.items.isEmpty, "removing every tracker must preserve an explicit empty list")
     }
 
     func testReannounce() async throws {

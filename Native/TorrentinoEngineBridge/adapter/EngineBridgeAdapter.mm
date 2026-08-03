@@ -123,18 +123,36 @@ std::optional<double> optionalDoubleValue(NSDictionary* dict, const char* key)
 		? std::optional<double>([value doubleValue]) : std::nullopt;
 }
 
-std::vector<std::string> stringArrayValue(NSDictionary* dict, const char* key)
+void setInvalidArgument(NSError** error, NSString* message)
+{
+	if (error != nil) {
+		*error = [NSError errorWithDomain:TorrentinoEngineBridgeErrorDomain
+								 code:TorrentinoEngineBridgeErrorInvalidArgument
+							 userInfo:@{NSLocalizedDescriptionKey : message}];
+	}
+}
+
+bool stringArrayValue(
+	NSDictionary* dict,
+	const char* key,
+	std::vector<std::string>& result,
+	NSError** error)
 {
 	id value = dict[jsonKey(key)];
-	NSArray* array = [value isKindOfClass:[NSArray class]] ? value : @[];
-	std::vector<std::string> result;
+	if (![value isKindOfClass:[NSArray class]]) {
+		setInvalidArgument(error, [NSString stringWithFormat:@"%s must be an array", key]);
+		return false;
+	}
+	NSArray* array = (NSArray*)value;
 	result.reserve(array.count);
 	for (id item in array) {
-		if ([item isKindOfClass:[NSString class]]) {
-			result.emplace_back([item UTF8String]);
+		if (![item isKindOfClass:[NSString class]]) {
+			setInvalidArgument(error, [NSString stringWithFormat:@"%s must contain only strings", key]);
+			return false;
 		}
+		result.emplace_back([(NSString*)item UTF8String]);
 	}
-	return result;
+	return true;
 }
 
 // The torrent-file field travels base64 because JSON strings are not a safe
@@ -493,7 +511,11 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 			return nil;
 		}
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
-		return voidResultToData(_engine->editTrackers(id, stringArrayValue(dict, "trackers")), error);
+		std::vector<std::string> trackers;
+		if (!stringArrayValue(dict, "trackers", trackers, error)) {
+			return nil;
+		}
+		return voidResultToData(_engine->editTrackers(id, trackers), error);
 	}, error);
 }
 

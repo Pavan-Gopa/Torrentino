@@ -260,21 +260,17 @@ struct InspectorView: View {
                         .font(.caption)
                         .foregroundStyle(contrast == .increased ? .primary : .secondary)
                     Button(String(localized: "inspector.settings.apply")) {
-                        let down = Int64(maxDownKB) ?? 0
-                        let up = Int64(maxUpKB) ?? 0
-                        let ratio = ratioLimit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? nil
-                            : Double(ratioLimit)
-                        let seed = seedTimeSeconds.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? nil
-                            : Int64(seedTimeSeconds)
-                        let limits = TransferLimits(
-                            maxDownloadBytesPerSec: down > 0 ? down * 1024 : 0,
-                            maxUploadBytesPerSec: up > 0 ? up * 1024 : 0,
-                            ratioLimit: ratio,
-                            seedTimeSeconds: seed
-                        )
-                        Task { await viewModel.setLimits(torrent.id, limits: limits) }
+                        switch parsedLimits() {
+                        case .success(let limits):
+                            Task { await viewModel.setLimits(torrent.id, limits: limits) }
+                        case .failure(let error):
+                            // Keep malformed text as a typed command error; it
+                            // must never become an implicit unlimited value.
+                            viewModel.surfaceCommandError(
+                                EngineFault.invalidArgument(details: error.description, recordID: torrent.id),
+                                fallback: "limits.failed"
+                            )
+                        }
                     }
                     if let commandError = viewModel.commandError {
                         Label(commandError, systemImage: "exclamationmark.triangle.fill")
@@ -291,6 +287,68 @@ struct InspectorView: View {
     }
 
     // MARK: - Helpers
+
+    private enum LimitInputError: Error, CustomStringConvertible {
+        case invalid(field: String)
+        case overflow(field: String)
+
+        var description: String {
+            switch self {
+            case .invalid(let field): return "\(field) is not a valid limit"
+            case .overflow(let field): return "\(field) is outside the supported range"
+            }
+        }
+    }
+
+    private func parsedLimits() -> Result<TransferLimits, LimitInputError> {
+        do {
+            let down = try parseBandwidth(maxDownKB, field: "maxDownloadBytesPerSec")
+            let up = try parseBandwidth(maxUpKB, field: "maxUploadBytesPerSec")
+            let ratio = try parseRatio(ratioLimit, field: "ratioLimit")
+            let seed = try parseSeed(seedTimeSeconds, field: "seedTimeSeconds")
+            return .success(TransferLimits(
+                maxDownloadBytesPerSec: down,
+                maxUploadBytesPerSec: up,
+                ratioLimit: ratio,
+                seedTimeSeconds: seed
+            ))
+        } catch let error as LimitInputError {
+            return .failure(error)
+        } catch {
+            return .failure(.invalid(field: "limits"))
+        }
+    }
+
+    private func parseBandwidth(_ raw: String, field: String) throws -> Int64 {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return 0 }
+        guard let kilobytes = Int64(value), kilobytes >= 0 else {
+            throw LimitInputError.invalid(field: field)
+        }
+        let (bytes, overflow) = kilobytes.multipliedReportingOverflow(by: 1024)
+        guard !overflow, bytes <= TransferLimits.maxBandwidthBytesPerSec else {
+            throw LimitInputError.overflow(field: field)
+        }
+        return bytes
+    }
+
+    private func parseRatio(_ raw: String, field: String) throws -> Double? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        guard let ratio = Double(value), ratio.isFinite, ratio >= 0 else {
+            throw LimitInputError.invalid(field: field)
+        }
+        return ratio
+    }
+
+    private func parseSeed(_ raw: String, field: String) throws -> Int64? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        guard let seconds = Int64(value), seconds >= 0 else {
+            throw LimitInputError.invalid(field: field)
+        }
+        return seconds
+    }
 
     private func loadLimitFields() {
         guard let torrent else { return }

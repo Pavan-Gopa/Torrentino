@@ -10,9 +10,7 @@
 //           call; shutdown() is idempotent and safe to call from deinit paths.
 
 import Foundation
-#if canImport(TorrentinoIPC)
 import TorrentinoIPC
-#endif
 
 /// Swift actor owning the native engine through the ObjC++ bridge adapter.
 /// All calls are serialized; each returns Sendable, immutable DTOs.
@@ -51,7 +49,6 @@ public actor EngineCoordinator {
         return try decode(BootReportDTO.self, from: response)
     }
 
-    #if canImport(TorrentinoIPC)
     /// Applies the agent's complete settings candidate to the live session.
     /// The bridge applies settings asynchronously inside libtorrent without
     /// destroying torrent handles. The download directory is retained by the
@@ -80,7 +77,6 @@ public actor EngineCoordinator {
         let payload = try encode(TorrentIDPayload(torrentID: torrentID))
         try voidCall(payload) { try adapter.reannounce(withPayloadData: $0) }
     }
-    #endif
 
     /// Adds a torrent from a .torrent file bytes or a magnet URI (exactly one).
     public func add(specification: AddSpecificationDTO) throws -> AddResultDTO {
@@ -161,7 +157,6 @@ public actor EngineCoordinator {
         started = false
     }
 
-    #if canImport(TorrentinoIPC)
     private static func sessionConfiguration(for settings: EngineSettings) -> SessionConfigurationDTO {
         SessionConfigurationDTO(
             listenPort: Int(settings.listenPort),
@@ -181,7 +176,6 @@ public actor EngineCoordinator {
             )
         )
     }
-    #endif
 
     // MARK: - Envelope helpers (JSON wire schema, frozen)
 
@@ -190,7 +184,6 @@ public actor EngineCoordinator {
         enum CodingKeys: String, CodingKey { case torrentID = "torrent-id" }
     }
 
-    #if canImport(TorrentinoIPC)
     private struct TorrentLimitsPayload: Codable {
         let torrentID: String
         let limits: TorrentinoIPC.TransferLimits
@@ -200,7 +193,6 @@ public actor EngineCoordinator {
             case limits
         }
     }
-    #endif
 
     private struct TrackersPayload: Codable {
         let torrentID: String

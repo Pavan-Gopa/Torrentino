@@ -156,7 +156,7 @@ public actor TransferCoordinator {
                 saveLocation: configuredSaveLocation(),
                 addedAt: torrent.addedAt,
                 revision: 0,
-                limits: limits.normalized
+                limits: limits
             )
             records[recordID] = record
             recordRevisions[recordID] = 0
@@ -877,7 +877,10 @@ public actor TransferCoordinator {
         recordID: TorrentRecordID? = nil,
         fallback: String
     ) -> EngineFault {
-        if let fault = error as? EngineFault, fault.code == .unsupportedOperation {
+        // BridgeTransferEngine and test engines may already carry a typed IPC
+        // fault. Preserve it instead of collapsing invalid arguments into a
+        // generic busy result.
+        if let fault = error as? EngineFault {
             return fault
         }
         return .engineBusy(details: fallback)
@@ -992,24 +995,32 @@ extension TransferCoordinator {
     // MARK: - WP-08 Command Handlers
 
     private func handleSetLimits(_ request: SetLimitsRequest) async -> EngineCommandResult {
+        guard let validationError = request.limits.validationError else {
+            return await applyValidatedLimits(request)
+        }
+        return .failure(.invalidArgument(
+            details: validationError.description,
+            recordID: request.recordID
+        ))
+    }
+
+    private func applyValidatedLimits(_ request: SetLimitsRequest) async -> EngineCommandResult {
         guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
-        // Negative values become zero and nil remains unlimited at the engine boundary.
-        let normalized = request.limits.normalized
         guard let engineID = await liveEngineID(for: request.recordID) else {
             return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
         }
         do {
             try await persistence.setTorrentLimits(
                 torrentID: request.recordID.rawValue.uuidString,
-                limits: normalized
+                limits: request.limits
             )
         } catch {
             return .failure(.storeError(underlying: error))
         }
         do {
-            try await engine.setLimits(torrentID: engineID, limits: normalized)
+            try await engine.setLimits(torrentID: engineID, limits: request.limits)
         } catch {
             // Persistence must not report a limit that the live engine rejected.
             try? await persistence.setTorrentLimits(
@@ -1023,7 +1034,7 @@ extension TransferCoordinator {
                 fallback: "setLimits rejected by engine"
             ))
         }
-        records[request.recordID] = (records[request.recordID] ?? record).with(limits: normalized)
+        records[request.recordID] = (records[request.recordID] ?? record).with(limits: request.limits)
         bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)

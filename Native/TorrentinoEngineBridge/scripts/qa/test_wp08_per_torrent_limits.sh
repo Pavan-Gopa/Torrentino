@@ -2,8 +2,8 @@
 #
 # QA WP-08 - per-torrent bandwidth limits and seed goals.
 #
-# ratioLimit and seedTimeSeconds must be visible in the Inspector, normalized
-# at the engine boundary, and survive a set/fetch round trip.
+# ratioLimit and seedTimeSeconds must be visible in the Inspector, invalid
+# values must stay invalid, and valid bandwidth values must survive a round trip.
 #
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
@@ -38,10 +38,10 @@ handler = re.search(r'private func handleSetLimits\(.*?(?=\n\s*private func hand
 body = handler.group(0) if handler else ""
 if "request.limits" not in body:
     issues.append("handleSetLimits ignores request.limits and cannot persist or apply limits")
-if not re.search(r'(?i)max\s*\(|<\s*0|negative|unlimited', body):
-    issues.append("handleSetLimits has no negative-to-zero/unlimited normalization")
+if "validationError" not in body or "invalidArgument" not in body:
+    issues.append("handleSetLimits has no strict validation or typed invalidArgument fault")
 
-for name in ("testTransferLimitsRoundTrip", "testTransferLimitsNegativeBecomeUnlimited", "testSeedGoalsRoundTrip"):
+for name in ("testTransferLimitsRoundTrip", "testTransferLimitsRejectInvalidValueWithoutMutation", "testSeedGoalsRoundTrip"):
     if f"func {name}" not in tests:
         issues.append(f"missing unit axis {name}")
 
@@ -50,7 +50,7 @@ if issues:
         print(f"FAIL: {issue}", file=sys.stderr)
     sys.exit(1)
 
-print("OK: per-torrent limits and seed goals have UI, normalization, round-trip, and negative coverage")
+print("OK: per-torrent limits and seed goals have UI, strict validation, round-trip, and rejection coverage")
 PY
 
 qa_ok "per-torrent limits/seed-goals source and test contract"

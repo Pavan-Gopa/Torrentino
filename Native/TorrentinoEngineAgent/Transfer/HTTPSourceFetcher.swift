@@ -77,7 +77,6 @@ public struct HTTPSourceFetcher: Sendable {
             ephemeral.timeoutIntervalForRequest = Self.deadline
             ephemeral.timeoutIntervalForResource = Self.deadline
             ephemeral.waitsForConnectivity = false
-            ephemeral.httpShouldUsePipelining = true
             return ephemeral
         }()
         let delegate = FetchDelegate()

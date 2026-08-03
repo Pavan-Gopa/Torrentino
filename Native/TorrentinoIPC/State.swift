@@ -111,7 +111,8 @@ public struct PersistedLocation: Codable, Sendable, Equatable {
     }
 }
 
-/// Per-torrent bandwidth limits and seed goals. nil means "unchanged / unlimited".
+/// Per-torrent bandwidth limits and seed goals. nil means "not supplied";
+/// zero is the explicit unlimited value accepted by the engine for a field.
 public struct TransferLimits: Codable, Sendable, Equatable {
     public let maxDownloadBytesPerSec: Int64?
     public let maxUploadBytesPerSec: Int64?
@@ -130,15 +131,54 @@ public struct TransferLimits: Codable, Sendable, Equatable {
         self.seedTimeSeconds = seedTimeSeconds
     }
 
-    /// Converts invalid negative/non-finite values to an explicit unlimited
-    /// value while preserving nil as "not supplied" on the wire.
-    public var normalized: TransferLimits {
-        TransferLimits(
-            maxDownloadBytesPerSec: maxDownloadBytesPerSec.map { max(0, $0) },
-            maxUploadBytesPerSec: maxUploadBytesPerSec.map { max(0, $0) },
-            ratioLimit: ratioLimit.map { $0.isFinite && $0 >= 0 ? $0 : 0 },
-            seedTimeSeconds: seedTimeSeconds.map { max(0, $0) }
-        )
+    /// The native bridge passes bandwidth limits to a signed C++ `int`.
+    /// Keeping this bound in the shared value type prevents an overflowing
+    /// Swift value from being persisted before the bridge can reject it.
+    public static let maxBandwidthBytesPerSec = Int64(Int32.max)
+
+    public var validationError: TransferLimitsValidationError? {
+        if let maxDownloadBytesPerSec {
+            if maxDownloadBytesPerSec < 0 {
+                return .negative(field: "maxDownloadBytesPerSec")
+            }
+            if maxDownloadBytesPerSec > Self.maxBandwidthBytesPerSec {
+                return .exceedsEngineRange(field: "maxDownloadBytesPerSec")
+            }
+        }
+        if let maxUploadBytesPerSec {
+            if maxUploadBytesPerSec < 0 {
+                return .negative(field: "maxUploadBytesPerSec")
+            }
+            if maxUploadBytesPerSec > Self.maxBandwidthBytesPerSec {
+                return .exceedsEngineRange(field: "maxUploadBytesPerSec")
+            }
+        }
+        if let ratioLimit {
+            if !ratioLimit.isFinite {
+                return .nonFinite(field: "ratioLimit")
+            }
+            if ratioLimit < 0 {
+                return .negative(field: "ratioLimit")
+            }
+        }
+        if let seedTimeSeconds, seedTimeSeconds < 0 {
+            return .negative(field: "seedTimeSeconds")
+        }
+        return nil
+    }
+}
+
+public enum TransferLimitsValidationError: Error, Codable, Sendable, Equatable, CustomStringConvertible {
+    case negative(field: String)
+    case nonFinite(field: String)
+    case exceedsEngineRange(field: String)
+
+    public var description: String {
+        switch self {
+        case .negative(let field): return "\(field) must be non-negative"
+        case .nonFinite(let field): return "\(field) must be finite"
+        case .exceedsEngineRange(let field): return "\(field) exceeds the engine range"
+        }
     }
 }
 

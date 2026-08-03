@@ -22,6 +22,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -254,6 +255,27 @@ int main()
 		const auto limits = bridge.setLimits(add_result.torrent_id, bandwidth);
 		TH_REQUIRE(limits.is_ok(), "per-torrent bandwidth limits must apply");
 
+		TorrentLimits invalidBandwidth;
+		invalidBandwidth.max_download_bytes_per_sec = -1;
+		const auto negative = bridge.setLimits(add_result.torrent_id, invalidBandwidth);
+		TH_REQUIRE(!negative.is_ok(), "negative bandwidth limit must be rejected");
+		TH_REQUIRE(negative.error_code() == BridgeError::invalid_argument,
+			"negative bandwidth limit maps to invalid_argument");
+
+		TorrentLimits overflowBandwidth;
+		overflowBandwidth.max_upload_bytes_per_sec = std::numeric_limits<std::int64_t>::max();
+		const auto overflow = bridge.setLimits(add_result.torrent_id, overflowBandwidth);
+		TH_REQUIRE(!overflow.is_ok(), "overflow bandwidth limit must be rejected");
+		TH_REQUIRE(overflow.error_code() == BridgeError::invalid_argument,
+			"overflow bandwidth limit maps to invalid_argument");
+
+		TorrentLimits nonFiniteRatio;
+		nonFiniteRatio.ratio_limit = std::numeric_limits<double>::quiet_NaN();
+		const auto nonFinite = bridge.setLimits(add_result.torrent_id, nonFiniteRatio);
+		TH_REQUIRE(!nonFinite.is_ok(), "non-finite ratio goal must be rejected");
+		TH_REQUIRE(nonFinite.error_code() == BridgeError::invalid_argument,
+			"non-finite ratio goal maps to invalid_argument");
+
 		TorrentLimits unsupported;
 		unsupported.ratio_limit = 1.5;
 		const auto ratio = bridge.setLimits(add_result.torrent_id, unsupported);
@@ -261,9 +283,23 @@ int main()
 		TH_REQUIRE(ratio.error_code() == BridgeError::unsupported_operation,
 			"unsupported ratio goal maps to typed unsupported_operation");
 
+		TorrentLimits unsupportedSeedTime;
+		unsupportedSeedTime.seed_time_seconds = 3600;
+		const auto seedTime = bridge.setLimits(add_result.torrent_id, unsupportedSeedTime);
+		TH_REQUIRE(!seedTime.is_ok(), "unsupported seed-time goal must not report success");
+		TH_REQUIRE(seedTime.error_code() == BridgeError::unsupported_operation,
+			"unsupported seed-time goal maps to typed unsupported_operation");
+
 		const auto trackers = bridge.editTrackers(add_result.torrent_id,
 			{"udp://127.0.0.1:1/announce"});
 		TH_REQUIRE(trackers.is_ok(), "tracker replacement must apply");
+		const auto invalidTracker = bridge.editTrackers(add_result.torrent_id,
+			{"not-a-tracker-url"});
+		TH_REQUIRE(!invalidTracker.is_ok(), "malformed tracker URL must be rejected");
+		TH_REQUIRE(invalidTracker.error_code() == BridgeError::invalid_argument,
+			"malformed tracker URL maps to invalid_argument");
+		const auto emptyTrackers = bridge.editTrackers(add_result.torrent_id, {});
+		TH_REQUIRE(emptyTrackers.is_ok(), "explicitly empty tracker list must apply");
 		const auto reannounce = bridge.reannounce(add_result.torrent_id);
 		TH_REQUIRE(reannounce.is_ok(), "reannounce must reach the torrent handle");
 	}

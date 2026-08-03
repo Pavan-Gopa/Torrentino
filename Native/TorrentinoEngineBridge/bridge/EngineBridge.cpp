@@ -24,6 +24,7 @@
 #include <libtorrent/write_resume_data.hpp>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cmath>
@@ -46,6 +47,117 @@ using Deadline = Clock::time_point;
 
 constexpr std::uint32_t kDefaultTimeoutMs = 10000;
 constexpr const char* kEngineVersion = "torrentino-bridge/1.0";
+
+bool valid_tracker_port(std::string_view port)
+{
+	if (port.empty() || port.size() > 5) {
+		return false;
+	}
+	unsigned int value = 0;
+	for (const char character : port) {
+		if (!std::isdigit(static_cast<unsigned char>(character))) {
+			return false;
+		}
+		value = value * 10u + static_cast<unsigned int>(character - '0');
+	}
+	return value > 0 && value <= 65535;
+}
+
+bool valid_tracker_host(std::string_view host)
+{
+	if (host.empty()) {
+		return false;
+	}
+	for (const char character : host) {
+		if (!std::isalnum(static_cast<unsigned char>(character))
+			&& character != '.' && character != '-' && character != '_' && character != '%') {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool valid_tracker_ipv6_literal(std::string_view host)
+{
+	bool hasColon = false;
+	for (const char character : host) {
+		if (character == ':') {
+			hasColon = true;
+			continue;
+		}
+		if (!std::isxdigit(static_cast<unsigned char>(character)) && character != '.') {
+			return false;
+		}
+	}
+	return hasColon;
+}
+
+bool valid_tracker_url(std::string_view url)
+{
+	for (const char character : url) {
+		if (std::iscntrl(static_cast<unsigned char>(character))
+			|| std::isspace(static_cast<unsigned char>(character))) {
+			return false;
+		}
+	}
+
+	const std::size_t separator = url.find("://");
+	if (separator == std::string_view::npos || separator == 0) {
+		return false;
+	}
+	std::string scheme(url.substr(0, separator));
+	for (char& character : scheme) {
+		character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+	}
+	if (scheme != "http" && scheme != "https" && scheme != "udp") {
+		return false;
+	}
+
+	const std::size_t authorityStart = separator + 3;
+	if (authorityStart >= url.size()) {
+		return false;
+	}
+	const std::size_t authorityEnd = url.find_first_of("/?#", authorityStart);
+	const std::string_view authority = url.substr(
+		authorityStart,
+		authorityEnd == std::string_view::npos ? url.size() - authorityStart : authorityEnd - authorityStart);
+	if (authority.empty() || authority.find('@') != std::string_view::npos) {
+		return false;
+	}
+
+	if (authority.front() == '[') {
+		const std::size_t closingBracket = authority.find(']');
+		if (closingBracket <= 1) {
+			return false;
+		}
+		const std::string_view host = authority.substr(1, closingBracket - 1);
+		if (!valid_tracker_ipv6_literal(host)) {
+			return false;
+		}
+		const std::string_view suffix = authority.substr(closingBracket + 1);
+		if (!suffix.empty() && (suffix.front() != ':' || !valid_tracker_port(suffix.substr(1)))) {
+			return false;
+		}
+		return authority.find('[', 1) == std::string_view::npos
+			&& authority.find(']', closingBracket + 1) == std::string_view::npos;
+	}
+
+	if (authority.find('[') != std::string_view::npos
+		|| authority.find(']') != std::string_view::npos) {
+		return false;
+	}
+	const std::size_t colon = authority.find(':');
+	if (colon == std::string_view::npos) {
+		return valid_tracker_host(authority);
+	}
+	if (colon == 0 || authority.find(':', colon + 1) != std::string_view::npos) {
+		return false;
+	}
+	if (!valid_tracker_host(authority.substr(0, colon))) {
+		return false;
+	}
+	return valid_tracker_port(authority.substr(colon + 1));
+}
 
 // Alert categories the engine consumes. `all` would flood the batch queue
 // with per-peer/per-piece traffic, which WP-04 explicitly must not deliver.
@@ -692,11 +804,6 @@ struct EngineBridge::Impl {
 		if (!startedResult.is_ok()) {
 			return startedResult;
 		}
-		const Result<lt::torrent_handle> found = findHandleLocked(id);
-		if (!found.is_ok()) {
-			return Result<void>::failed(found.error_code(), found.error_message());
-		}
-
 		if (limits.max_download_bytes_per_sec.has_value()
 			&& (*limits.max_download_bytes_per_sec < 0
 				|| *limits.max_download_bytes_per_sec > std::numeric_limits<int>::max())) {
@@ -725,6 +832,11 @@ struct EngineBridge::Impl {
 			|| (limits.seed_time_seconds.has_value() && *limits.seed_time_seconds > 0)) {
 			return Result<void>::failed(BridgeError::unsupported_operation,
 				"setLimits: ratio and seed-time goals are unsupported by libtorrent ABI 2");
+		}
+
+		const Result<lt::torrent_handle> found = findHandleLocked(id);
+		if (!found.is_ok()) {
+			return Result<void>::failed(found.error_code(), found.error_message());
 		}
 
 		const auto toLimit = [](const std::optional<std::int64_t>& value) {
@@ -759,9 +871,9 @@ struct EngineBridge::Impl {
 		std::vector<lt::announce_entry> entries;
 		entries.reserve(trackers.size());
 		for (const std::string& tracker : trackers) {
-			if (tracker.empty()) {
+			if (!valid_tracker_url(tracker)) {
 				return Result<void>::failed(BridgeError::invalid_argument,
-					"editTrackers: tracker URL must not be empty");
+					"editTrackers: tracker URL is malformed or uses an unsupported scheme");
 			}
 			entries.emplace_back(tracker);
 		}
