@@ -1,21 +1,12 @@
 current_step: WP-08
 step_description: >-
-  Native UX completeness — final validation polish under review (native
-  invalidArgument IPC path, tracker URL validation, split invalid-limit tests).
+  Native UX completeness — Review APPROVED; Tester full suite + WP-08 coverage.
 target_files:
-- Native/TorrentinoApp/
-- Native/TorrentinoEngineAgent/Agent/
-- Native/TorrentinoEngineAgent/Transfer/
-- Native/TorrentinoEngineAgent/Persistence/
-- Native/TorrentinoEngineAgent/EngineCoordinator/
-- Native/TorrentinoIPC/
-- Native/TorrentinoDomain/
 - Native/Tests/
-- Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
-- Native/TorrentinoEngineBridge/bridge/
-- Native/TorrentinoEngineBridge/adapter/
-- Native/TorrentinoEngineBridge/harness/
+- AI_Workflow_Kit/docs/AI/COVERAGE.md
+- Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
+- Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
 completed_steps:
 - WP-00
 - WP-01
@@ -26,25 +17,27 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: waiting_review
+  status: done
   attempts: 3
   note: >-
-    Coder claims items 1-3 closed. Orchestrator restored accidental Legacy/Tauri
-    dirty tree before commit (frozen). Product-only commit for review.
+    Review APPROVED (aeb429f). Product at 585801e + later polish commits.
 review:
-  status: pending
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
+  verdict: APPROVED
   note: >-
-    Re-review FEEDBACK §5 items 1-3 only. Confirm Legacy untouched. Full suite
-    should be 97/97 after Legacy restore (coder saw 96/97 due to Legacy drift).
+    Final validation items 1-3 PASS. Legacy working-tree dirt is Human research
+    (ADR-013), not product failure.
 qa:
   status: pending
-  last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
+  last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-08
-  bugs_open: open
-  note: Tester after APPROVED.
-next_actor: reviewer
+  bugs_open: 0
+  note: >-
+    Tester run. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL while
+    Human has dirty Legacy/ research tree — do not fix Legacy; report as
+    environmental. Product gate = all other scripts + xcodebuild test green.
+next_actor: tester
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -55,9 +48,9 @@ legacy_hard_ban: >-
 checkpoint:
   last_pre_tag: torrentino/pre-WP-08
   last_post_tag: torrentino/WP-07-done
-  last_commit: 585801e
+  last_commit: aeb429f
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Final validation handoff awaiting review.
+  N/A — Tester phase. On GREEN → Orchestrator POST WP-08 + PRE WP-09.
