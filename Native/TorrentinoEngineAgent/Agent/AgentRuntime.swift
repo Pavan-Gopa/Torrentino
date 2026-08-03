@@ -11,6 +11,7 @@
 
 import Foundation
 import OSLog
+import TorrentinoIPC
 
 final class AgentRuntime: @unchecked Sendable {
     /// Exit codes (see LIFECYCLE_CONTRACT.md):
@@ -40,6 +41,9 @@ final class AgentRuntime: @unchecked Sendable {
     private var lockDescriptor: CInt = -1
     private var advisoryLock: AdvisoryLockHandle?
     private var stopInitiated = false
+    /// WP-07 transfer lane, built after persistence opens (set-once, on
+    /// stateQueue). Stopped before the clean-shutdown pipeline in initiateStop.
+    private var transferCoordinator: TransferCoordinator?
 
     /// Creates the engine directory, takes the single-instance lock, acquires
     /// the persistence single-writer advisory lock, and loads the durable
@@ -101,6 +105,7 @@ final class AgentRuntime: @unchecked Sendable {
             } catch {
                 log.error("persistence open failed, serving degraded: \(String(describing: error), privacy: .public)")
             }
+            await wireTransferLanes()
         }
 
         let delegate = ListenerDelegate(service: service)
@@ -115,6 +120,43 @@ final class AgentRuntime: @unchecked Sendable {
         log.notice("mach listener resumed service=\(TorrentinoXPCSecurity.machServiceName, privacy: .public)")
     }
 
+    // MARK: - WP-07 transfer lane
+
+    /// Builds the event bus + production engine bridge + coordinator, injects
+    /// them into the service, restores persisted records, and starts the
+    /// status pump. Runs after persistence.open (the coordinator persists
+    /// through the same store). Restore and pump are best-effort: a failed
+    /// restore leaves the coordinator empty; the pump re-adds running torrents
+    /// on the next tick.
+    private func wireTransferLanes() async {
+        let bus = TransferEventBus()
+        let bridge = BridgeTransferEngine(coordinator: EngineCoordinator())
+        let coordinator = TransferCoordinator(
+            engine: bridge,
+            persistence: persistence,
+            eventBus: bus,
+            agentVersion: AgentRuntime.agentVersion,
+            defaultSaveLocation: PersistedLocation(path: Self.defaultDownloadsPath),
+            pumpIntervalNanoseconds: 500_000_000
+        )
+        stateQueue.sync {
+            self.transferCoordinator = coordinator
+            service.coordinator = coordinator
+            service.eventBus = bus
+        }
+        await coordinator.restoreFromPersistence()
+        await coordinator.startPump()
+        log.notice("transfer lane wired (bus + coordinator + bridge engine)")
+    }
+
+    /// Default torrent save location: the current user's Downloads folder.
+    private static var defaultDownloadsPath: String {
+        (try? FileManager.default.url(for: .downloadsDirectory,
+                                      in: .userDomainMask,
+                                      appropriateFor: nil,
+                                      create: false).path) ?? "~/Downloads"
+    }
+
     // MARK: - Graceful stop (shared by SIGTERM/SIGINT and XPC shutdown)
 
     private func initiateStop(reason: String, exitDelayNanoseconds: UInt64) {
@@ -124,6 +166,7 @@ final class AgentRuntime: @unchecked Sendable {
             log.notice("graceful shutdown initiated reason=\(reason, privacy: .public)")
             let store = store
             let persistence = persistence
+            let coordinator = transferCoordinator // captured on stateQueue
             Task {
                 do {
                     try await store.flush()
@@ -132,6 +175,11 @@ final class AgentRuntime: @unchecked Sendable {
                     // Still exit 0: the in-memory value was already persisted
                     // on every increment; flush is a belt-and-braces checkpoint.
                     log.error("final flush failed: \(String(describing: error), privacy: .public)")
+                }
+                // Stop the WP-07 status pump so no engine/persistence work
+                // overlaps the clean-shutdown pipeline.
+                if let coordinator {
+                    await coordinator.stop()
                 }
                 // WP-06 clean shutdown: WAL flush -> TRUNCATE checkpoint ->
                 // journal truncation -> clean flag -> close. Any failure here
@@ -245,10 +293,20 @@ final class AgentRuntime: @unchecked Sendable {
                                  ofReply: true)
             connection.exportedInterface = interface
             connection.exportedObject = service
-            connection.interruptionHandler = { [log] in
-                log.notice("ui connection interrupted")
+            // WP-07: the UI exports its TorrentinoEventSink object on this
+            // connection; we push event batches through the remote proxy. The
+            // client-side exportedInterface must declare the same protocol.
+            connection.remoteObjectInterface = NSXPCInterface(with: TorrentinoEventSink.self)
+            connection.interruptionHandler = { [weak service] in
+                self.log.notice("ui connection interrupted")
+                service?.setEventSink(nil)
+            }
+            connection.invalidationHandler = { [weak service] in
+                self.log.notice("ui connection invalidated")
+                service?.setEventSink(nil)
             }
             connection.resume()
+            service.setEventSink(connection.remoteObjectProxy as? TorrentinoEventSink)
             log.notice("accepted ui connection effectiveUserIdentifier=\(connection.effectiveUserIdentifier)")
             return true
         }

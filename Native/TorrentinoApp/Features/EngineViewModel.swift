@@ -14,7 +14,12 @@ final class EngineViewModel: ObservableObject {
     @Published private(set) var degraded: Bool = true
     @Published private(set) var busy: Bool = false
 
-    let client = EngineClient()
+    /// Shared with the transfer list (single XPC connection + event sink).
+    let client: EngineClient
+
+    init(client: EngineClient) {
+        self.client = client
+    }
 
     private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()

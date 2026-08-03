@@ -191,4 +191,40 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             redactedContext: details
         )
     }
+
+    public static func operationTimeout(details: String) -> EngineFault {
+        EngineFault(
+            code: .operationTimeout,
+            severity: .error,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func networkUnavailable(details: String) -> EngineFault {
+        EngineFault(
+            code: .networkUnavailable,
+            severity: .warning,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func engineNotReady(details: String) -> EngineFault {
+        EngineFault(
+            code: .engineNotReady,
+            severity: .warning,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func operationNotFound(details: String) -> EngineFault {
+        EngineFault(
+            code: .operationNotFound,
+            severity: .error,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
 }

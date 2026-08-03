@@ -57,3 +57,80 @@ xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
 - **foreign_keys is per-connection**: verified via the store's own connection (`foreignKeysEnabled()`), not a second probe connection.
 - **SQLITE_TRANSIENT**: not visible from Swift (C macro); replaced with `unsafeBitCast(-1, to: sqlite3_destructor_type.self)`.
 - **GenerationClock**: plain `@unchecked Sendable` class confined to the PersistenceStore actor (an actor would force async hops in the sync write path).
+
+---
+
+# WP-07 Implementation Feedback
+
+## RESULT: waiting_review
+
+## Summary
+Core transfer vertical slice implemented end-to-end: parsing/preflight pipeline (bencode, metainfo, magnet, HTTP source fetch), `TransferCoordinator` (journal-first durable add, duplicate detection by content identity, idempotent commitAdd replay, pause/resume, paginated files with directory drill-down, file selection), `TransferEventBus` + XPC event lane, production `BridgeTransferEngine` over `EngineCoordinator`, agent wiring (`wireTransferLanes`, default Downloads save location, 500 ms status pump, sink binding on connection accept/invalidate), and the native transfer window (sidebar filters, table, files pane, status bar, Add Torrent sheet, deterministic fixture fallback). 25 new smoke tests cover the full gate. Full scheme builds clean; all test targets green.
+
+## Files Created/Modified
+
+### Native/TorrentinoEngineAgent/Transfer/ (new group, 11 files)
+- **BencodeParser.swift** — bounded recursive-descent parser (depth ≤64, input ≤16 MiB, strict integers: no leading zeros, no `-0`)
+- **MagnetParser.swift** — BEP-9/BEP-53 with ≤8 KiB URI, 40-hex v1 / 64-hex v2 hash, tracker dedupe + bounds
+- **Metainfo.swift** — `MetainfoParser`/`Metainfo` + `TransferLimits` (10 MiB, 10 000 files, 512 trackers, path 4096/component 255), SHA-1 v1 info hash via CommonCrypto, stable
+- **HTTPSourceFetcher.swift** — URLSession + bounded delegate (30 s deadline, ≤5 redirects, content-type allowlist, oversize abort via Content-Length and byte counting)
+- **Preflight.swift** — `validateTorrentData`/`validateTorrentFileSize` (limits, zero-size, piece sanity)
+- **NegativeCorpus.swift** — `BencodeCase`/`MetainfoCase` corpora + `MetainfoBuilder` + `BencodeBuilder` + magnet/path corpora
+- **TransferRecord.swift** — `TransferEngine` protocol, `TransferTorrentStatus`, `TransferAggregateStats.zero`
+- **TransferEventBus.swift** — actor bus, `Sink(id:handler:)`, urgent/immediate flush, 50 ms default batched flush
+- **TorrentAdder.swift** — inspect (file/magnet/URL → content identity + metainfo + trackers), selection validation, hex helpers
+- **TransferCoordinator.swift** — `actor` command surface (`processCommand` never throws, typed `EngineFault`), commitAdd (durable first: addTorrent + journal + storeMetainfo, then best-effort engine add), duplicate by ContentIdentity → same recordID, idempotent replay by `IdempotencyKey`, restoreFromPersistence rebuild, delta publication (fixed: continuity check is `from + 1 < firstLogRevision`), files/trackers paging with opaque UInt32 cursors, pause/resume/recheck/requestRemoval, setFileSelection → `inspectionInvalidated(files)` event
+- **BridgeTransferEngine.swift** — `actor BridgeTransferEngine: TransferEngine` over `EngineCoordinator`: idempotent `start()`, add/pause/resume/recheck passthrough, remove = prepareRemoval + commitRemoval, status pump drain (≤200 alerts, fraction+state mapping, cached per engineID), `aggregateHealth()`
+
+### Native/TorrentinoEngineAgent/ (modified)
+- **Agent/AgentService.swift** — `sendCommand` lane (fault envelope `engineNotReady` before wiring), `subscribeEvents`/`unsubscribeEvents` (bus sink per connection, id-replaced), `setEventSink`, async-safe `deliver` via `withLock`
+- **Agent/AgentRuntime.swift** — `import TorrentinoIPC`; `wireTransferLanes()` after persistence open (bus + bridge + coordinator, 500 ms pump, `PersistedLocation(path: defaultDownloadsPath)`), `await coordinator.startPump()`, shutdown captures + `await coordinator.stop()` before clean-close; ListenerDelegate binds `remoteObjectInterface` + sink on accept, clears on interruption/invalidation
+- **Transfer/TransferCoordinator.swift** — commitAdd persistence failures now carry `redactedContext` (diagnostics-only)
+
+### Native/TorrentinoApp/ (modified/new)
+- **EngineClient/EngineClient.swift** — `sendCommand(_:) -> SuccessPayload`, `sendEnvelope(_:) -> IPCEnvelope`, `subscribeEvents(handler:)`/`unsubscribeEvents()`, exports `ClientEventSink` (`TorrentinoEventSink`) on every connection
+- **Features/TorrentListViewModel.swift** — `@MainActor` VM: full snapshot + delta application with revision guards, fixture fallback (`FixtureLibrary`, deterministic 100-row), files drill-down with `FileCursor`, `TorrentStatusBarModel` aggregation, add (magnet/file/URL) + pause/resume commands
+- **Features/TorrentListView.swift** — `NavigationSplitView` + sidebar filters with badges + `Table(selection:)` + context menu + files pane + bottom status bar (macOS 13-safe placeholders; `value:`-based TableColumn dropped in favor of content-only for SDK compatibility)
+- **Features/AddTorrentSheet.swift** — text/file/add flows with start-paused toggle
+- **App/TorrentinoApp.swift** — `AppContext` (`@MainActor` enum: engineClient/shared/transfers); **ContentView.swift** — hosts transfer window + degraded banner
+- **Resources/Localizable.xcstrings** — +45 keys (total 63)
+
+### Native/Tests/TorrentinoEngineAgentTests/ (new)
+- **TransferSmokeTests.swift** — 25 tests: bencode positive/negative, metainfo single/multi + negative corpus, preflight gates, magnet valid/negative corpus, PathValidator corpora, HTTP fetch via `StubURLProtocol` (success/content-type/404/oversize/invalid URL), coordinator end-to-end (commitAdd → delta delivery, duplicate detection, idempotent replay, commit-without-inspect → `operationNotFound`, pause/resume, files drill-down + cursor pagination, setFileSelection → `.skip` + `inspectionInvalidated(files)`), restart restore over the same store; `StubTransferEngine` actor + `DeliveryCollector`
+
+### Native/Torrentino.xcodeproj/project.pbxproj
+- `Transfer` group (11 files) registered in agent Sources; transfer sources + `EngineBridgeDTOs.swift` registered in the tests target (stub engine needs the DTOs); `PathValidator.swift` added to the TorrentinoDomain target (was orphaned); 3 app feature files registered; `TransferSmokeTests.swift` registered; `TorrentinoEngineAgentTests` target now depends on + links TorrentinoDomain and TorrentinoIPC (dependencies were empty)
+
+## Gates Verified
+
+| Gate | Status |
+|------|--------|
+| Full scheme `Torrentino` (Developer ID signed) builds | ✅ BUILD SUCCEEDED |
+| WP-07 smoke tests (TransferSmokeTests) | ✅ 25/25 pass |
+| TorrentinoEngineAgentTests (incl. WP-05/06 persistence suite) | ✅ TEST SUCCEEDED |
+| TorrentinoDomainTests + TorrentinoIPCTests + TorrentinoAppTests | ✅ TEST SUCCEEDED |
+| Swift 6 strict concurrency (Complete) | ✅ no warnings (async-context locks → `withLock`; `nonisolated(unsafe)` only in the URLProtocol test stub) |
+
+## Test Results
+
+```
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests
+** TEST SUCCEEDED ** (25/25)
+
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoEngineAgentTests
+** TEST SUCCEEDED **
+
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoDomainTests \
+  -only-testing:TorrentinoIPCTests -only-testing:TorrentinoAppTests
+** TEST SUCCEEDED **
+```
+
+## Implementation Notes
+- **Delta continuity fix**: the first delta publish compared `from (0) < firstLogRevision (1)` and wrongly emitted `.snapshotRequired(.droppedDelta)`; corrected to `from + 1 < firstLogRevision`. Caught by the smoke test asserting `torrentDelta.added` on first commit.
+- **Persistence ownership**: the agent opens the store once; `TransferCoordinator` receives it by reference. Tests mirror this (`makeCoordinator` opens the store before building the coordinator) — commitAdd without an open store fails with `storeError` + `redactedContext`.
+- **Table SDK quirk**: `TableColumn(_:value:content:)` requires a sorting table on macOS 13 SDK; the name column uses a content-only column instead.
+- **Test-only annotations**: `nonisolated(unsafe)` confined to `StubURLProtocol` statics; production code has none.
+- **Files drill-down semantics**: top-level page of a multi-file torrent with a common root shows the root directory only (all files live below it) — asserted accordingly.

@@ -65,9 +65,12 @@ struct TorrentinoApp: App {
     }
 }
 
-/// Process-wide presentation model. Deliberately MainActor: the single owner
-/// of UI state; engine IO lives in the EngineClient actor.
+/// Process-wide presentation models. Deliberately MainActor: the single owner
+/// of UI state; engine IO lives in the shared EngineClient actor (one XPC
+/// connection so the agent binds a single event sink).
 @MainActor
 enum AppContext {
-    static let shared = EngineViewModel()
+    static let engineClient = EngineClient()
+    static let shared = EngineViewModel(client: engineClient)
+    static let transfers = TorrentListViewModel(client: engineClient)
 }

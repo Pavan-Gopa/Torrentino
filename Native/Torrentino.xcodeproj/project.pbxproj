@@ -91,6 +91,35 @@
 		4A00000000000000000005C8 /* AdvisoryLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A8 /* AdvisoryLock.swift */; };
 		4A00000000000000000005C9 /* PersistenceError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001A9 /* PersistenceError.swift */; };
 		4A00000000000000000005CA /* SQLiteConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AA /* SQLiteConnection.swift */; };
+		4A00000000000000000005D1 /* BencodeParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B1 /* BencodeParser.swift */; };
+		4A00000000000000000005D2 /* MagnetParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B2 /* MagnetParser.swift */; };
+		4A00000000000000000005D3 /* Metainfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B3 /* Metainfo.swift */; };
+		4A00000000000000000005D4 /* HTTPSourceFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B4 /* HTTPSourceFetcher.swift */; };
+		4A00000000000000000005D5 /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B5 /* Preflight.swift */; };
+		4A00000000000000000005D6 /* NegativeCorpus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B6 /* NegativeCorpus.swift */; };
+		4A00000000000000000005D7 /* TransferRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B7 /* TransferRecord.swift */; };
+		4A00000000000000000005D8 /* TransferEventBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B8 /* TransferEventBus.swift */; };
+		4A00000000000000000005D9 /* TorrentAdder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B9 /* TorrentAdder.swift */; };
+		4A00000000000000000005DA /* TransferCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BA /* TransferCoordinator.swift */; };
+		4A00000000000000000005DB /* BridgeTransferEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BB /* BridgeTransferEngine.swift */; };
+		4A00000000000000000005E1 /* PathValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BC /* PathValidator.swift */; };
+		4A00000000000000000005E4 /* EngineBridgeDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000164 /* EngineBridgeDTOs.swift */; };
+		4A00000000000000000005E5 /* TransferRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B7 /* TransferRecord.swift */; };
+		4A00000000000000000005E6 /* TransferEventBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B8 /* TransferEventBus.swift */; };
+		4A00000000000000000005E7 /* TorrentAdder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B9 /* TorrentAdder.swift */; };
+		4A00000000000000000005E8 /* TransferCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BA /* TransferCoordinator.swift */; };
+		4A00000000000000000005E9 /* Metainfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B3 /* Metainfo.swift */; };
+		4A00000000000000000005EA /* BencodeParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B1 /* BencodeParser.swift */; };
+		4A00000000000000000005EB /* MagnetParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B2 /* MagnetParser.swift */; };
+		4A00000000000000000005EC /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B5 /* Preflight.swift */; };
+		4A00000000000000000005ED /* HTTPSourceFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B4 /* HTTPSourceFetcher.swift */; };
+		4A00000000000000000005EE /* NegativeCorpus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B6 /* NegativeCorpus.swift */; };
+		4A00000000000000000005F0 /* TransferSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AD /* TransferSmokeTests.swift */; };
+		4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000111 /* TorrentListViewModel.swift */; };
+		4A00000000000000000005F2 /* TorrentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000112 /* TorrentListView.swift */; };
+		4A00000000000000000005F3 /* AddTorrentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000113 /* AddTorrentSheet.swift */; };
+		4A00000000000000000005FC /* TorrentinoDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000210 /* TorrentinoDomain.framework */; };
+		4A00000000000000000005FD /* TorrentinoIPC.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000211 /* TorrentinoIPC.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -151,6 +180,20 @@
 			remoteInfo = TorrentinoDomain;
 		};
 		4A000000000000000000062A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A0000000000000000000311;
+			remoteInfo = TorrentinoIPC;
+		};
+		4A0000000000000000000632 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A0000000000000000000310;
+			remoteInfo = TorrentinoDomain;
+		};
+		4A0000000000000000000634 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 4A0000000000000000000001 /* Project object */;
 			proxyType = 1;
@@ -252,6 +295,22 @@
 		4A00000000000000000001AA /* SQLiteConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteConnection.swift; sourceTree = "<group>"; };
 		4A00000000000000000001AB /* PersistenceFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceFixture.swift; sourceTree = "<group>"; };
 		4A00000000000000000001AC /* TorrentinoEngineAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoEngineAgentTests.swift; sourceTree = "<group>"; };
+		4A00000000000000000001AD /* TransferSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferSmokeTests.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B1 /* BencodeParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BencodeParser.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B2 /* MagnetParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagnetParser.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B3 /* Metainfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Metainfo.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B4 /* HTTPSourceFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPSourceFetcher.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B5 /* Preflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preflight.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B6 /* NegativeCorpus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NegativeCorpus.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B7 /* TransferRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferRecord.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B8 /* TransferEventBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEventBus.swift; sourceTree = "<group>"; };
+		4A00000000000000000001B9 /* TorrentAdder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentAdder.swift; sourceTree = "<group>"; };
+		4A00000000000000000001BA /* TransferCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferCoordinator.swift; sourceTree = "<group>"; };
+		4A00000000000000000001BB /* BridgeTransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTransferEngine.swift; sourceTree = "<group>"; };
+		4A00000000000000000001BC /* PathValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathValidator.swift; sourceTree = "<group>"; };
+		4A0000000000000000000111 /* TorrentListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListViewModel.swift; sourceTree = "<group>"; };
+		4A0000000000000000000112 /* TorrentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListView.swift; sourceTree = "<group>"; };
+		4A0000000000000000000113 /* AddTorrentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddTorrentSheet.swift; sourceTree = "<group>"; };
 		4A0000000000000000000215 /* TorrentinoEngineAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoEngineAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -320,6 +379,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4A00000000000000000005FC /* TorrentinoDomain.framework in Frameworks */,
+				4A00000000000000000005FD /* TorrentinoIPC.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -415,6 +476,9 @@
 			children = (
 				4A0000000000000000000106 /* EngineViewModel.swift */,
 				4A0000000000000000000107 /* ContentView.swift */,
+				4A0000000000000000000111 /* TorrentListViewModel.swift */,
+				4A0000000000000000000112 /* TorrentListView.swift */,
+				4A0000000000000000000113 /* AddTorrentSheet.swift */,
 				4A000000000000000000001B /* Settings */,
 			);
 			path = Features;
@@ -427,9 +491,28 @@
 				4A0000000000000000000016 /* Persistence */,
 				4A0000000000000000000017 /* XPC */,
 				4A000000000000000000001C /* EngineCoordinator */,
+				4A000000000000000000001D /* Transfer */,
 				4A0000000000000000000166 /* TorrentinoEngineAgent-Bridging-Header.h */,
 			);
 			path = TorrentinoEngineAgent;
+			sourceTree = "<group>";
+		};
+		4A000000000000000000001D /* Transfer */ = {
+			isa = PBXGroup;
+			children = (
+				4A00000000000000000001B1 /* BencodeParser.swift */,
+				4A00000000000000000001B2 /* MagnetParser.swift */,
+				4A00000000000000000001B3 /* Metainfo.swift */,
+				4A00000000000000000001B4 /* HTTPSourceFetcher.swift */,
+				4A00000000000000000001B5 /* Preflight.swift */,
+				4A00000000000000000001B6 /* NegativeCorpus.swift */,
+				4A00000000000000000001B7 /* TransferRecord.swift */,
+				4A00000000000000000001B8 /* TransferEventBus.swift */,
+				4A00000000000000000001B9 /* TorrentAdder.swift */,
+				4A00000000000000000001BA /* TransferCoordinator.swift */,
+				4A00000000000000000001BB /* BridgeTransferEngine.swift */,
+			);
+			path = Transfer;
 			sourceTree = "<group>";
 		};
 		4A0000000000000000000015 /* Agent */ = {
@@ -514,6 +597,7 @@
 				4A0000000000000000000131 /* TorrentState.swift */,
 				4A0000000000000000000132 /* TorrentInfo.swift */,
 				4A0000000000000000000133 /* EngineError.swift */,
+				4A00000000000000000001BC /* PathValidator.swift */,
 			);
 			path = TorrentinoDomain;
 			sourceTree = "<group>";
@@ -590,6 +674,7 @@
 			children = (
 				4A00000000000000000001AB /* PersistenceFixture.swift */,
 				4A00000000000000000001AC /* TorrentinoEngineAgentTests.swift */,
+				4A00000000000000000001AD /* TransferSmokeTests.swift */,
 			);
 			path = TorrentinoEngineAgentTests;
 			sourceTree = "<group>";
@@ -749,6 +834,8 @@
 			buildRules = (
 			);
 			dependencies = (
+				4A0000000000000000000631 /* PBXTargetDependency */,
+				4A0000000000000000000633 /* PBXTargetDependency */,
 			);
 			name = TorrentinoEngineAgentTests;
 			productName = TorrentinoEngineAgentTests;
@@ -841,6 +928,9 @@
 				4A0000000000000000000559 /* PeerValidation.swift in Sources */,
 				4A0000000000000000000506 /* EngineViewModel.swift in Sources */,
 				4A0000000000000000000507 /* ContentView.swift in Sources */,
+				4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */,
+				4A00000000000000000005F2 /* TorrentListView.swift in Sources */,
+				4A00000000000000000005F3 /* AddTorrentSheet.swift in Sources */,
 				4A000000000000000000050F /* SettingsView.swift in Sources */,
 				4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */,
 				4A000000000000000000050E /* ServiceRegistration.swift in Sources */,
@@ -871,6 +961,17 @@
 				4A0000000000000000000582 /* EngineCoordinator.swift in Sources */,
 				4A0000000000000000000583 /* EngineBridgeDTOs.swift in Sources */,
 				4A0000000000000000000584 /* EngineCoordinatorError.swift in Sources */,
+				4A00000000000000000005D1 /* BencodeParser.swift in Sources */,
+				4A00000000000000000005D2 /* MagnetParser.swift in Sources */,
+				4A00000000000000000005D3 /* Metainfo.swift in Sources */,
+				4A00000000000000000005D4 /* HTTPSourceFetcher.swift in Sources */,
+				4A00000000000000000005D5 /* Preflight.swift in Sources */,
+				4A00000000000000000005D6 /* NegativeCorpus.swift in Sources */,
+				4A00000000000000000005D7 /* TransferRecord.swift in Sources */,
+				4A00000000000000000005D8 /* TransferEventBus.swift in Sources */,
+				4A00000000000000000005D9 /* TorrentAdder.swift in Sources */,
+				4A00000000000000000005DA /* TransferCoordinator.swift in Sources */,
+				4A00000000000000000005DB /* BridgeTransferEngine.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -881,6 +982,7 @@
 				4A0000000000000000000531 /* TorrentState.swift in Sources */,
 				4A0000000000000000000532 /* TorrentInfo.swift in Sources */,
 				4A0000000000000000000533 /* EngineError.swift in Sources */,
+				4A00000000000000000005E1 /* PathValidator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -952,6 +1054,18 @@
 				4A00000000000000000005C8 /* AdvisoryLock.swift in Sources */,
 				4A00000000000000000005C9 /* PersistenceError.swift in Sources */,
 				4A00000000000000000005CA /* SQLiteConnection.swift in Sources */,
+				4A00000000000000000005E4 /* EngineBridgeDTOs.swift in Sources */,
+				4A00000000000000000005E5 /* TransferRecord.swift in Sources */,
+				4A00000000000000000005E6 /* TransferEventBus.swift in Sources */,
+				4A00000000000000000005E7 /* TorrentAdder.swift in Sources */,
+				4A00000000000000000005E8 /* TransferCoordinator.swift in Sources */,
+				4A00000000000000000005E9 /* Metainfo.swift in Sources */,
+				4A00000000000000000005EA /* BencodeParser.swift in Sources */,
+				4A00000000000000000005EB /* MagnetParser.swift in Sources */,
+				4A00000000000000000005EC /* Preflight.swift in Sources */,
+				4A00000000000000000005ED /* HTTPSourceFetcher.swift in Sources */,
+				4A00000000000000000005EE /* NegativeCorpus.swift in Sources */,
+				4A00000000000000000005F0 /* TransferSmokeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -997,6 +1111,16 @@
 			isa = PBXTargetDependency;
 			target = 4A0000000000000000000310 /* TorrentinoDomain */;
 			targetProxy = 4A0000000000000000000628 /* PBXContainerItemProxy */;
+		};
+		4A0000000000000000000631 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A0000000000000000000310 /* TorrentinoDomain */;
+			targetProxy = 4A0000000000000000000632 /* PBXContainerItemProxy */;
+		};
+		4A0000000000000000000633 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A0000000000000000000311 /* TorrentinoIPC */;
+			targetProxy = 4A0000000000000000000634 /* PBXContainerItemProxy */;
 		};
 		4A0000000000000000000629 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;

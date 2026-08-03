@@ -1,12 +1,16 @@
 // Layer: Agent XPC surface.
 // Role: implements TorrentinoEngineXPCProtocol over CounterStore + a shutdown
-// hook owned by AgentRuntime.
+// hook owned by AgentRuntime. WP-07 adds the v1 command lane (sendCommand →
+// TransferCoordinator) and the event stream subscription (subscribeEvents →
+// TransferEventBus) with the client-side TorrentinoEventSink as the single
+// delivery endpoint.
 // Must-not: block XPC queues with file IO, hold mutable state, or touch
-// libtorrent (WP-04 replaces the counter with the real engine).
-// Invariants: all state access goes through the CounterStore actor; each reply
-// block is invoked exactly once; the shutdown ack is sent BEFORE exit begins;
-// WP-06 persistence health (state/clean flag/degraded/quarantine) is exposed
-// as extra plist-only keys in health() and never blocks the XPC queue.
+// libtorrent (all engine work happens inside the coordinator/bridge actors).
+// Invariants: all state access goes through the CounterStore/PersistenceStore
+// actors; each reply block is invoked exactly once; the shutdown ack is sent
+// BEFORE exit begins; WP-06 persistence health (state/clean flag/degraded/
+// quarantine) is exposed as extra plist-only keys in health() and never
+// blocks the XPC queue.
 
 import Foundation
 import OSLog
@@ -22,8 +26,17 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     /// AFTER its own stored properties are fully initialized (Swift phase-1
     /// init rule forbids capturing self inside its own property initializers).
     var shutdownHook: (@Sendable () -> Void)?
+    /// WP-07: the transfer coordinator + event bus, wired by AgentRuntime once
+    /// the persistence store is open. Nil while booting: sendCommand answers
+    /// with a typed engineNotReady fault envelope.
+    var coordinator: TransferCoordinator?
+    var eventBus: TransferEventBus?
     private let startDate = Date()
     private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
+    /// Single active event sink (the UI process). Guarded by sinkLock.
+    private let sinkLock = NSLock()
+    private var eventSink: TorrentinoEventSink?
+    private var busSinkID: UUID?
 
     init(store: CounterStore, persistence: PersistenceStore) {
         self.store = store
@@ -101,5 +114,78 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         // drained by the client connection.
         reply(true)
         shutdownHook?()
+    }
+
+    // MARK: - WP-07 command lane
+
+    func sendCommand(commandData: Data, reply: @escaping @Sendable (Data) -> Void) {
+        guard let coordinator = coordinator else {
+            reply(Self.faultEnvelope(EngineFault.engineNotReady(details: "agent booting")))
+            return
+        }
+        Task {
+            reply(await coordinator.processCommand(commandData))
+        }
+    }
+
+    func subscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+        let bus = eventBus
+        let id = UUID()
+        sinkLock.lock()
+        let previousID = busSinkID
+        busSinkID = id
+        sinkLock.unlock()
+        Task {
+            guard let bus else {
+                sinkLock.withLock { busSinkID = nil }
+                reply(false)
+                return
+            }
+            if let previousID {
+                await bus.unregister(id: previousID)
+            }
+            await bus.register(TransferEventBus.Sink(id: id) { [weak self] events in
+                await self?.deliver(events)
+            })
+            reply(true)
+        }
+    }
+
+    func unsubscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+        sinkLock.lock()
+        let id = busSinkID
+        busSinkID = nil
+        sinkLock.unlock()
+        guard let bus = eventBus, let id else {
+            reply(false)
+            return
+        }
+        Task {
+            await bus.unregister(id: id)
+            reply(true)
+        }
+    }
+
+    /// Replaces the connection-side sink (called by the listener on accept)
+    /// or clears it (called on interruption/invalidation).
+    func setEventSink(_ sink: TorrentinoEventSink?) {
+        sinkLock.lock()
+        eventSink = sink
+        sinkLock.unlock()
+    }
+
+    private func deliver(_ events: [EngineEventV1]) async {
+        let sink = sinkLock.withLock { eventSink }
+        guard let sink else { return }
+        let envelopes = events.map { IPCEnvelope.event($0) }
+        guard let data = try? JSONEncoder().encode(envelopes) else { return }
+        sink.deliver(eventData: data)
+    }
+
+    /// Serialized failure envelope for the booting window (before the
+    /// coordinator exists).
+    private static func faultEnvelope(_ fault: EngineFault) -> Data {
+        let envelope = IPCEnvelope.result(requestID: RequestID(), result: .failure(fault))
+        return (try? JSONEncoder().encode(envelope)) ?? Data()
     }
 }

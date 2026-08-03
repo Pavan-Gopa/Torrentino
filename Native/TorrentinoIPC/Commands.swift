@@ -142,6 +142,9 @@ public struct CommitAddRequest: EngineCommandPayload {
     public let desiredName: String?
     public let saveLocation: PersistedLocation?
     public let fileSelection: [FileSelectionItem]
+    /// nil = default (start running); true = add paused (metadata fetch +
+    /// queued, no download). Additive optional key (WP-07 AddOptions).
+    public let startPaused: Bool?
 
     public init(
         requestID: RequestID,
@@ -149,7 +152,8 @@ public struct CommitAddRequest: EngineCommandPayload {
         operationID: AddOperationID,
         desiredName: String? = nil,
         saveLocation: PersistedLocation? = nil,
-        fileSelection: [FileSelectionItem] = []
+        fileSelection: [FileSelectionItem] = [],
+        startPaused: Bool? = nil
     ) {
         self.requestID = requestID
         self.idempotencyKey = idempotencyKey
@@ -157,6 +161,7 @@ public struct CommitAddRequest: EngineCommandPayload {
         self.desiredName = desiredName
         self.saveLocation = saveLocation
         self.fileSelection = fileSelection
+        self.startPaused = startPaused
     }
 }
 

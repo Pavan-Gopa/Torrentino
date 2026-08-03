@@ -17,6 +17,12 @@ actor EngineClient {
     /// tests and the client agree on reconnect semantics.
     private let reconnectPolicy = ClientReconnectPolicy.standard
     private var connection: NSXPCConnection?
+    /// WP-07: the object exported on every connection; the agent pushes event
+    /// batches into it. Survives reconnects (re-exported per connection).
+    private let eventSink = ClientEventSink()
+    /// True after a successful subscribeEvents; the agent-side registration
+    /// survives reconnects (only the per-connection sink binding is re-done).
+    private var eventSubscriptionActive = false
 
     /// IPC command surface from TorrentinoIPC (schema identity; transport is still ObjC XPC).
     nonisolated var supportedCommands: [EngineCommandV1] { EngineCommandV1.allCases }
@@ -104,6 +110,70 @@ actor EngineClient {
     func shutdown() async throws -> Bool {
         try await call { proxy, deliver in
             proxy.shutdown { deliver(.success($0)) }
+        }
+    }
+
+    // MARK: - WP-07 command lane
+
+    /// Sends one v1 request envelope and returns the correlated success
+    /// payload. Agent faults surface as EngineClientError.fault; transport
+    /// failures retry through the bounded reconnect policy (mutating commands
+    /// are safe to replay — the agent dedups by idempotency key).
+    func sendCommand(_ command: EngineCommandV1) async throws -> SuccessPayload {
+        let envelope = IPCEnvelope.request(command)
+        let reply = try await sendEnvelope(envelope)
+        switch reply.result {
+        case .success(let payload):
+            return payload
+        case .failure(let fault):
+            throw EngineClientError.fault(fault)
+        case nil:
+            throw EngineClientError.protocolMismatch(details: "reply envelope has no result")
+        }
+    }
+
+    /// Low-level variant returning the raw result envelope (tests, diagnostics).
+    func sendEnvelope(_ envelope: IPCEnvelope) async throws -> IPCEnvelope {
+        guard envelope.kind == .request, let requestID = envelope.requestID else {
+            throw EngineClientError.protocolMismatch(details: "sendEnvelope requires a request envelope")
+        }
+        let requestData = try JSONEncoder().encode(envelope)
+        let replyData: Data = try await call { proxy, deliver in
+            proxy.sendCommand(commandData: requestData) { deliver(.success($0)) }
+        }
+        guard let reply = try? JSONDecoder().decode(IPCEnvelope.self, from: replyData),
+              reply.kind == .result,
+              reply.requestID == requestID,
+              reply.result != nil else {
+            throw EngineClientError.protocolMismatch(details: "malformed command reply")
+        }
+        return reply
+    }
+
+    // MARK: - WP-07 event stream
+
+    /// Subscribes to the agent's event stream. Batches of EngineEventV1 are
+    /// delivered on the XPC queue; hop to your actor before touching state.
+    /// Idempotent: re-calling replaces the handler and re-registers the
+    /// agent-side sink.
+    func subscribeEvents(handler: @escaping @Sendable ([EngineEventV1]) -> Void) async throws {
+        eventSink.setHandler(handler)
+        let ok: Bool = try await call { proxy, deliver in
+            proxy.subscribeEvents { deliver(.success($0)) }
+        }
+        guard ok else {
+            eventSink.setHandler(nil)
+            throw EngineClientError.unavailable(reason: "agent refused event subscription")
+        }
+        eventSubscriptionActive = true
+    }
+
+    func unsubscribeEvents() async {
+        eventSink.setHandler(nil)
+        guard eventSubscriptionActive else { return }
+        eventSubscriptionActive = false
+        _ = try? await call { proxy, deliver in
+            proxy.unsubscribeEvents { deliver(.success($0)) }
         }
     }
 
@@ -197,6 +267,10 @@ actor EngineClient {
                              argumentIndex: 0,
                              ofReply: true)
         connection.remoteObjectInterface = interface
+        // WP-07: export the event sink so the agent can push batches into it.
+        // The agent's listener binds the remote proxy on accept.
+        connection.exportedInterface = NSXPCInterface(with: TorrentinoEventSink.self)
+        connection.exportedObject = eventSink
 
         connection.interruptionHandler = { [weak self] in
             Task { await self?.handleInterruption() }
@@ -247,5 +321,30 @@ private final class ResumeGuard: @unchecked Sendable {
         if shouldResume {
             continuation.resume(with: result)
         }
+    }
+}
+
+/// Exported object receiving agent-pushed event batches (one per connection;
+/// the agent binds its remote proxy on accept). Delivered on the XPC queue;
+/// the handler must hop to its own actor. Batches are a JSON array of event
+/// envelopes (one per engine event).
+private final class ClientEventSink: NSObject, TorrentinoEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable ([EngineEventV1]) -> Void)?
+
+    func setHandler(_ handler: (@Sendable ([EngineEventV1]) -> Void)?) {
+        lock.lock()
+        self.handler = handler
+        lock.unlock()
+    }
+
+    @objc func deliver(eventData: Data) {
+        guard let envelopes = try? JSONDecoder().decode([IPCEnvelope].self, from: eventData) else { return }
+        let events = envelopes.compactMap(\.event)
+        guard !events.isEmpty else { return }
+        lock.lock()
+        let handler = handler
+        lock.unlock()
+        handler?(events)
     }
 }

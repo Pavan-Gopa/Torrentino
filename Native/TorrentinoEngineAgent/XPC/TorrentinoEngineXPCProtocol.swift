@@ -16,6 +16,10 @@ import Foundation
 ///   incrementCounter(reply:) -> incrementCounterWithReply:
 ///   getCounter(reply:)       -> getCounterWithReply:
 ///   shutdown(reply:)         -> shutdownWithReply:
+/// WP-07 additions:
+///   sendCommand(commandData:reply:) -> sendCommandWithReply:
+///   subscribeEvents(reply:)         -> subscribeEventsWithReply:
+///   unsubscribeEvents(reply:)       -> unsubscribeEventsWithReply:
 @objc(TorrentinoEngineXPCProtocol)
 protocol TorrentinoEngineXPCProtocol: NSObjectProtocol {
     /// Handshake. Returns the agent version string and the agent pid.
@@ -35,6 +39,31 @@ protocol TorrentinoEngineXPCProtocol: NSObjectProtocol {
     /// Requests graceful shutdown: flush durable state, ack with true, then the
     /// agent exits 0 shortly after the reply is drained.
     func shutdown(reply: @escaping @Sendable (_ acknowledged: Bool) -> Void)
+
+    /// WP-07 v1 command lane: one serialized request IPCEnvelope in, one
+    /// serialized result IPCEnvelope out (plan §7.4). The agent never replies
+    /// on the XPC queue; replies fire from the coordinator actor.
+    func sendCommand(commandData: Data, reply: @escaping @Sendable (_ resultData: Data) -> Void)
+
+    /// WP-07 event stream subscription (plan §7.5). Exactly one active
+    /// subscriber; a new subscribe replaces the previous sink. The UI exports
+    /// the TorrentinoEventSink interface on the same connection.
+    func subscribeEvents(reply: @escaping @Sendable (_ subscribed: Bool) -> Void)
+
+    /// Cancels the event subscription (no-op when none is active).
+    func unsubscribeEvents(reply: @escaping @Sendable (_ unsubscribed: Bool) -> Void)
+}
+
+/// Client-side event sink (plan §7.5). The UI exports this interface on its
+/// connection; the agent delivers JSON batches of event envelopes through it.
+/// One-way: delivery is fire-and-forget; a dropped batch is recovered by the
+/// UI's snapshot reconciliation (droppedDelta → full refetch).
+@objc(TorrentinoEventSink)
+protocol TorrentinoEventSink: NSObjectProtocol {
+    /// Delivers a JSON-encoded batch of event envelopes ([IPCEnvelope], kind
+    /// == .event). Called from the agent's actor context, never on the XPC
+    /// queue.
+    func deliver(eventData: Data)
 }
 
 /// Frozen identity + peer code-signing policy (plan §23). Both sides install a
