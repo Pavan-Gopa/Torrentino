@@ -1,8 +1,8 @@
 current_step: WP-08
 step_description: >-
-  Native UX completeness — NARROWED bridge completion round under review.
-  Session settings, limits/trackers/reannounce bridge APIs, typed unsupported
-  for ratio/seed goals, reconnect connectionGeneration.
+  Native UX completeness — NARROWED validation/tests polish after bridge PASS.
+  Stop invalid limit coercion; real bridge integration tests; tracker URL
+  validation at native boundary.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/Agent/
@@ -16,6 +16,7 @@ target_files:
 - Native/TorrentinoEngineBridge/scripts/qa/
 - Native/TorrentinoEngineBridge/bridge/
 - Native/TorrentinoEngineBridge/adapter/
+- Native/TorrentinoEngineBridge/harness/
 completed_steps:
 - WP-00
 - WP-01
@@ -26,27 +27,25 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: waiting_review
-  attempts: 1
+  status: in_progress
+  attempts: 2
   note: >-
-    Narrowed bridge round coder handoff. Claims REAL session apply, bandwidth
-    limits, editTrackers, reannounce; TYPED UNSUPPORTED ratio/seed goals;
-    unsupported preserved on wire; Inspector tracker edit; reconnect generation.
-    QA 97/97 claimed.
+    Bridge review: ITEM1 PASS, ITEM3 PASS, ITEM2 PARTIAL. Only §5 items 1-3
+    (invalid limits coercion, real integration tests, tracker URL validation).
 review:
-  status: pending
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
+  verdict: CHANGES_REQUESTED
   note: >-
-    Re-review narrowed §5 items 1-3 only. Do not re-open already-PASS Swift UX
-    without new evidence.
+    Invalid limit values coerced to unlimited; stub-only unsupported tests;
+    weak tracker URL validation at native boundary.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-08
   bugs_open: open
   note: Tester after APPROVED.
-next_actor: reviewer
+next_actor: coder
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -59,4 +58,5 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Bridge handoff awaiting review.
+  Only FEEDBACK §5 items 1-3. Do not reopen ITEM1 session settings or ITEM3
+  reconnect. No WP-09+. waiting_review handoff. No git commit.
