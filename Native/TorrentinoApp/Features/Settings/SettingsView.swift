@@ -205,11 +205,20 @@ struct SettingsView: View {
         Form {
             Section(String(localized: "settings.notifications.events")) {
                 Toggle(String(localized: "settings.notifications.torrent_complete"), isOn: $notifyComplete)
-                    .onChange(of: notifyComplete) { NotificationManager.shared.notifyOnTorrentComplete = $0 }
+                    .onChange(of: notifyComplete) { newValue in
+                        NotificationManager.shared.notifyOnTorrentComplete = newValue
+                        if newValue { NotificationManager.shared.requestAuthorization() }
+                    }
                 Toggle(String(localized: "settings.notifications.all_complete"), isOn: $notifyAllComplete)
-                    .onChange(of: notifyAllComplete) { NotificationManager.shared.notifyOnAllComplete = $0 }
+                    .onChange(of: notifyAllComplete) { newValue in
+                        NotificationManager.shared.notifyOnAllComplete = newValue
+                        if newValue { NotificationManager.shared.requestAuthorization() }
+                    }
                 Toggle(String(localized: "settings.notifications.error"), isOn: $notifyError)
-                    .onChange(of: notifyError) { NotificationManager.shared.notifyOnError = $0 }
+                    .onChange(of: notifyError) { newValue in
+                        NotificationManager.shared.notifyOnError = newValue
+                        if newValue { NotificationManager.shared.requestAuthorization() }
+                    }
             }
         }
     }

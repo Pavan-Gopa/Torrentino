@@ -2,6 +2,17 @@
 
 ## RESULT: waiting_review
 
+## Review Fixes (CHANGES_REQUESTED round 2)
+
+1. **HIGH — NotificationManager.requestAuthorization() not called**:
+   - `App/AppDelegate.swift`: `requestAuthorization()` now called in `applicationDidFinishLaunching` so macOS grants notification permission at launch.
+   - `Features/Settings/SettingsView.swift`: each Notifications tab toggle now calls `requestAuthorization()` when turned ON (in addition to updating `NotificationManager` flags).
+2. **MEDIUM — duplicate KeychainStore.swift**:
+   - Removed orphan `Native/TorrentinoApp/Settings/KeychainStore.swift` (identical duplicate, not referenced by `project.pbxproj`; the registered path resolves to `Features/Settings/KeychainStore.swift` via the `Features → Settings` group chain).
+   - Deleted the now-empty `Native/TorrentinoApp/Settings/` directory.
+   - Verified: `xcodebuild build` → **BUILD SUCCEEDED**; QA suite → **84/84 GREEN**.
+
+
 ## Summary
 Native UX Completeness (WP-08) implemented end-to-end for Torrentino Native macOS client:
 1. **4-Tab Inspector View** (`InspectorView.swift`: General, Activity, Files, Settings synchronized with table selection, accessible via ⌘I).
