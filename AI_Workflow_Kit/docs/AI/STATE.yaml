@@ -1,12 +1,19 @@
-current_step: WP-08
+current_step: WP-09
 step_description: >-
-  Native UX completeness — Review APPROVED; Tester full suite + WP-08 coverage.
+  Fault recovery and resource control. Network offline/online, interface/VPN
+  change, sleep/wake, memory/thermal/Low Power Mode, disk full/permissions,
+  external volume detach/attach, bounded queues/cache/connections, crash-loop
+  safe recovery, health lane, conservative watchdog.
 target_files:
+- Native/TorrentinoApp/
+- Native/TorrentinoEngineAgent/
+- Native/TorrentinoIPC/
+- Native/TorrentinoDomain/
 - Native/Tests/
+- Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
-- AI_Workflow_Kit/docs/AI/COVERAGE.md
-- Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-- Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
+- Native/TorrentinoEngineBridge/bridge/
+- Native/TorrentinoEngineBridge/adapter/
 completed_steps:
 - WP-00
 - WP-01
@@ -16,41 +23,41 @@ completed_steps:
 - WP-05
 - WP-06
 - WP-07
+- WP-08
 implementation:
-  status: done
-  attempts: 3
-  note: >-
-    Review APPROVED (aeb429f). Product at 585801e + later polish commits.
-review:
-  status: approved
-  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: APPROVED
-  note: >-
-    Final validation items 1-3 PASS. Legacy working-tree dirt is Human research
-    (ADR-013), not product failure.
-qa:
   status: pending
+  attempts: 0
+  note: PRE tag torrentino/pre-WP-09 created. WP-08 PRODUCT GREEN closed.
+review:
+  status: pending
+  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
+  verdict: null
+  note: ''
+qa:
+  status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-08
   bugs_open: 0
   note: >-
-    Tester run. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL while
-    Human has dirty Legacy/ research tree — do not fix Legacy; report as
-    environmental. Product gate = all other scripts + xcodebuild test green.
-next_actor: tester
+    WP-08 PRODUCT GREEN / ENVIRONMENTAL Legacy FAIL waived (ADR-013).
+    16 WP-08 scripts, 201 XCTest, bridge runners PASS.
+next_actor: coder
 track: PRODUCT
-prior_track: ENGINE
+prior_track: PRODUCT
 working_roots:
 - .
 legacy_hard_ban: >-
   Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
   Orchestrator restores accidental dirt only; never product-commit Legacy.
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-08
-  last_post_tag: torrentino/WP-07-done
-  last_commit: aeb429f
+  last_pre_tag: torrentino/pre-WP-09
+  last_post_tag: torrentino/WP-08-done
+  last_commit: ad7a44a
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  N/A — Tester phase. On GREEN → Orchestrator POST WP-08 + PRE WP-09.
+  WP-09: fault recovery + resource control. Fault matrix, no busy-loops,
+  no global stop from one task, clear recovery actions, no fake paths for
+  missing volumes. Health lane + conservative watchdog. No WP-10+ file ops
+  / creator / Metal. No Legacy.
