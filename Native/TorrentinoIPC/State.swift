@@ -111,14 +111,23 @@ public struct PersistedLocation: Codable, Sendable, Equatable {
     }
 }
 
-/// Per-torrent bandwidth limits. nil means "unchanged / unlimited".
+/// Per-torrent bandwidth limits and seed goals. nil means "unchanged / unlimited".
 public struct TransferLimits: Codable, Sendable, Equatable {
     public let maxDownloadBytesPerSec: Int64?
     public let maxUploadBytesPerSec: Int64?
+    public let ratioLimit: Double?
+    public let seedTimeSeconds: Int64?
 
-    public init(maxDownloadBytesPerSec: Int64?, maxUploadBytesPerSec: Int64?) {
+    public init(
+        maxDownloadBytesPerSec: Int64? = nil,
+        maxUploadBytesPerSec: Int64? = nil,
+        ratioLimit: Double? = nil,
+        seedTimeSeconds: Int64? = nil
+    ) {
         self.maxDownloadBytesPerSec = maxDownloadBytesPerSec
         self.maxUploadBytesPerSec = maxUploadBytesPerSec
+        self.ratioLimit = ratioLimit
+        self.seedTimeSeconds = seedTimeSeconds
     }
 }
 

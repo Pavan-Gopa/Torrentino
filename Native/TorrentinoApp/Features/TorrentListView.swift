@@ -1,16 +1,20 @@
-// Layer: UI (WP-07 transfer window).
-// Role: native SwiftUI table of authoritative torrents with a filter sidebar,
-// a files detail pane (paginated + drill-down), and an aggregate status bar.
-// Must-not: show invented data as authoritative (the demo fixture is always
-// labeled), block the main actor, or bypass the command lane.
-// Invariants: every cell renders only snapshot fields; selection drives the
-// detail pane; state/progress columns are localized through String Catalog.
+// Layer: UI (WP-08 transfer window).
+// Role: native SwiftUI table of authoritative torrents with column sorting, search filtering,
+// multi-selection batch operations, drag-and-drop, context menus, and Inspector pane sync.
+// Must-not: show invented data as authoritative, block main actor, or bypass command lane.
+// Invariants: every cell renders snapshot fields; accessibility & localization fully supported.
 
 import SwiftUI
+import UniformTypeIdentifiers
 import TorrentinoIPC
 
 struct TorrentListView: View {
     @ObservedObject var viewModel: TorrentListViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @State private var selectedFilter: SidebarFilter? = .all
+    @State private var sortOrder = [KeyPathComparator(\TorrentSnapshot.displayName)]
 
     var body: some View {
         NavigationSplitView {
@@ -23,6 +27,7 @@ struct TorrentListView: View {
                 filesPane
                     .frame(minHeight: 120)
             }
+            .searchable(text: $viewModel.searchText, prompt: String(localized: "torrents.search.prompt"))
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -31,12 +36,27 @@ struct TorrentListView: View {
                         Label(String(localized: "torrents.add"), systemImage: "plus")
                     }
                     .help(String(localized: "torrents.add.help"))
+                    .accessibilityLabel(String(localized: "torrents.add"))
+
+                    Button {
+                        viewModel.toggleInspector()
+                    } label: {
+                        Label(String(localized: "menu.torrent.inspector"), systemImage: "info.circle")
+                    }
+                    .help(String(localized: "menu.torrent.inspector"))
+                    .accessibilityLabel(String(localized: "menu.torrent.inspector"))
                 }
             }
         }
         .navigationTitle(String(localized: "torrents.title"))
         .safeAreaInset(edge: .bottom) {
             statusBar
+        }
+        .sheet(isPresented: $viewModel.showInspector) {
+            InspectorView(torrent: viewModel.selectedTorrent, viewModel: viewModel)
+        }
+        .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
+            handleDrop(providers)
         }
     }
 
@@ -48,26 +68,34 @@ struct TorrentListView: View {
                 ForEach(SidebarFilter.allCases, id: \.self) { filter in
                     Label(filter.title, systemImage: filter.icon)
                         .badge(viewModel.statusBar.count(matching: filter))
+                        .accessibilityLabel("\(filter.title), \(viewModel.statusBar.count(matching: filter)) items")
                 }
             }
         }
         .listStyle(.sidebar)
     }
 
-    @State private var selectedFilter: SidebarFilter? = .all
+    // MARK: - Table Filtering & Sorting
+
+    private var filteredTorrents: [TorrentSnapshot] {
+        var result = selectedFilter.map { filter in
+            viewModel.torrents.filter { viewModel.statusBar.matches($0, filter) }
+        } ?? viewModel.torrents
+
+        if !viewModel.searchText.isEmpty {
+            let query = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            result = result.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+        }
+
+        result.sort(using: sortOrder)
+        return result
+    }
 
     // MARK: - Table
 
-    private var filteredTorrents: [TorrentSnapshot] {
-        let filtered = selectedFilter.map { filter in
-            viewModel.torrents.filter { viewModel.statusBar.matches($0, filter) }
-        } ?? viewModel.torrents
-        return filtered
-    }
-
     private var transferTable: some View {
-        Table(filteredTorrents, selection: $viewModel.selection) {
-            TableColumn(String(localized: "torrents.col.name")) { torrent in
+        Table(filteredTorrents, selection: $viewModel.selection, sortOrder: $sortOrder) {
+            TableColumn(String(localized: "torrents.col.name"), value: \.displayName) { torrent in
                 HStack(spacing: 8) {
                     if torrent.health != .healthy {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -78,42 +106,63 @@ struct TorrentListView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                .accessibilityLabel("Torrent \(torrent.displayName)")
             }
             .width(min: 200, ideal: 320)
+
             TableColumn(String(localized: "torrents.col.state")) { torrent in
                 Text(Self.stateText(for: torrent))
                     .foregroundStyle(torrent.desiredState == .paused ? .secondary : .primary)
             }
             .width(110)
-            TableColumn(String(localized: "torrents.col.progress")) { torrent in
+
+            TableColumn(String(localized: "torrents.col.progress"), value: \.progress.fraction) { torrent in
                 ProgressView(value: torrent.progress.fraction)
                     .progressViewStyle(.linear)
                     .frame(maxWidth: 160)
             }
             .width(170)
-            TableColumn(String(localized: "torrents.col.down")) { torrent in
+
+            TableColumn(String(localized: "torrents.col.down"), value: \.rates.downloadBytesPerSec) { torrent in
                 Text(Self.byteRate(torrent.rates.downloadBytesPerSec))
             }
             .width(80)
-            TableColumn(String(localized: "torrents.col.up")) { torrent in
+
+            TableColumn(String(localized: "torrents.col.up"), value: \.rates.uploadBytesPerSec) { torrent in
                 Text(Self.byteRate(torrent.rates.uploadBytesPerSec))
             }
             .width(80)
-            TableColumn(String(localized: "torrents.col.size")) { torrent in
+
+            TableColumn(String(localized: "torrents.col.size"), value: \.progress.totalBytes) { torrent in
                 Text(Self.byteCount(torrent.progress.totalBytes))
             }
             .width(90)
         }
         .contextMenu(forSelectionType: TorrentRecordID.self) { ids in
-            if let id = ids.first {
-                Button(String(localized: "torrents.action.pause")) {
-                    Task { await viewModel.pause(id) }
-                }
-                .disabled(viewModel.torrents.first { $0.id == id }?.desiredState == .paused)
-                Button(String(localized: "torrents.action.resume")) {
-                    Task { await viewModel.resume(id) }
-                }
-                .disabled(viewModel.torrents.first { $0.id == id }?.desiredState == .running)
+            Button(String(localized: "torrents.action.pause")) {
+                viewModel.pauseSelected()
+            }
+            .disabled(!viewModel.canPauseSelected)
+
+            Button(String(localized: "torrents.action.resume")) {
+                viewModel.resumeSelected()
+            }
+            .disabled(!viewModel.canResumeSelected)
+
+            Button(String(localized: "torrents.action.remove")) {
+                viewModel.removeSelected()
+            }
+            .disabled(viewModel.selection.isEmpty)
+
+            Divider()
+
+            Button(String(localized: "menu.torrent.reveal")) {
+                viewModel.revealSelected()
+            }
+            .disabled(viewModel.selectedTorrent == nil)
+
+            Button(String(localized: "menu.torrent.inspector")) {
+                viewModel.toggleInspector()
             }
         }
         .overlay {
@@ -249,6 +298,31 @@ struct TorrentListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    // MARK: - Drag & Drop Handler
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          url.pathExtension.lowercased() == "torrent" else { return }
+                    Task { @MainActor in
+                        await viewModel.addTorrentFile(url, startPaused: false)
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
+                    guard let text = item as? String, text.hasPrefix("magnet:") else { return }
+                    Task { @MainActor in
+                        await viewModel.addMagnet(text, startPaused: false)
+                    }
+                }
+            }
+        }
+        return true
     }
 
     // MARK: - Formatting helpers

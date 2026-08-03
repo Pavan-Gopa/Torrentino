@@ -181,4 +181,31 @@ final class TorrentinoAppTests: TestProfileCase {
 
         return candidates.first { fm.fileExists(atPath: $0.path) }
     }
+
+    // MARK: - WP-08 Smoke Tests
+
+    func testKeychainStoreOperations() {
+        let password = "test_proxy_password_123"
+        XCTAssertTrue(KeychainStore.saveProxyPassword(password))
+        XCTAssertEqual(KeychainStore.loadProxyPassword(), password)
+        XCTAssertTrue(KeychainStore.deleteProxyPassword())
+        XCTAssertNil(KeychainStore.loadProxyPassword())
+    }
+
+    func testSettingsTransactionValidation() {
+        let invalidCandidate = EngineSettings(
+            downloadDirectory: "~/Downloads",
+            maxDownloadBytesPerSec: -100,
+            maxUploadBytesPerSec: 0,
+            listenPort: 6881,
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: true,
+            encryptionEnabled: true
+        )
+        let errors = SettingsRules.validate(invalidCandidate)
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(errors.first?.field, "maxDownloadBytesPerSec")
+    }
 }

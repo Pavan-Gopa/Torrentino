@@ -1,9 +1,7 @@
 // Layer: UI application entry (Torrentino.app).
-// Role: SwiftUI lifecycle, menus, Settings shell, headless --cli hook.
-// Must-not: own engine state, run an in-process engine fallback, or perform
-// disk/network IO on the main actor.
-// Invariants: the UI is never the source of truth; all engine access goes
-// through EngineClient -> Mach XPC; degraded state is shown, never hidden.
+// Role: SwiftUI lifecycle, native menus, Settings shell, headless --cli hook.
+// Must-not: own engine state, run an in-process engine fallback, or perform disk/network IO on the main actor.
+// Invariants: UI is never source of truth; commands pass through EngineClient; degraded state is shown.
 
 import AppKit
 import SwiftUI
@@ -13,9 +11,6 @@ struct TorrentinoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
-        // Headless automation hook: lifecycle_test.sh / update_test.sh drive
-        // the real XPC + SMAppService flows without a GUI. Returns (exit()s)
-        // only when --cli is present; GUI launch is unaffected.
         CLIDispatcher.runIfRequestedAndExit()
     }
 
@@ -23,6 +18,9 @@ struct TorrentinoApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(AppContext.shared)
+                .onOpenURL { url in
+                    handleIncomingURL(url)
+                }
         }
         .defaultSize(width: 900, height: 560)
         .commands {
@@ -39,14 +37,51 @@ struct TorrentinoApp: App {
             }
             CommandGroup(replacing: .help) {
                 Button(String(localized: "menu.help")) {
-                    // Placeholder Help — no external network in WP-03.
+                    // Help documentation
                 }
             }
             CommandMenu(String(localized: "menu.file")) {
-                Button(String(localized: "menu.file.placeholder")) {
-                    // Placeholder until add-torrent UX lands in a later WP.
+                Button(String(localized: "menu.file.add_torrent")) {
+                    AppContext.transfers.showAddSheet = true
                 }
-                .keyboardShortcut("o", modifiers: .command)
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button(String(localized: "menu.file.add_url")) {
+                    AppContext.transfers.showAddSheet = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+            CommandMenu(String(localized: "menu.torrent")) {
+                Button(String(localized: "torrents.action.pause")) {
+                    AppContext.transfers.pauseSelected()
+                }
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(!AppContext.transfers.canPauseSelected)
+
+                Button(String(localized: "torrents.action.resume")) {
+                    AppContext.transfers.resumeSelected()
+                }
+                .keyboardShortcut("/", modifiers: .command)
+                .disabled(!AppContext.transfers.canResumeSelected)
+
+                Button(String(localized: "torrents.action.remove")) {
+                    AppContext.transfers.removeSelected()
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(AppContext.transfers.selection.isEmpty)
+
+                Divider()
+
+                Button(String(localized: "menu.torrent.reveal")) {
+                    AppContext.transfers.revealSelected()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(AppContext.transfers.selectedTorrent == nil)
+
+                Button(String(localized: "menu.torrent.inspector")) {
+                    AppContext.transfers.toggleInspector()
+                }
+                .keyboardShortcut("i", modifiers: .command)
             }
         }
 
@@ -55,19 +90,26 @@ struct TorrentinoApp: App {
         }
     }
 
-    /// Brings the Settings scene forward. SwiftUI Settings is registered above;
-    /// this bridges the ⌘, menu item to the same window.
     private func openSettingsWindow() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         if NSApp.responds(to: Selector(("showPreferencesWindow:"))) {
             NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
         }
     }
+
+    private func handleIncomingURL(_ url: URL) {
+        if url.scheme == "magnet" {
+            Task { @MainActor in
+                await AppContext.transfers.addMagnet(url.absoluteString, startPaused: false)
+            }
+        } else if url.isFileURL && url.pathExtension.lowercased() == "torrent" {
+            Task { @MainActor in
+                await AppContext.transfers.addTorrentFile(url, startPaused: false)
+            }
+        }
+    }
 }
 
-/// Process-wide presentation models. Deliberately MainActor: the single owner
-/// of UI state; engine IO lives in the shared EngineClient actor (one XPC
-/// connection so the agent binds a single event sink).
 @MainActor
 enum AppContext {
     static let engineClient = EngineClient()

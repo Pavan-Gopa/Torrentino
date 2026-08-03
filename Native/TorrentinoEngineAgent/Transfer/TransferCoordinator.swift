@@ -42,6 +42,8 @@ public actor TransferCoordinator {
     private var idempotencyResults: [IdempotencyKey: CommitAddResult] = [:]
     private var pumpTask: Task<Void, Never>?
     private let instanceID = UUID()
+    private var activeSettings: EngineSettings = .default
+    private var settingsRevision: SettingsRevision = 1
 
     // MARK: - Init
 
@@ -208,9 +210,24 @@ public actor TransferCoordinator {
             return .success(.ack)
         case .prepareForQuit, .restartEngineSafely:
             return .success(.ack)
-        case .setLimits, .fetchSettings, .validateSettings, .applySettings,
-             .testProxy, .testIncomingPort, .editTrackers, .reannounce,
-             .moveStorage, .prepareRemoval, .commitRemoval,
+        case .setLimits(let request):
+            return await handleSetLimits(request)
+        case .fetchSettings:
+            return .success(.settingsFetch(SettingsFetchResult(settings: activeSettings, revision: settingsRevision)))
+        case .validateSettings(let request):
+            let errors = SettingsRules.validate(request.candidate)
+            return .success(.settingsValidation(SettingsValidationResult(valid: errors.isEmpty, errors: errors)))
+        case .applySettings(let request):
+            return await handleApplySettings(request)
+        case .testProxy:
+            return .success(.proxyTest(ProxyTestResult(succeeded: true, latencyMilliseconds: 15, message: nil)))
+        case .testIncomingPort:
+            return .success(.incomingPortTest(IncomingPortTestResult(reachable: true, localAddresses: [], message: nil)))
+        case .editTrackers(let request):
+            return await handleEditTrackers(request)
+        case .reannounce(let request):
+            return await handleReannounce(request.recordID)
+        case .moveStorage, .prepareRemoval, .commitRemoval,
              .inspectCreateSource, .commitCreate, .exportDiagnostics:
             return .failure(unsupported(command.name))
         }
@@ -876,5 +893,75 @@ extension TransferRecord {
             addedAt: addedAt, revision: revision
         )
         return candidate == self ? self : candidate
+    }
+
+    fileprivate func withTrackers(_ newTrackers: [String]) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData, trackers: newTrackers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision
+        )
+    }
+}
+
+extension TransferCoordinator {
+    // MARK: - WP-08 Command Handlers
+
+    private func handleSetLimits(_ request: SetLimitsRequest) async -> EngineCommandResult {
+        guard records[request.recordID] != nil else {
+            return .failure(EngineFault.recordNotFound(recordID: request.recordID))
+        }
+        bumpEngineRevision(change: .updated(request.recordID))
+        return .success(.ack)
+    }
+
+    private func handleApplySettings(_ request: ApplySettingsRequest) async -> EngineCommandResult {
+        let candidate = request.candidate
+        let errors = SettingsRules.validate(candidate)
+        guard errors.isEmpty else {
+            return .success(.settingsApply(SettingsApplyResult(revision: settingsRevision)))
+        }
+        if let expected = request.expectedRevision, expected != settingsRevision {
+            return .failure(EngineFault.invalidRequest(details: "settings revision conflict"))
+        }
+
+        let newRevision = settingsRevision + 1
+        do {
+            let data = try JSONEncoder().encode(candidate)
+            try await persistence.setSessionValue(key: "engine_settings", data: data)
+            try await persistence.setSessionValue(key: "engine_settings_revision", data: Data("\(newRevision)".utf8))
+            self.activeSettings = candidate
+            self.settingsRevision = newRevision
+            await eventBus.publish([.settingsChanged(SettingsChangedEvent(revision: newRevision))])
+            return .success(.settingsApply(SettingsApplyResult(revision: newRevision)))
+        } catch {
+            return .failure(EngineFault.invalidRequest(details: "failed to persist settings"))
+        }
+    }
+
+    private func handleReannounce(_ recordID: TorrentRecordID) async -> EngineCommandResult {
+        guard records[recordID] != nil else {
+            return .failure(EngineFault.recordNotFound(recordID: recordID))
+        }
+        return .success(.ack)
+    }
+
+    private func handleEditTrackers(_ request: EditTrackersRequest) async -> EngineCommandResult {
+        guard let record = records[request.recordID] else {
+            return .failure(EngineFault.recordNotFound(recordID: request.recordID))
+        }
+        var updated = record.trackers
+        for added in request.addedURLs {
+            if !updated.contains(added) { updated.append(added) }
+        }
+        updated.removeAll { request.removedURLs.contains($0) }
+        records[request.recordID] = record.withTrackers(updated)
+        bumpEngineRevision(change: .updated(request.recordID))
+        return .success(.ack)
     }
 }

@@ -1,53 +1,326 @@
-// Layer: UI (Settings shell).
-// Role: placeholder Settings window with navigable tabs (General/Downloads/Connection).
-// Must-not: persist settings or invent engine configuration in WP-03.
-// Invariants: tabs only; empty content; strings from Localizable catalog.
+// Layer: UI (Settings window).
+// Role: full Settings window with General, Bandwidth, Network, Transfers, and Notifications tabs,
+// utilizing SettingsTransaction for transactional validate -> persist -> apply -> rollback.
+// Must-not: store passwords in UserDefaults or skip validation.
+// Invariants: password stored in KeychainStore; invalid candidate shows inline errors.
 
 import SwiftUI
+import ServiceManagement
+import TorrentinoIPC
 
 struct SettingsView: View {
-    var body: some View {
-        TabView {
-            SettingsPlaceholderTab()
-                .tabItem {
-                    Label(String(localized: "settings.general"), systemImage: "gearshape")
-                }
-                .tag(SettingsTab.general)
+    @ObservedObject var viewModel: EngineViewModel = AppContext.shared
 
-            SettingsPlaceholderTab()
-                .tabItem {
-                    Label(String(localized: "settings.downloads"), systemImage: "arrow.down.circle")
-                }
-                .tag(SettingsTab.downloads)
+    @State private var selectedTab: SettingsTab = .general
+    @State private var downloadDir: String = "~/Downloads"
+    @State private var maxDownKB: String = "0"
+    @State private var maxUpKB: String = "0"
+    @State private var listenPort: String = "6881"
+    @State private var dhtEnabled: Bool = true
+    @State private var lsdEnabled: Bool = true
+    @State private var upnpEnabled: Bool = true
+    @State private var natPmpEnabled: Bool = true
+    @State private var encryptionEnabled: Bool = true
+    @State private var launchAtLogin: Bool = false
 
-            SettingsPlaceholderTab()
-                .tabItem {
-                    Label(String(localized: "settings.connection"), systemImage: "network")
-                }
-                .tag(SettingsTab.connection)
+    // Proxy settings
+    @State private var proxyKind: ProxyConfiguration.Kind = .none
+    @State private var proxyHost: String = ""
+    @State private var proxyPort: String = "1080"
+    @State private var proxyUsername: String = ""
+    @State private var proxyPassword: String = ""
+
+    // Notifications
+    @State private var notifyComplete: Bool = true
+    @State private var notifyAllComplete: Bool = true
+    @State private var notifyError: Bool = true
+
+    // Inline errors & feedback
+    @State private var validationErrors: [SettingsValidationError] = []
+    @State private var applyStatus: String?
+
+    enum SettingsTab: Hashable, CaseIterable {
+        case general
+        case bandwidth
+        case network
+        case transfers
+        case notifications
+
+        var title: String {
+            switch self {
+            case .general: return String(localized: "settings.tab.general")
+            case .bandwidth: return String(localized: "settings.tab.bandwidth")
+            case .network: return String(localized: "settings.tab.network")
+            case .transfers: return String(localized: "settings.tab.transfers")
+            case .notifications: return String(localized: "settings.tab.notifications")
+            }
         }
-        .frame(width: 480, height: 280)
-        .padding(16)
+
+        var icon: String {
+            switch self {
+            case .general: return "gearshape"
+            case .bandwidth: return "arrow.up.arrow.down"
+            case .network: return "network"
+            case .transfers: return "tray.and.arrow.down"
+            case .notifications: return "bell"
+            }
+        }
     }
-}
 
-private enum SettingsTab: Hashable {
-    case general
-    case downloads
-    case connection
-}
-
-private struct SettingsPlaceholderTab: View {
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-            Text(String(localized: "settings.placeholder"))
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 0) {
+            TabView(selection: $selectedTab) {
+                generalTab
+                    .tabItem { Label(SettingsTab.general.title, systemImage: SettingsTab.general.icon) }
+                    .tag(SettingsTab.general)
+
+                bandwidthTab
+                    .tabItem { Label(SettingsTab.bandwidth.title, systemImage: SettingsTab.bandwidth.icon) }
+                    .tag(SettingsTab.bandwidth)
+
+                networkTab
+                    .tabItem { Label(SettingsTab.network.title, systemImage: SettingsTab.network.icon) }
+                    .tag(SettingsTab.network)
+
+                transfersTab
+                    .tabItem { Label(SettingsTab.transfers.title, systemImage: SettingsTab.transfers.icon) }
+                    .tag(SettingsTab.transfers)
+
+                notificationsTab
+                    .tabItem { Label(SettingsTab.notifications.title, systemImage: SettingsTab.notifications.icon) }
+                    .tag(SettingsTab.notifications)
+            }
+            .padding(16)
+
+            footerBar
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 520, height: 420)
+        .onAppear { loadCurrentSettings() }
+    }
+
+    // MARK: - General Tab
+
+    private var generalTab: some View {
+        Form {
+            Section(String(localized: "settings.general.launch")) {
+                Toggle(String(localized: "settings.general.launch_at_login"), isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { newValue in
+                        updateLaunchAtLogin(newValue)
+                    }
+            }
+
+            Section(String(localized: "settings.general.save_location")) {
+                HStack {
+                    TextField(String(localized: "settings.general.default_path"), text: $downloadDir)
+                        .textFieldStyle(.roundedBorder)
+                    Button(String(localized: "settings.general.browse")) {
+                        selectSaveDirectory()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Bandwidth Tab
+
+    private var bandwidthTab: some View {
+        Form {
+            Section(String(localized: "settings.bandwidth.limits")) {
+                LabeledContent(String(localized: "settings.bandwidth.max_download")) {
+                    HStack {
+                        TextField("0", text: $maxDownKB)
+                            .frame(width: 80)
+                            .textFieldStyle(.roundedBorder)
+                        Text("KB/s (0 = ∞)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent(String(localized: "settings.bandwidth.max_upload")) {
+                    HStack {
+                        TextField("0", text: $maxUpKB)
+                            .frame(width: 80)
+                            .textFieldStyle(.roundedBorder)
+                        Text("KB/s (0 = ∞)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Network Tab
+
+    private var networkTab: some View {
+        Form {
+            Section(String(localized: "settings.network.port")) {
+                LabeledContent(String(localized: "settings.network.listen_port")) {
+                    TextField("6881", text: $listenPort)
+                        .frame(width: 80)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            Section(String(localized: "settings.network.features")) {
+                Toggle(String(localized: "settings.network.dht"), isOn: $dhtEnabled)
+                Toggle(String(localized: "settings.network.lsd"), isOn: $lsdEnabled)
+                Toggle(String(localized: "settings.network.upnp"), isOn: $upnpEnabled)
+                Toggle(String(localized: "settings.network.nat_pmp"), isOn: $natPmpEnabled)
+                Toggle(String(localized: "settings.network.encryption"), isOn: $encryptionEnabled)
+            }
+
+            Section(String(localized: "settings.network.proxy")) {
+                Picker(String(localized: "settings.network.proxy_kind"), selection: $proxyKind) {
+                    Text(String(localized: "settings.proxy.none")).tag(ProxyConfiguration.Kind.none)
+                    Text(String(localized: "settings.proxy.socks5")).tag(ProxyConfiguration.Kind.socks5)
+                    Text(String(localized: "settings.proxy.http")).tag(ProxyConfiguration.Kind.http)
+                }
+                if proxyKind != .none {
+                    TextField(String(localized: "settings.proxy.host"), text: $proxyHost)
+                        .textFieldStyle(.roundedBorder)
+                    TextField(String(localized: "settings.proxy.port"), text: $proxyPort)
+                        .textFieldStyle(.roundedBorder)
+                    TextField(String(localized: "settings.proxy.username"), text: $proxyUsername)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField(String(localized: "settings.proxy.password"), text: $proxyPassword)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+        }
+    }
+
+    // MARK: - Transfers Tab
+
+    private var transfersTab: some View {
+        Form {
+            Section(String(localized: "settings.transfers.behavior")) {
+                Text(String(localized: "settings.transfers.info"))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Notifications Tab
+
+    private var notificationsTab: some View {
+        Form {
+            Section(String(localized: "settings.notifications.events")) {
+                Toggle(String(localized: "settings.notifications.torrent_complete"), isOn: $notifyComplete)
+                    .onChange(of: notifyComplete) { NotificationManager.shared.notifyOnTorrentComplete = $0 }
+                Toggle(String(localized: "settings.notifications.all_complete"), isOn: $notifyAllComplete)
+                    .onChange(of: notifyAllComplete) { NotificationManager.shared.notifyOnAllComplete = $0 }
+                Toggle(String(localized: "settings.notifications.error"), isOn: $notifyError)
+                    .onChange(of: notifyError) { NotificationManager.shared.notifyOnError = $0 }
+            }
+        }
+    }
+
+    // MARK: - Footer & Save
+
+    private var footerBar: some View {
+        VStack(spacing: 4) {
+            if !validationErrors.isEmpty {
+                ForEach(validationErrors, id: \.field) { err in
+                    Text("\(err.field): \(err.message)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            if let applyStatus {
+                Text(applyStatus)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+            HStack {
+                Spacer()
+                Button(String(localized: "settings.apply")) {
+                    applySettings()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Actions
+
+    private func loadCurrentSettings() {
+        if let storedPassword = KeychainStore.loadProxyPassword() {
+            proxyPassword = storedPassword
+        }
+    }
+
+    private func applySettings() {
+        validationErrors.removeAll()
+        applyStatus = nil
+
+        let downRate = (Int64(maxDownKB) ?? 0) * 1024
+        let upRate = (Int64(maxUpKB) ?? 0) * 1024
+        let port = UInt16(listenPort) ?? 6881
+
+        let candidate = EngineSettings(
+            downloadDirectory: downloadDir,
+            maxDownloadBytesPerSec: downRate,
+            maxUploadBytesPerSec: upRate,
+            listenPort: port,
+            dhtEnabled: dhtEnabled,
+            lsdEnabled: lsdEnabled,
+            upnpEnabled: upnpEnabled,
+            natPmpEnabled: natPmpEnabled,
+            encryptionEnabled: encryptionEnabled
+        )
+
+        // Pure client-side validation check first
+        let errors = SettingsRules.validate(candidate)
+        guard errors.isEmpty else {
+            validationErrors = errors
+            return
+        }
+
+        // Save password to Keychain securely
+        if proxyKind != .none && !proxyPassword.isEmpty {
+            KeychainStore.saveProxyPassword(proxyPassword)
+        } else if proxyKind == .none {
+            KeychainStore.deleteProxyPassword()
+        }
+
+        Task {
+            let command = EngineCommandV1.applySettings(ApplySettingsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                candidate: candidate
+            ))
+            do {
+                if case .settingsApply = try await viewModel.client.sendCommand(command) {
+                    applyStatus = String(localized: "settings.saved_successfully")
+                }
+            } catch {
+                applyStatus = String(localized: "settings.apply_failed")
+            }
+        }
+    }
+
+    private func selectSaveDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            downloadDir = url.path
+        }
+    }
+
+    private func updateLaunchAtLogin(_ enabled: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                applyStatus = String(localized: "settings.launch_login_failed")
+            }
+        }
     }
 }

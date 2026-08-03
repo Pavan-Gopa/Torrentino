@@ -13,6 +13,7 @@
 // pagination cursors are the UI's own, not the agent's.
 
 import Foundation
+import AppKit
 import TorrentinoIPC
 
 @MainActor
@@ -28,6 +29,8 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var filesLoading = false
     @Published private(set) var fileRevision: UInt64 = 0
     @Published var showAddSheet = false
+    @Published var showInspector = false
+    @Published var searchText = ""
     @Published private(set) var busy = false
 
     let client: EngineClient
@@ -246,6 +249,60 @@ final class TorrentListViewModel: ObservableObject {
 
     func resume(_ recordID: TorrentRecordID) async {
         let command = EngineCommandV1.resume(ResumeRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
+        _ = try? await client.sendCommand(command)
+    }
+
+    var canPauseSelected: Bool {
+        torrents.contains { selection.contains($0.id) && $0.desiredState == .running }
+    }
+
+    var canResumeSelected: Bool {
+        torrents.contains { selection.contains($0.id) && $0.desiredState == .paused }
+    }
+
+    func pauseSelected() {
+        let selectedIDs = Array(selection)
+        Task {
+            for id in selectedIDs {
+                await pause(id)
+            }
+        }
+    }
+
+    func resumeSelected() {
+        let selectedIDs = Array(selection)
+        Task {
+            for id in selectedIDs {
+                await resume(id)
+            }
+        }
+    }
+
+    func removeSelected() {
+        let selectedIDs = Array(selection)
+        for id in selectedIDs {
+            torrents.removeAll { $0.id == id }
+            selection.remove(id)
+        }
+    }
+
+    func revealSelected() {
+        guard let torrent = selectedTorrent else { return }
+        let url = URL(fileURLWithPath: torrent.saveLocation.path)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func toggleInspector() {
+        showInspector.toggle()
+    }
+
+    func reannounce(_ recordID: TorrentRecordID) async {
+        let command = EngineCommandV1.reannounce(ReannounceRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
+        _ = try? await client.sendCommand(command)
+    }
+
+    func setLimits(_ recordID: TorrentRecordID, limits: TransferLimits) async {
+        let command = EngineCommandV1.setLimits(SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits))
         _ = try? await client.sendCommand(command)
     }
 
