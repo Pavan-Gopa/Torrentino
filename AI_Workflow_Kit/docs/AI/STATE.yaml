@@ -10,6 +10,7 @@ target_files:
 - Native/TorrentinoEngineAgent/Agent/
 - Native/TorrentinoEngineAgent/Transfer/
 - Native/TorrentinoEngineAgent/Persistence/
+- Native/TorrentinoEngineAgent/EngineCoordinator/
 - Native/TorrentinoIPC/
 - Native/TorrentinoDomain/
 - Native/Tests/
@@ -25,27 +26,29 @@ completed_steps:
 - WP-06
 - WP-07
 implementation:
-  status: waiting_review
-  attempts: 2
+  status: in_progress
+  attempts: 3
   note: >-
-    Initial feat + review fix committed. Tester found 11 bugs (BUG_REPORT FAIL).
-    Coder fixed all 11 + WP-08 QA scripts; awaiting re-review.
+    Reviewer CHANGES_REQUESTED on post-QA fix round. Attempt 3 (last before
+    mandatory scope-narrow / Architect). Fix P1 runtime wiring first, then P2.
 review:
-  status: pending
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
+  verdict: CHANGES_REQUESTED
   note: >-
-    Prior review was CHANGES_REQUESTED (notif auth + Keychain dup) — addressed
-    in fbdc3d2. New review needed for post-QA fix round.
+    Static/unit/WP-08 scripts pass, but several behaviors stop at UI/agent
+    model boundary and are not production-effective (settings engine apply,
+    limits bridge, trackers/reannounce engine path, notifications not wired,
+    localization keys shown raw, a11y/focus gaps, MainActor Keychain I/O).
 qa:
   status: red
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-08
-  bugs_open: 11
+  bugs_open: open
   note: >-
-    BUG_REPORT snapshot is pre-fix FAIL (1/13 WP-08 scripts). Coder claims
-    13/13 + 84/84 after fixes. Tester re-run required after Reviewer APPROVED.
-next_actor: reviewer
+    Historical BUG_REPORT stale. Re-test only after Reviewer APPROVED on this
+    fix round.
+next_actor: coder
 track: PRODUCT
 prior_track: ENGINE
 working_roots:
@@ -58,5 +61,6 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-08 fix round complete (claimed). Reviewer verifies gates + architecture.
-  On APPROVED → Tester re-runs full suite including 13 WP-08 scripts.
+  Attempt 3. Address FEEDBACK.md §5 items 1-9. Priority: all P1 must be real
+  runtime paths (engine/bridge), not snapshot echoes. P2 if time. No WP-09+.
+  Fill FEEDBACK §1-4, RESULT waiting_review. No git commit.
