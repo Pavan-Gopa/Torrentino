@@ -1,30 +1,66 @@
-# QA Verification Report — WP-06 Durable Persistence/Recovery (final run)
+# QA Verification Report — WP-07 Core Transfer Vertical Slice (final run)
 
 **Date:** 2026-08-03
 **Role:** Test Engineer (QA)
-**Status:** **GREEN (ALL 71 QA SCRIPTS PASS + 118/118 TESTS PASS)**
+**Status:** **GREEN (ALL 84 QA SCRIPTS PASS + 175/175 TESTS PASS)**
 
 ---
 
 ## Executive Summary
 
-WP-06 (durable persistence/recovery — SQLite WAL, atomic generations, checksums,
-operation journal, quarantine, controlled rebuild, failpoints, advisory lock) is
-verified green on two levels:
+WP-07 (core transfer vertical slice — bencode/metainfo/magnet parsers, HTTP source
+fetching, duplicate detection, path validation, file selection, start/pause/resume,
+paginated files, error isolation, restart flow, event-driven deltas, 100-row fixture)
+is verified green on two levels:
 
-1. **Regression suite:** all **71 QA scripts** across WP-01..WP-06 pass
-   (`SUITE RESULT: GREEN`) — 57 previous scripts untouched (monotonic coverage)
-   plus **14 NEW `test_wp06_*.sh` scripts**, one per WP-06 feature area.
-2. **XCTest:** full scheme run — **118/118 PASS, 0 FAIL** across 4 bundles:
+1. **Regression suite:** all **84 QA scripts** across WP-01..WP-07 pass
+   (`SUITE RESULT: GREEN`) — 71 previous scripts untouched (monotonic coverage)
+   plus **13 NEW `test_wp07_*.sh` scripts**, one per WP-07 feature area.
+2. **XCTest:** full scheme run — **175/175 PASS, 0 FAIL** across 5 bundles:
    `TorrentinoIPCTests` (74) + `TorrentinoAppTests` (9) + `TorrentinoDomainTests` (19)
-   + `TorrentinoEngineAgentPersistenceTests` (**16 NEW** WP-06 cases).
+   + `TorrentinoEngineAgentPersistenceTests` (16) + `TransferSmokeTests` (**57** =
+   25 existing + **32 NEW** WP-07 cases written by QA).
 
-Every gate item from the WP-06 plan is covered (see Gate table below). No product
-bugs found this cycle; one coverage nuance noted (Observation 2).
+Every gate item from the WP-07 plan is covered (see Gate table below). No product
+bugs found this cycle; two plan-vs-product coverage nuances noted (Observations 1-2).
 
 ---
 
 ## QA Suite Execution Results (final full-suite run, 2026-08-03)
+
+### WP-07 (Core Transfer Vertical Slice) — NEW this cycle
+| Script | Status | Duration | Verifies |
+| :--- | :---: | :---: | :--- |
+| `test_wp07_bencode_parser.sh` | PASS | 2s | Bencode happy + negative corpus; depth 64/66 boundary; 16 MiB size bound rejected BEFORE tokenizing; strict integers (leading-zero, -0, empty, non-digit, overflow) |
+| `test_wp07_metainfo_parser.sh` | PASS | 2s | Single/multi-file; negative corpus; bad info dict; SHA-1 known vector; 10 000/10 001 file boundary; announce-list capped at 512 deduplicated; pieces sanity; preflight >10 MiB / zero total |
+| `test_wp07_magnet_parser.sh` | PASS | 2s | v1 40-hex + base32 decode-to-known-bytes; short hash reject; btmh-only → missingHash, hybrid → btih; tracker dedupe + scheme whitelist; 8 KiB length boundary exact; negative corpus |
+| `test_wp07_http_source.sh` | PASS | 3s | http/https allowed; ftp/file/gopher reject; exactly 5 redirects OK / 6 → tooManyRedirects (loopback python server, no external network); redirect→ftp rejected; >10 MiB body; 30 s deadline via never-responding source; content-type allowlist incl. absent header; 404; invalid URL |
+| `test_wp07_duplicate_detection.sh` | PASS | 1s | Same .torrent → same recordID; same magnet hash (different dn/tr) → same recordID; different content → different recordID; idempotent replay of commitAdd key |
+| `test_wp07_path_validator.sh` | PASS | 3s | Traversal (`../`, `a/../../`, absolute, `a//b`, `a/./b`, `.`, `..`), null bytes, backslash escapes, reserved device names (con.txt, `C:`), overlong (300 chars / 600 components); positives not rejected; 255/256, 4096/4097, 513-component boundaries |
+| `test_wp07_file_selection.sh` | PASS | 2s | skip/normal priorities round-trip via fetchFiles; selection emits inspectionInvalidated(files) with recordID; unknown path → typed fault, no crash |
+| `test_wp07_pause_resume.sh` | PASS | 2s | startPaused true/false/nil → desiredState paused/running/running; pause↔resume transitions persisted; full add flow publishes delta |
+| `test_wp07_paginated_files.sh` | PASS | 2s | Multi-file root page → shared directory first; FileCursor drill-down root → sub → deep; PageCursor round-trip (2 then 1, last → nil cursor); directory rows aggregate children |
+| `test_wp07_error_isolation.sh` | PASS | 2s | Engine add failure degrades ONLY that record (recoverableError(.engineBusy)), siblings healthy + live rates; pump heals after recovery; commitAdd without inspect → typed operationNotFound, store keeps serving |
+| `test_wp07_restart_flow.sh` | PASS | 2s | Add → in-process restart (fresh coordinator, same TestProfile store) → restoreFromPersistence → record present with displayName + desiredState; 100-record store restores to exactly 100 rows |
+| `test_wp07_event_continuity.sh` | PASS | 2s | commitAdd → .torrentDelta (no full-list polling); two rapid adds coalesce into one batch with CONTIGUOUS revisions; .snapshotRequired urgent — bypasses 5 s coalescing window; burst coalesces into single delivery; selection → inspectionInvalidated(files) |
+| `test_wp07_100row_fixture.sh` | PASS | 2s | 100 seeded records restore → snapshot of exactly 100 rows with per-row recordID identity + aggregate totals; 100 interleaved mixed commands on one coordinator all resolve (no deadlock / dropped replies) |
+
+### WP-01..WP-06 — Regression (all 71 previous scripts, unchanged)
+| Bucket | Scripts | Result |
+| :--- | :---: | :---: |
+| WP-01 (Headless Harness) | 11 scripts (build_idempotent … versions_lock_valid) | 11/11 PASS |
+| WP-02 (Launchd Agent & Lifecycle) | 13 scripts (counter_* … xpc_roundtrip) | 13/13 PASS |
+| WP-03 (Native Skeleton & Strict Concurrency) | 8 scripts (domain_types … xctest_pass) | 8/8 PASS |
+| WP-04 (Bridge & Engine Kernel) | 13 scripts (adapter_compile … xcode_integration) | 13/13 PASS |
+| WP-05 (XPC Protocol v1) | 12 scripts (identity_types … contract_tests) | 12/12 PASS |
+| WP-06 (Durable Persistence/Recovery) | 14 scripts (sqlite_wal … crash_cycles) | 14/14 PASS |
+
+```
+total: 84  pass: 84  fail: 0  (wp01: 11  wp02: 13  wp03: 8  wp04: 13  wp05: 12  wp06: 14  wp07: 13)
+SUITE RESULT: GREEN
+```
+
+---
 
 ### WP-01 (Engine Headless Harness) — Regression
 | Script | Status | Duration |
@@ -103,7 +139,7 @@ bugs found this cycle; one coverage nuance noted (Observation 2).
 | `test_wp05_peer_validation.sh` | PASS | 2s |
 | `test_wp05_contract_tests.sh` | PASS | 8s |
 
-### WP-06 (Durable Persistence/Recovery) — NEW this cycle
+### WP-06 (Durable Persistence/Recovery) — Regression detail (previous cycle)
 | Script | Status | Duration | Verifies |
 | :--- | :---: | :---: | :--- |
 | `test_wp06_sqlite_wal.sh` | PASS | 2s | WAL mode, synchronous=NORMAL, foreign_keys=ON, WAL file with un-checkpointed frames after writes, TRUNCATE checkpoint collapses WAL to 0 |
@@ -125,6 +161,60 @@ bugs found this cycle; one coverage nuance noted (Observation 2).
 total: 71  pass: 71  fail: 0  (wp01: 11  wp02: 13  wp03: 8  wp04: 13  wp05: 12  wp06: 14)
 SUITE RESULT: GREEN
 ```
+
+---
+
+## WP-07 Unit Tests (TransferSmokeTests — 32 NEW by QA, 57 total in class)
+
+All run inside the full scheme test; each also mapped 1:1 into the 13 QA scripts.
+
+| Area | Test | Coverage |
+| :--- | :--- | :--- |
+| Bencode bounds | `testBencodeDepthBoundary` | 64 nested OK / 66 → `.depthExceeded` |
+| Bencode bounds | `testBencodeInputSizeBound` | >16 MiB → `.sizeExceeded` before tokenizing (fail-fast) |
+| Bencode strict int | `testBencodeStrictIntegerFormsTyped` | `<leading-zero>`, `-0`, `""`, `<non-digit>`, `<overflow>` all reject; canonical forms pass |
+| Metainfo limits | `testMetainfoFileCountLimitExactBoundary` | exactly 10 000 files accepted, 10 001 → `.tooManyFiles` |
+| Metainfo limits | `testMetainfoTrackerLimitCappedAt512` | announce-list >512 → exactly 512 deduplicated trackers |
+| Metainfo limits | `testMetainfoPathLengthBoundaries` | 255-char component OK/256 reject; 4096 total OK/4097 reject; 513 components → `.pathTooLong` |
+| Metainfo limits | `testMetainfoPiecesSanityTyped` | 0 pieces / non-multiple-of-20 → `.invalidPieces` |
+| Metainfo limits | `testMetainfoSHA1KnownVector` | info hash `dcc9ecbd…dbae0c` vs independently-computed BEP-3 vector (not mirroring product code) |
+| Magnet | `testMagnetBase32HashDecodesToKnownBytes` | 32-char base32 → byte-identical to 40-hex form |
+| Magnet | `testMagnetRejectsShortHashTyped` | 39-hex → `.invalidHash` |
+| Magnet | `testMagnetBTMHOnlyRejectedHybridUsesBTIH` | urn:btmh-only → `.missingHash`; btih+btmh → btih identity |
+| Magnet | `testMagnetTrackerDedupeAndSchemeWhitelist` | duplicate `tr` collapses; ftp:// tracker rejected |
+| Magnet | `testMagnetLengthBoundaryExact` | exactly 8 KiB accepted, 8 KiB+1 → `.tooLong` |
+| HTTP | `testHTTPSourceFetchHTTPSchemeAllowed` / `testHTTPSourceFetchRejectsUnsupportedScheme` | https ok; ftp/file/gopher → `.unsupportedScheme` |
+| HTTP | `testHTTPSourceFetchAllowsExactlyFiveRedirects` / `testHTTPSourceFetchRejectsMoreThanFiveRedirects` | loopback python HTTP server (URLProtocol stubs cannot reproduce 3xx hops): 5 → success, 6 → `.tooManyRedirects` |
+| HTTP | `testHTTPSourceFetchRejectsRedirectToUnsupportedScheme` | 302 → ftp → `.redirectToUnsupportedScheme` |
+| HTTP | `testHTTPSourceFetchDeadlineEnforced` | never-responding source + short deadline → `.deadlineExceeded` |
+| HTTP | `testHTTPSourceFetchMissingContentTypeAllowed` | absent Content-Type allowed (stub install with `contentType: nil`) |
+| Duplicate | `testDuplicateMagnetSameHashReturnsExistingRecord` | same hash, different dn/tr → same recordID |
+| Start state | `testCommitAddImmediateStartRuns` | startPaused nil → `.running` immediately (no user action needed) |
+| Selection | `testFileSelectionPrioritiesRoundTrip` / `testFileSelectionRejectsUnknownPath` | skip/normal round-trip via fetchFiles; unknown path → typed fault |
+| Isolation | `testEngineAddFailureIsolatesRecord` | per-record `failAdds(containing:)` fault injection → only that record degraded; pause/resume on siblings works; pump heals |
+| Isolation | `testEngineStatusErrorDegradesOnlyThatRecord` | per-record status error → only that record degraded, healthy keep live rates |
+| Events | `testDeltaContinuityTwoAddsSingleBatch` | two rapid adds → ONE batch, contiguous revisions (no gap for UI) |
+| Events | `testSnapshotRequiredFlushesImmediately` | urgent event bypasses 5 s coalescing window |
+| Events | `testEventBusCoalescesBurstIntoOneDelivery` | burst of publishes → single delivery |
+| Concurrency | `testConcurrentMixedCommandsAllResolve` | 100 interleaved add/pause/resume/fetch/status on one coordinator → all resolve |
+| Fixture | `testHundredRowFixtureRestoresAndRenders` | 100 seeded records → exactly 100 rows, per-row recordID identity, aggregate totals |
+
+---
+
+## WP-07 Gate Coverage (from plan)
+
+| Gate (from plan) | Test(s) | Status |
+| :--- | :--- | :---: |
+| UI не polling (event-driven deltas) | `testCommitAddFlowPublishesDelta`, `testDeltaContinuityTwoAddsSingleBatch`, `testEventBusCoalescesBurstIntoOneDelivery` | **PASS** |
+| Row identity, focus, scroll под 100 rows | `testHundredRowFixtureRestoresAndRenders` (100 rows, per-row recordID) | **PASS** |
+| 100-row fixture на старте | `testHundredRowFixtureRestoresAndRenders` (seed 100 → restore → snapshot = 100) | **PASS** |
+| Metadata не блокирует MainActor | parsers + coordinator are actor-isolated; concurrency stress `testConcurrentMixedCommandsAllResolve` (100 commands, no deadlock) | **PASS** |
+| Restart сохраняет flow | `testCommitAddFlowPublishesDelta` (in-process restart + restoreFromPersistence), `testHundredRowFixtureRestoresAndRenders` | **PASS** |
+| Error isolation (одна ошибка не блокирует остальных) | `testEngineAddFailureIsolatesRecord`, `testEngineStatusErrorDegradesOnlyThatRecord` | **PASS** |
+| Untrusted source не создаёт путь вне torrent root | `testPathValidatorNegatives` (traversal/absolute/null-byte/reserved/overlong corpus), `testMetainfoNegativeCorpusRejects`, `testMetainfoPathLengthBoundaries` | **PASS** |
+| Parser = happy + negative/fuzz (ADR-010) | bencode/metainfo/magnet negative corpora + boundary tests, all rejecting before payload write | **PASS** |
+| Security bypass attempts | `testMagnetBTMHOnlyRejectedHybridUsesBTIH`, `testHTTPSourceFetchRejectsRedirectToUnsupportedScheme`, `testMagnetTrackerDedupeAndSchemeWhitelist` (ftp in tracker), `testPathValidatorNegatives` (`.`, `..`, `C:`, backslash) | **PASS** |
+| Concurrency stress | `testConcurrentMixedCommandsAllResolve` (100 interleaved commands, single actor, no dropped replies) | **PASS** |
 
 ---
 
@@ -174,9 +264,10 @@ All run inside the full scheme test; each also mapped 1:1 into the 14 QA scripts
 
 | File | Change |
 | :--- | :--- |
-| `run_qa_suite.sh` | Runner now also collects `test_wp06_*.sh` and reports a wp06 bucket in the summary (was wp01..wp05 only). Without this the 14 new scripts would NOT be part of the monotonic regression. |
-| `scripts/qa/test_wp06_*.sh` (14 files) | New per-feature scripts: `sqlite_wal`, `schema_migration`, `atomic_generation`, `checksum_integrity`, `operation_journal`, `clean_shutdown`, `startup_reconciliation`, `quarantine`, `rebuild`, `wal_only_recovery`, `forensic_group`, `failpoints`, `advisory_lock`, `crash_cycles` — each runs its targeted `TorrentinoEngineAgentPersistenceTests` selection, all GREEN. |
-| `scripts/qa/COVERAGE.md` | WP-06 feature/gate matrix added; regression tables extended with WP-06. |
+| `run_qa_suite.sh` | Runner now also collects `test_wp07_*.sh` and reports a wp07 bucket in the summary (was wp01..wp06 only). Without this the 13 new scripts would NOT be part of the monotonic regression. |
+| `scripts/qa/test_wp07_*.sh` (13 files) | New per-feature scripts: `bencode_parser`, `metainfo_parser`, `magnet_parser`, `http_source`, `duplicate_detection`, `path_validator`, `file_selection`, `pause_resume`, `paginated_files`, `error_isolation`, `restart_flow`, `event_continuity`, `100row_fixture` — each runs its targeted `TransferSmokeTests` selection, all GREEN. |
+| `Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift` | **+32 new test methods** (25 → 57): parser bounds/typed errors, SHA-1 known vector, magnet base32/v2/hybrid, HTTP redirect limit via loopback python server, deadline via HangURLProtocol, per-record engine fault injection (`failAdds(containing:)`), event continuity/urgent flush, 100-command concurrency stress, 100-row restore fixture. |
+| `scripts/qa/COVERAGE.md` | WP-07 feature/gate matrix added; regression tables extended with WP-07. |
 
 No product code was modified this cycle (test-only QA deliverables).
 
@@ -186,12 +277,28 @@ No product code was modified this cycle (test-only QA deliverables).
 
 | Check | Command | Result |
 | :--- | :--- | :---: |
-| Full scheme tests (4 bundles) | `xcodebuild test -scheme Torrentino ...` | **118/118 PASS, 0 FAIL** (IPC 74, App 9, Domain 19, EngineAgentPersistence 16) |
-| QA regression | `bash scripts/qa/run_qa_suite.sh` | **71/71 PASS — SUITE RESULT: GREEN** |
+| Full scheme tests (5 bundles) | `xcodebuild test -scheme Torrentino ...` | **175/175 PASS, 0 FAIL** (IPC 74, App 9, Domain 19, EngineAgentPersistence 16, TransferSmokeTests 57) |
+| QA regression | `bash scripts/qa/run_qa_suite.sh` | **84/84 PASS — SUITE RESULT: GREEN** |
 
 ---
 
 ## Observations (non-blocking)
+
+1. **`FileSelectionPriority` lacks `.high`:** the WP-07 plan specifies skip/normal/high
+   priorities, but the IPC enum ships only `{skip, normal}`. QA covered everything
+   that exists (skip/normal round-trip + unknown-path reject); "high" cannot be
+   exercised until the product adds the case. LOW — plan-vs-product gap, not a
+   defect in what ships.
+2. **URLProtocol stubs cannot reproduce redirect hops:** `URLSession` completes a
+   3xx hop with an empty buffer, so `URLProtocol`-based tests surface
+   `.emptyResponse` (correct product behavior) before redirect machinery runs.
+   Redirect-count and redirect-scheme cases are therefore exercised against a
+   loopback python HTTP server (`startRedirectServer()` helper, 127.0.0.1, no
+   external network). Test-infra note, not a product issue.
+3. **Deadline test timing:** `testHTTPSourceFetchDeadlineEnforced` uses a short
+   deadline + never-responding stub; verified stable across repeated full-suite
+   runs (0 flaky occurrences).
+
 
 1. **kill -9 at process level:** the WP-06 store is exercised with in-process
    kill -9 semantics (`close(clean:false)` leaves the WAL untouched, exactly what
@@ -216,8 +323,8 @@ No product code was modified this cycle (test-only QA deliverables).
 
 ## Overall Summary
 
-- **Total QA scripts:** 71 (57 regression + **14 new**) — **Passed: 71 — Failed: 0 — SUITE RESULT: GREEN**
-- **XCTest:** 118/118 PASS (IPC 74, App 9, Domain 19, EngineAgentPersistence 16)
-- **New unit tests this cycle:** 0 added by QA (16 WP-06 tests existed in the commit; QA mapped them 1:1)
-- **Bugs found this cycle:** 0 product bugs. 3 LOW observations (see above).
+- **Total QA scripts:** 84 (71 regression + **13 new**) — **Passed: 84 — Failed: 0 — SUITE RESULT: GREEN**
+- **XCTest:** 175/175 PASS (IPC 74, App 9, Domain 19, EngineAgentPersistence 16, TransferSmokeTests 57)
+- **New unit tests this cycle:** **+32** by QA in `TransferSmokeTests` (25 → 57), all mapped into the 13 WP-07 scripts
+- **Bugs found this cycle:** 0 product bugs. 3 observations (1 plan-vs-product gap in `FileSelectionPriority`, 2 test-infra notes).
 - **Coverage matrix:** `Native/TorrentinoEngineBridge/scripts/qa/COVERAGE.md`
