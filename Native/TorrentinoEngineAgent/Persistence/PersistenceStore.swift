@@ -290,6 +290,7 @@ actor PersistenceStore {
         PersistenceSidecar.removeAll(kind: .metainfo, owner: torrentID, dataDirectory: dataDirectory)
         try? removeSessionValue(key: Self.torrentLimitsKey(torrentID))
         try? removeSessionValue(key: Self.torrentTrackersKey(torrentID))
+        try? removeSessionValue(key: Self.torrentLocationKey(torrentID))
     }
 
     func markTorrentForRecheck(torrentID: String) throws {
@@ -439,6 +440,21 @@ actor PersistenceStore {
     func torrentTrackers(torrentID: String) throws -> [String]? {
         guard let payload = try sessionValue(key: Self.torrentTrackersKey(torrentID)) else { return nil }
         return try JSONDecoder().decode([String].self, from: payload.data)
+    }
+
+    /// Stores the canonical destination and optional volume identity in the
+    /// session table. Missing/detached volumes therefore remain durable data,
+    /// not a reason to synthesize a new directory on the next boot.
+    func setTorrentLocation(torrentID: String, location: PersistedLocation) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let data = try JSONEncoder().encode(location)
+        try setSessionValue(key: Self.torrentLocationKey(torrentID), data: data)
+    }
+
+    func torrentLocation(torrentID: String) throws -> PersistedLocation? {
+        guard let payload = try sessionValue(key: Self.torrentLocationKey(torrentID)) else { return nil }
+        return try JSONDecoder().decode(PersistedLocation.self, from: payload.data)
     }
 
     func persistSettings(_ settings: EngineSettings, revision: SettingsRevision) throws {
@@ -936,6 +952,10 @@ actor PersistenceStore {
 
     private static func torrentTrackersKey(_ torrentID: String) -> String {
         "torrent_trackers.\(torrentID)"
+    }
+
+    private static func torrentLocationKey(_ torrentID: String) -> String {
+        "torrent_location.\(torrentID)"
     }
 
     private func applyPragmas(_ database: SQLiteConnection) throws {

@@ -28,6 +28,8 @@ public actor TransferCoordinator {
     private let agentVersion: String
     private let defaultSaveLocation: PersistedLocation
     private let pumpIntervalNanoseconds: UInt64?
+    private let storageProbe: @Sendable (PersistedLocation, Int64) -> StorageAvailabilityState
+    private let healthReporter: (any EngineHealthReporter)?
     private let log = Logger(subsystem: "com.torrentino.app.engine-agent", category: "transfer")
 
     // MARK: - State
@@ -40,13 +42,26 @@ public actor TransferCoordinator {
     private var engineRevision: UInt64 = 0
     private var pendingOperations: [AddOperationID: TorrentAdder.Inspection] = [:]
     private var idempotencyResults: [IdempotencyKey: CommitAddResult] = [:]
+    private var idempotencyOrder: [IdempotencyKey] = []
     private var pumpTask: Task<Void, Never>?
     private let instanceID = UUID()
     private var activeSettings: EngineSettings
     private var settingsRevision: SettingsRevision = 1
     private var lastReannounceAt: [TorrentRecordID: Date] = [:]
     private var pendingRemovalTokens: [String: TorrentRecordID] = [:]
+    private var systemConditions = SystemConditions.normal
+    private var resourceBudget = EngineResourceBudget.balanced
+    private let safeRecovery: Bool
+    private var engineStartFailures = 0
+    private var nextEngineStartAt = Date.distantPast
+    private var statusFailures = 0
+    private var nextStatusAttemptAt = Date.distantPast
+    private var networkRecoveryPending = false
+    private var nextNetworkRecoveryAt = Date.distantPast
     private static let reannounceCooldown: TimeInterval = 30
+    private static let pendingOperationsLimit = 256
+    private static let idempotencyResultsLimit = 1024
+    private static let pendingRemovalTokenLimit = 256
 
     // MARK: - Init
 
@@ -56,14 +71,22 @@ public actor TransferCoordinator {
         eventBus: TransferEventBus,
         agentVersion: String,
         defaultSaveLocation: PersistedLocation,
-        pumpIntervalNanoseconds: UInt64? = nil
+        pumpIntervalNanoseconds: UInt64? = nil,
+        storageProbe: @escaping @Sendable (PersistedLocation, Int64) -> StorageAvailabilityState = {
+            StorageLocationProbe.assess(location: $0, requiredBytes: $1)
+        },
+        healthReporter: (any EngineHealthReporter)? = nil,
+        safeRecovery: Bool = false
     ) {
         self.engine = engine
         self.persistence = persistence
         self.eventBus = eventBus
         self.agentVersion = agentVersion
-        self.defaultSaveLocation = defaultSaveLocation
-        self.pumpIntervalNanoseconds = pumpIntervalNanoseconds
+        self.defaultSaveLocation = Self.normalizedSaveLocation(defaultSaveLocation)
+        self.pumpIntervalNanoseconds = pumpIntervalNanoseconds.map { max($0, 100_000_000) }
+        self.storageProbe = storageProbe
+        self.healthReporter = healthReporter
+        self.safeRecovery = safeRecovery
         let defaults = EngineSettings.default
         self.activeSettings = EngineSettings(
             downloadDirectory: defaultSaveLocation.path,
@@ -88,8 +111,14 @@ public actor TransferCoordinator {
         guard let pumpIntervalNanoseconds else { return }
         pumpTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: pumpIntervalNanoseconds)
-                guard let self, !Task.isCancelled else { break }
+                guard let self else { break }
+                let delay = await self.currentPumpInterval(defaultInterval: pumpIntervalNanoseconds)
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled else { break }
                 await self.pumpOnce()
             }
         }
@@ -99,6 +128,10 @@ public actor TransferCoordinator {
     public func stop() async {
         pumpTask?.cancel()
         pumpTask = nil
+    }
+
+    private func currentPumpInterval(defaultInterval: UInt64) -> UInt64 {
+        max(defaultInterval, resourceBudget.pumpIntervalNanoseconds)
     }
 
     /// Rebuilds in-memory records from the persistence store (restart path).
@@ -135,13 +168,24 @@ public actor TransferCoordinator {
             let trackers = (try? await persistence.torrentTrackers(torrentID: torrent.id))
                 ?? metainfo?.trackers
                 ?? []
+            let saveLocation = Self.normalizedSaveLocation(
+                (try? await persistence.torrentLocation(torrentID: torrent.id))
+                    ?? configuredSaveLocation()
+            )
+            let restoredHealth: TorrentHealth
+            if safeRecovery {
+                restoredHealth = .recoverableError(.crashLoopSafeMode)
+            } else {
+                restoredHealth = health(for: storageProbe(saveLocation, metainfo?.totalSize ?? 0), recordID: recordID)
+                    ?? .healthy
+            }
             let record = TransferRecord(
                 id: recordID,
                 contentIdentity: identity,
                 displayName: torrent.name,
                 desiredState: desired,
                 activity: .idle,
-                health: .healthy,
+                health: restoredHealth,
                 totalBytes: metainfo?.totalSize ?? 0,
                 downloadedBytes: 0,
                 uploadedBytes: 0,
@@ -153,7 +197,7 @@ public actor TransferCoordinator {
                 metainfoData: metainfoData,
                 trackers: trackers,
                 fileSelection: [],
-                saveLocation: configuredSaveLocation(),
+                saveLocation: saveLocation,
                 addedAt: torrent.addedAt,
                 revision: 0,
                 limits: limits
@@ -166,6 +210,63 @@ public actor TransferCoordinator {
         // and fetches a full snapshot), so the next delta starts above them.
         publishedRevision = engineRevision
         log.info("restore: rebuilt \(self.records.count) record(s), engineRevision \(self.engineRevision)")
+    }
+
+    /// Applies an observation from the system-condition monitor. Desired state
+    /// is never rewritten: faults localize to the affected record while the
+    /// next pump is gated until the environment is safe again.
+    public func applySystemConditions(_ conditions: SystemConditions) async {
+        let previous = systemConditions
+        systemConditions = conditions
+        resourceBudget = SystemConditionPolicy.budget(for: conditions)
+        healthReporter?.updateSystemConditions(conditions)
+
+        var changedRecords = Set<TorrentRecordID>()
+        for (recordID, record) in records {
+            let nextHealth: TorrentHealth?
+            if safeRecovery {
+                nextHealth = .recoverableError(.crashLoopSafeMode)
+            } else if let storageHealth = health(for: storageProbe(record.saveLocation, record.totalBytes), recordID: recordID) {
+                nextHealth = storageHealth
+            } else if conditions.sleeping && record.desiredState == .running {
+                nextHealth = .recoverableError(.systemSleeping)
+            } else if !conditions.canAttemptNetworkWork && record.desiredState == .running {
+                nextHealth = .waitingForNetwork
+            } else if conditions.isResourceConstrained && record.desiredState == .running {
+                nextHealth = .recoverableError(.resourceConstrained)
+            } else if Self.isEnvironmentHealth(record.health) {
+                nextHealth = .healthy
+            } else {
+                nextHealth = nil
+            }
+
+            if let nextHealth, nextHealth != record.health {
+                records[recordID] = record.with(health: nextHealth)
+                changedRecords.insert(recordID)
+            }
+        }
+
+        let pathChanged = previous.networkGeneration != conditions.networkGeneration
+            || previous.network != conditions.network
+        if pathChanged || (previous.sleeping && !conditions.sleeping) {
+            networkRecoveryPending = conditions.canAttemptNetworkWork && !safeRecovery
+            nextNetworkRecoveryAt = Date().addingTimeInterval(0.5)
+        }
+
+        if !changedRecords.isEmpty {
+            for recordID in changedRecords {
+                bumpRecordRevision(recordID)
+                appendEngineChange(.updated(recordID))
+            }
+            await publishDelta()
+        }
+
+        if previous != conditions {
+            await eventBus.publish([.systemCondition(SystemConditionEvent(conditions: conditions))], urgent: true)
+        }
+        if pathChanged || (previous.sleeping && !conditions.sleeping) {
+            await pumpOnce()
+        }
     }
 
     // MARK: - Command entry
@@ -292,6 +393,9 @@ public actor TransferCoordinator {
     // MARK: - Inspect + commit
 
     private func handleInspect(_ request: InspectAddSourceRequest) async -> EngineCommandResult {
+        guard pendingOperations.count < Self.pendingOperationsLimit else {
+            return .failure(.resourceLimitExceeded(resource: "pending_add_operations", limit: Self.pendingOperationsLimit))
+        }
         let inspection: TorrentAdder.Inspection
         do {
             switch request.source {
@@ -300,6 +404,9 @@ public actor TransferCoordinator {
             case .torrentFileData(let data):
                 inspection = try TorrentAdder.inspectTorrentData(data, desiredName: request.desiredName)
             case .torrentFileURL(let urlString):
+                guard systemConditions.canAttemptNetworkWork else {
+                    return .failure(.networkUnavailable(details: "network path unavailable"))
+                }
                 let data = try await HTTPSourceFetcher().fetch(urlString: urlString)
                 inspection = try TorrentAdder.inspectTorrentData(data, desiredName: request.desiredName)
             }
@@ -346,8 +453,9 @@ public actor TransferCoordinator {
         // The persisted settings candidate is authoritative for new torrents;
         // the constructor location is only a bootstrap fallback before settings
         // have been restored.
-        let saveLocation = request.saveLocation ?? configuredSaveLocation()
+        let saveLocation = Self.normalizedSaveLocation(request.saveLocation ?? configuredSaveLocation())
         let displayName = request.desiredName ?? inspection.displayName
+        let storageState = storageProbe(saveLocation, inspection.metainfo?.totalSize ?? 0)
         let selection: [RecordFileSelection]
         if let metainfo = inspection.metainfo {
             do {
@@ -372,6 +480,10 @@ public actor TransferCoordinator {
                 addedAt: now,
                 quarantined: false
             ))
+            try await persistence.setTorrentLocation(
+                torrentID: recordID.rawValue.uuidString,
+                location: saveLocation
+            )
             let seq = try await persistence.journalAppend(command: "commitAdd", torrentID: recordID.rawValue.uuidString, timestamp: now)
             if let sourceData = inspection.sourceData {
                 _ = try await persistence.storeMetainfo(torrentID: recordID.rawValue.uuidString, data: sourceData)
@@ -379,14 +491,21 @@ public actor TransferCoordinator {
             try await persistence.journalMarkCommitted(seq: seq)
         } catch {
             log.error("commitAdd persistence failed: \(String(describing: error))")
-            return .failure(EngineFault(code: .storeError, severity: .fatal, recoveryActions: ["retry_op"], redactedContext: "\(error)"))
+            return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: saveLocation.volumeIdentifier))
         }
 
         // 2. Engine add (best-effort: failure degrades THIS record only).
         let engineID: String?
-        var health: TorrentHealth = .healthy
+        var health: TorrentHealth = health(for: storageState, recordID: recordID) ?? .healthy
         var activity: TorrentActivity = inspection.metainfo == nil ? .fetchingMetadata : .queued
-        if await ensureEngineStarted() {
+        if safeRecovery {
+            engineID = nil
+            health = .recoverableError(.crashLoopSafeMode)
+            activity = .idle
+        } else if health != .healthy {
+            engineID = nil
+            activity = .idle
+        } else if systemConditions.canAttemptNetworkWork, await ensureEngineStarted() {
             do {
                 let result = try await engine.add(specification: TorrentAdder.makeSpecification(
                     identity: inspection.contentIdentity,
@@ -398,13 +517,15 @@ public actor TransferCoordinator {
                 engineID = result.torrentID
             } catch {
                 engineID = nil
-                health = .recoverableError(.engineBusy)
+                health = Self.engineHealth(from: error, recordID: recordID)
                 activity = .idle
                 log.warning("commitAdd: engine add failed for \(recordID): \(String(describing: error))")
             }
         } else {
             engineID = nil
-            health = .recoverableError(.engineNotReady)
+            health = systemConditions.canAttemptNetworkWork
+                ? .recoverableError(.engineNotReady)
+                : .waitingForNetwork
             activity = .idle
         }
 
@@ -436,7 +557,7 @@ public actor TransferCoordinator {
 
         bumpEngineRevision(change: .added(recordID))
         let result = CommitAddResult(recordID: recordID, engineRevision: engineRevision)
-        idempotencyResults[request.idempotencyKey] = result
+        rememberIdempotency(request.idempotencyKey, result: result)
         return .success(.commitAdd(result))
     }
 
@@ -446,14 +567,23 @@ public actor TransferCoordinator {
         guard var record = records[recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
-        record = record.with(desiredState: desired)
-        records[recordID] = record
+        if desired == .running, safeRecovery {
+            return .failure(.crashLoopSafeMode())
+        }
         do {
             try await persistence.updateTorrentState(torrentID: recordID.rawValue.uuidString, state: desired.rawValue)
         } catch {
             log.error("pause/resume: persistence failed for \(recordID): \(String(describing: error))")
+            return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier))
         }
-        if let engineID = record.engineID, await ensureEngineStarted() {
+        record = record.with(desiredState: desired)
+        records[recordID] = record
+        let storageState = storageProbe(record.saveLocation, record.totalBytes)
+        if desired == .running, let storageHealth = health(for: storageState, recordID: recordID) {
+            records[recordID] = record.with(health: storageHealth)
+        } else if desired == .running, !systemConditions.canAttemptNetworkWork {
+            records[recordID] = record.with(health: .waitingForNetwork)
+        } else if systemConditions.canAttemptNetworkWork, let engineID = record.engineID, await ensureEngineStarted() {
             do {
                 switch desired {
                 case .paused: try await engine.pause(torrentID: engineID)
@@ -461,7 +591,7 @@ public actor TransferCoordinator {
                 case .removed: break
                 }
             } catch {
-                records[recordID] = record.with(health: .recoverableError(.engineBusy))
+                records[recordID] = record.with(health: Self.engineHealth(from: error, recordID: recordID))
                 log.warning("pause/resume: engine failed for \(recordID): \(String(describing: error))")
             }
         }
@@ -668,12 +798,26 @@ public actor TransferCoordinator {
     /// then apply live status to every record. Per-record isolation: an
     /// engine error for one torrent only degrades that record.
     public func pumpOnce() async {
+        healthReporter?.noteEngineTick()
+        guard !safeRecovery, systemConditions.canAttemptNetworkWork else { return }
+        let now = Date()
+        guard now >= nextStatusAttemptAt else { return }
         guard await ensureEngineStarted() else { return }
+
+        if networkRecoveryPending {
+            guard now >= nextNetworkRecoveryAt else { return }
+            await recoverNetworkPath()
+        }
 
         var statuses: [TransferTorrentStatus] = []
         do {
-            statuses = try await engine.statusUpdate()
+            statuses = try await engine.statusUpdate(maxAlerts: resourceBudget.alertDrainBatch)
+            statusFailures = 0
+            nextStatusAttemptAt = .distantPast
         } catch {
+            statusFailures += 1
+            healthReporter?.noteEngineFailure()
+            nextStatusAttemptAt = now.addingTimeInterval(Self.backoffSeconds(forAttempt: statusFailures))
             log.warning("pump: statusUpdate failed: \(String(describing: error))")
             return
         }
@@ -683,7 +827,15 @@ public actor TransferCoordinator {
         // Re-add records the engine does not know yet (restart + failed adds).
         // Iterate a snapshot of the dictionary: records is mutated inside.
         let toReadd = records.filter { $0.value.engineID == nil }
-        for (recordID, record) in toReadd {
+        for (recordID, record) in toReadd.prefix(resourceBudget.maxReaddsPerPump) {
+            let storageState = storageProbe(record.saveLocation, record.totalBytes)
+            if let storageHealth = health(for: storageState, recordID: recordID) {
+                if record.health != storageHealth {
+                    records[recordID] = record.with(health: storageHealth)
+                    changed.append(recordID)
+                }
+                continue
+            }
             let specification = TorrentAdder.makeSpecification(
                 identity: record.contentIdentity,
                 metainfoData: record.metainfoData,
@@ -696,7 +848,7 @@ public actor TransferCoordinator {
                 records[recordID] = record.with(engineID: result.torrentID, health: .healthy)
                 changed.append(recordID)
             } catch {
-                records[recordID] = record.with(health: .recoverableError(.engineBusy))
+                records[recordID] = record.with(health: Self.engineHealth(from: error, recordID: recordID))
                 changed.append(recordID)
             }
         }
@@ -720,16 +872,50 @@ public actor TransferCoordinator {
         await publishDelta()
     }
 
+    /// Reannounce is deliberately bounded and retried only after a path
+    /// change. The engine itself owns socket rebind; this call gives trackers a
+    /// deterministic recovery nudge without a tight retry loop.
+    private func recoverNetworkPath() async {
+        networkRecoveryPending = false
+        let candidates = records.values
+            .filter { $0.desiredState == .running && $0.engineID != nil }
+            .prefix(resourceBudget.maxConnectionAttempts)
+        var failed = false
+        for record in candidates {
+            guard let engineID = record.engineID else { continue }
+            do {
+                try await engine.reannounce(torrentID: engineID)
+            } catch {
+                failed = true
+                log.debug("network recovery deferred for \(record.id): \(String(describing: error))")
+            }
+        }
+        if failed {
+            networkRecoveryPending = true
+            nextNetworkRecoveryAt = Date().addingTimeInterval(2)
+        }
+    }
+
     // MARK: - Engine lifecycle helpers
 
     private func ensureEngineStarted() async -> Bool {
+        guard !safeRecovery, systemConditions.canAttemptNetworkWork else { return false }
         if await engine.isStarted {
+            engineStartFailures = 0
+            nextEngineStartAt = .distantPast
             return true
         }
+        let now = Date()
+        guard now >= nextEngineStartAt else { return false }
         do {
             try await engine.start(configuration: activeSettings)
+            engineStartFailures = 0
+            nextEngineStartAt = .distantPast
             return true
         } catch {
+            engineStartFailures += 1
+            nextEngineStartAt = now.addingTimeInterval(Self.backoffSeconds(forAttempt: engineStartFailures))
+            healthReporter?.noteEngineFailure()
             log.warning("ensureEngineStarted failed: \(String(describing: error))")
             return false
         }
@@ -857,6 +1043,87 @@ public actor TransferCoordinator {
         }
     }
 
+    private func health(for state: StorageAvailabilityState, recordID: TorrentRecordID) -> TorrentHealth? {
+        switch state {
+        case .available:
+            return nil
+        case .volumeUnavailable:
+            return .waitingForVolume
+        case .permissionDenied:
+            return .permissionDenied
+        case .insufficientSpace:
+            return .waitingForSpace
+        }
+    }
+
+    private static func isEnvironmentHealth(_ health: TorrentHealth) -> Bool {
+        switch health {
+        case .waitingForNetwork, .waitingForVolume, .waitingForSpace, .permissionDenied:
+            return true
+        case .recoverableError(let code):
+            return code == .systemSleeping || code == .resourceConstrained
+        case .healthy, .fatalError:
+            return false
+        }
+    }
+
+    private static func engineHealth(from error: Error, recordID: TorrentRecordID) -> TorrentHealth {
+        if let fault = error as? EngineFault {
+            switch fault.code {
+            case .networkUnavailable: return .waitingForNetwork
+            case .volumeUnavailable: return .waitingForVolume
+            case .insufficientSpace: return .waitingForSpace
+            case .permissionDenied: return .permissionDenied
+            default: return .recoverableError(fault.code)
+            }
+        }
+        let details = String(describing: error)
+        let storageFault = EngineFault.storageFailure(details: details, recordID: recordID)
+        switch storageFault.code {
+        case .insufficientSpace: return .waitingForSpace
+        case .permissionDenied: return .permissionDenied
+        case .volumeUnavailable: return .waitingForVolume
+        default: break
+        }
+        if let coordinatorError = error as? EngineCoordinatorError {
+            switch coordinatorError {
+            case .timeout: return .recoverableError(.operationTimeout)
+            case .notFound: return .recoverableError(.recordNotFound)
+            case .invalidArgument: return .recoverableError(.invalidArgument)
+            case .stopped, .notStarted: return .recoverableError(.engineNotReady)
+            case .io: return .recoverableError(.storeError)
+            default: break
+            }
+        }
+        return .recoverableError(.engineBusy)
+    }
+
+    private static func persistenceFault(_ error: Error, recordID: TorrentRecordID?, volumeIdentifier: String?) -> EngineFault {
+        EngineFault.storageFailure(
+            details: String(describing: error),
+            recordID: recordID,
+            volumeIdentifier: volumeIdentifier
+        )
+    }
+
+    private func rememberIdempotency(_ key: IdempotencyKey, result: CommitAddResult) {
+        idempotencyResults[key] = result
+        idempotencyOrder.removeAll { $0 == key }
+        idempotencyOrder.append(key)
+        while idempotencyOrder.count > Self.idempotencyResultsLimit, let oldest = idempotencyOrder.first {
+            idempotencyOrder.removeFirst()
+            idempotencyResults.removeValue(forKey: oldest)
+        }
+    }
+
+    private static func backoffSeconds(forAttempt attempt: Int) -> TimeInterval {
+        var delay = 0.25
+        for _ in 1..<max(1, min(attempt, 8)) {
+            delay = min(delay * 2, 30)
+        }
+        return delay
+    }
+
     private func unsupported(_ commandName: String) -> EngineFault {
         EngineFault(
             code: .unsupportedOperation,
@@ -868,7 +1135,14 @@ public actor TransferCoordinator {
 
     private func configuredSaveLocation() -> PersistedLocation {
         let path = activeSettings.downloadDirectory
-        return path.isEmpty ? defaultSaveLocation : PersistedLocation(path: path)
+        return path.isEmpty ? defaultSaveLocation : Self.normalizedSaveLocation(PersistedLocation(path: path))
+    }
+
+    private static func normalizedSaveLocation(_ location: PersistedLocation) -> PersistedLocation {
+        let expanded = (location.path as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else { return location }
+        let path = URL(fileURLWithPath: expanded).standardizedFileURL.path
+        return PersistedLocation(path: path, volumeIdentifier: location.volumeIdentifier)
     }
 
     private static func engineFault(
@@ -882,6 +1156,26 @@ public actor TransferCoordinator {
         // generic busy result.
         if let fault = error as? EngineFault {
             return fault
+        }
+        if let coordinatorError = error as? EngineCoordinatorError {
+            switch coordinatorError {
+            case .notFound:
+                if let recordID { return .recordNotFound(recordID: recordID) }
+            case .timeout:
+                return .operationTimeout(details: operation)
+            case .invalidArgument:
+                return .invalidArgument(details: operation, recordID: recordID)
+            case .io:
+                return .storageFailure(details: String(describing: error), recordID: recordID)
+            case .stopped, .notStarted:
+                return .engineNotReady(details: operation)
+            default:
+                break
+            }
+        }
+        let storage = EngineFault.storageFailure(details: String(describing: error), recordID: recordID)
+        if storage.code == .insufficientSpace || storage.code == .permissionDenied {
+            return storage
         }
         return .engineBusy(details: fallback)
     }
@@ -1017,7 +1311,11 @@ extension TransferCoordinator {
                 limits: request.limits
             )
         } catch {
-            return .failure(.storeError(underlying: error))
+            return .failure(Self.persistenceFault(
+                error,
+                recordID: request.recordID,
+                volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
         }
         do {
             try await engine.setLimits(torrentID: engineID, limits: request.limits)
@@ -1100,6 +1398,9 @@ extension TransferCoordinator {
         guard records[recordID] != nil else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
+        guard systemConditions.canAttemptNetworkWork else {
+            return .failure(.networkUnavailable(details: "network path unavailable"))
+        }
         let now = Date()
         if let previous = lastReannounceAt[recordID] {
             let elapsed = now.timeIntervalSince(previous)
@@ -1151,7 +1452,11 @@ extension TransferCoordinator {
                 trackers: updated
             )
         } catch {
-            return .failure(.storeError(underlying: error))
+            return .failure(Self.persistenceFault(
+                error,
+                recordID: request.recordID,
+                volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
         }
         do {
             try await engine.editTrackers(torrentID: engineID, trackers: updated)
@@ -1197,6 +1502,9 @@ extension TransferCoordinator {
         guard records[request.recordID] != nil else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
+        guard pendingRemovalTokens.count < Self.pendingRemovalTokenLimit else {
+            return .failure(.resourceLimitExceeded(resource: "pending_removal_tokens", limit: Self.pendingRemovalTokenLimit))
+        }
         let token = RemovalToken(rawValue: UUID().uuidString)
         pendingRemovalTokens[token.rawValue] = request.recordID
         return .success(.removalToken(token))
@@ -1212,14 +1520,23 @@ extension TransferCoordinator {
             do {
                 try await engine.remove(torrentID: engineID)
             } catch {
-                return .failure(.engineBusy(details: "removal failed"))
+                return .failure(Self.engineFault(
+                    error,
+                    operation: "remove",
+                    recordID: recordID,
+                    fallback: "removal failed"
+                ))
             }
         }
 
         do {
             try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
         } catch {
-            return .failure(.storeError(underlying: error))
+            return .failure(Self.persistenceFault(
+                error,
+                recordID: recordID,
+                volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
         }
 
         records.removeValue(forKey: recordID)

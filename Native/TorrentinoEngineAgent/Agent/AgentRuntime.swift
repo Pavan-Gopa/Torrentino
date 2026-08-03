@@ -35,6 +35,9 @@ final class AgentRuntime: @unchecked Sendable {
     private let store: CounterStore
     private let persistence: PersistenceStore
     private let service: AgentService
+    private let healthLane: AgentHealthLane
+    private let crashLoopGuard: CrashLoopGuard
+    private let safeRecovery: Bool
     private var listener: NSXPCListener?
     private var listenerDelegate: ListenerDelegate? // strong: NSXPCListener.delegate is weak
     private var signalSources: [DispatchSourceSignal] = []
@@ -44,6 +47,8 @@ final class AgentRuntime: @unchecked Sendable {
     /// WP-07 transfer lane, built after persistence opens (set-once, on
     /// stateQueue). Stopped before the clean-shutdown pipeline in initiateStop.
     private var transferCoordinator: TransferCoordinator?
+    private var conditionMonitor: SystemConditionMonitor?
+    private var latestConditions = SystemConditions.normal
 
     /// Creates the engine directory, takes the single-instance lock, acquires
     /// the persistence single-writer advisory lock, and loads the durable
@@ -63,9 +68,14 @@ final class AgentRuntime: @unchecked Sendable {
                  "\(String(describing: error))\n").utf8))
             exit(AgentRuntime.exitCodeFault)
         }
+        let crashGuard = CrashLoopGuard.begin(in: engineDirectory)
+        self.crashLoopGuard = crashGuard
+        self.safeRecovery = crashGuard.isSafeRecovery
         self.store = try CounterStore(engineDirectory: engineDirectory)
         self.persistence = PersistenceStore(dataDirectory: engineDirectory)
-        self.service = AgentService(store: store, persistence: persistence)
+        self.healthLane = AgentHealthLane()
+        self.healthLane.markSafeRecovery(safeRecovery)
+        self.service = AgentService(store: store, persistence: persistence, healthLane: healthLane)
         // Phase 1 is complete: capturing self weakly is now legal.
         service.shutdownHook = { [weak self] in
             self?.initiateStop(reason: "xpc-shutdown", exitDelayNanoseconds: 250_000_000)
@@ -101,8 +111,10 @@ final class AgentRuntime: @unchecked Sendable {
         Task {
             do {
                 let report = try await persistence.open()
+                healthLane.updatePersistence(await persistence.healthSnapshot())
                 log.notice("persistence ready: \(report.message, privacy: .public)")
             } catch {
+                healthLane.updatePersistenceFailure()
                 log.error("persistence open failed, serving degraded: \(String(describing: error), privacy: .public)")
             }
             await wireTransferLanes()
@@ -129,7 +141,7 @@ final class AgentRuntime: @unchecked Sendable {
     /// restore leaves the coordinator empty; the pump re-adds running torrents
     /// on the next tick.
     private func wireTransferLanes() async {
-        let bus = TransferEventBus()
+        let bus = TransferEventBus(healthReporter: healthLane)
         let bridge = BridgeTransferEngine(coordinator: EngineCoordinator())
         let coordinator = TransferCoordinator(
             engine: bridge,
@@ -137,16 +149,38 @@ final class AgentRuntime: @unchecked Sendable {
             eventBus: bus,
             agentVersion: AgentRuntime.agentVersion,
             defaultSaveLocation: PersistedLocation(path: Self.defaultDownloadsPath),
-            pumpIntervalNanoseconds: 500_000_000
+            pumpIntervalNanoseconds: 500_000_000,
+            healthReporter: healthLane,
+            safeRecovery: safeRecovery
         )
         stateQueue.sync {
             self.transferCoordinator = coordinator
             service.coordinator = coordinator
             service.eventBus = bus
         }
+        let conditions = stateQueue.sync { latestConditions }
+        await coordinator.applySystemConditions(conditions)
         await coordinator.restoreFromPersistence()
         await coordinator.startPump()
+        startConditionMonitoring()
         log.notice("transfer lane wired (bus + coordinator + bridge engine)")
+    }
+
+    private func startConditionMonitoring() {
+        let monitor = SystemConditionMonitor { [weak self] conditions in
+            guard let self else { return }
+            self.healthLane.updateSystemConditions(conditions)
+            self.stateQueue.async { [weak self] in
+                guard let self else { return }
+                self.latestConditions = conditions
+                let coordinator = self.transferCoordinator
+                Task {
+                    await coordinator?.applySystemConditions(conditions)
+                }
+            }
+        }
+        stateQueue.sync { conditionMonitor = monitor }
+        monitor.start()
     }
 
     /// Default torrent save location: the current user's Downloads folder.
@@ -181,6 +215,7 @@ final class AgentRuntime: @unchecked Sendable {
                 if let coordinator {
                     await coordinator.stop()
                 }
+                stateQueue.sync { conditionMonitor?.stop() }
                 // WP-06 clean shutdown: WAL flush -> TRUNCATE checkpoint ->
                 // journal truncation -> clean flag -> close. Any failure here
                 // still exits 0; the next boot runs startup reconciliation.
@@ -190,6 +225,8 @@ final class AgentRuntime: @unchecked Sendable {
                 } catch {
                     log.error("persistence clean shutdown failed, WAL left for replay: \(String(describing: error), privacy: .public)")
                 }
+                crashLoopGuard.markClean()
+                healthLane.markCheckpoint()
                 // Short delay lets the XPC shutdown ack drain to the client.
                 try? await Task.sleep(nanoseconds: exitDelayNanoseconds)
                 exit(0)
@@ -310,5 +347,41 @@ final class AgentRuntime: @unchecked Sendable {
             log.notice("accepted ui connection effectiveUserIdentifier=\(connection.effectiveUserIdentifier)")
             return true
         }
+    }
+}
+
+/// Durable start history used only to enter safe recovery after a real
+/// crash-loop. The launchd `ThrottleInterval` remains the first line of
+/// defense; this guard prevents repeated auto-resume even when launchd keeps
+/// attempting to start the job. A clean stop removes the bounded history.
+final class CrashLoopGuard: @unchecked Sendable {
+    private static let window: TimeInterval = 5 * 60
+    private static let threshold = 3
+    private let fileURL: URL
+    let isSafeRecovery: Bool
+
+    private init(fileURL: URL, isSafeRecovery: Bool) {
+        self.fileURL = fileURL
+        self.isSafeRecovery = isSafeRecovery
+    }
+
+    static func begin(in engineDirectory: URL) -> CrashLoopGuard {
+        let fileURL = engineDirectory.appendingPathComponent("crash-history.json", isDirectory: false)
+        let now = Date().timeIntervalSince1970
+        let previous = (try? Data(contentsOf: fileURL))
+            .flatMap { try? JSONDecoder().decode([Double].self, from: $0) }
+            ?? []
+        let recent = previous.filter { now - $0 < Self.window }
+        let starts = recent + [now]
+        let safe = starts.count >= Self.threshold
+        if let data = try? JSONEncoder().encode(starts) {
+            try? data.write(to: fileURL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        }
+        return CrashLoopGuard(fileURL: fileURL, isSafeRecovery: safe)
+    }
+
+    func markClean() {
+        try? FileManager.default.removeItem(at: fileURL)
     }
 }

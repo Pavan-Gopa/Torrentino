@@ -114,6 +114,9 @@
 		4A00000000000000000005EC /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B5 /* Preflight.swift */; };
 		4A00000000000000000005ED /* HTTPSourceFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B4 /* HTTPSourceFetcher.swift */; };
 		4A00000000000000000005EE /* NegativeCorpus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001B6 /* NegativeCorpus.swift */; };
+		4A0000000000000000000824 /* SystemConditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000814 /* SystemConditions.swift */; };
+		4A0000000000000000000825 /* SystemConditionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000815 /* SystemConditionMonitor.swift */; };
+		4A0000000000000000000826 /* EngineCoordinatorError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000165 /* EngineCoordinatorError.swift */; };
 		4A00000000000000000005F0 /* TransferSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AD /* TransferSmokeTests.swift */; };
 		4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000111 /* TorrentListViewModel.swift */; };
 		4A00000000000000000005F2 /* TorrentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000112 /* TorrentListView.swift */; };
@@ -309,6 +312,8 @@
 		4A00000000000000000001B4 /* HTTPSourceFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPSourceFetcher.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B5 /* Preflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preflight.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B6 /* NegativeCorpus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NegativeCorpus.swift; sourceTree = "<group>"; };
+		4A0000000000000000000814 /* SystemConditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemConditions.swift; sourceTree = "<group>"; };
+		4A0000000000000000000815 /* SystemConditionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemConditionMonitor.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B7 /* TransferRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferRecord.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B8 /* TransferEventBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEventBus.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B9 /* TorrentAdder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentAdder.swift; sourceTree = "<group>"; };
@@ -535,6 +540,7 @@
 				4A0000000000000000000108 /* AgentMain.swift */,
 				4A0000000000000000000109 /* AgentRuntime.swift */,
 				4A000000000000000000010A /* AgentService.swift */,
+				4A0000000000000000000815 /* SystemConditionMonitor.swift */,
 			);
 			path = Agent;
 			sourceTree = "<group>";
@@ -636,6 +642,7 @@
 				4A000000000000000000014E /* Idempotency.swift */,
 				4A000000000000000000014F /* Reconciliation.swift */,
 				4A0000000000000000000150 /* ReconnectPolicy.swift */,
+				4A0000000000000000000814 /* SystemConditions.swift */,
 			);
 			path = TorrentinoIPC;
 			sourceTree = "<group>";
@@ -963,6 +970,7 @@
 				4A0000000000000000000508 /* AgentMain.swift in Sources */,
 				4A0000000000000000000509 /* AgentRuntime.swift in Sources */,
 				4A000000000000000000050A /* AgentService.swift in Sources */,
+				4A0000000000000000000825 /* SystemConditionMonitor.swift in Sources */,
 				4A000000000000000000050B /* CounterStore.swift in Sources */,
 				4A00000000000000000005A1 /* PersistenceStore.swift in Sources */,
 				4A00000000000000000005A2 /* AtomicGeneration.swift in Sources */,
@@ -1025,6 +1033,7 @@
 				4A000000000000000000054E /* Idempotency.swift in Sources */,
 				4A000000000000000000054F /* Reconciliation.swift in Sources */,
 				4A0000000000000000000550 /* ReconnectPolicy.swift in Sources */,
+				4A0000000000000000000824 /* SystemConditions.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1077,6 +1086,7 @@
 				4A00000000000000000005C9 /* PersistenceError.swift in Sources */,
 				4A00000000000000000005CA /* SQLiteConnection.swift in Sources */,
 				4A00000000000000000005E4 /* EngineBridgeDTOs.swift in Sources */,
+				4A0000000000000000000826 /* EngineCoordinatorError.swift in Sources */,
 				4A00000000000000000005E5 /* TransferRecord.swift in Sources */,
 				4A00000000000000000005E6 /* TransferEventBus.swift in Sources */,
 				4A00000000000000000005E7 /* TorrentAdder.swift in Sources */,
@@ -1252,6 +1262,8 @@
 					"$(inherited)",
 					"-framework CoreFoundation",
 					"-framework SystemConfiguration",
+					"-framework Network",
+					"-framework AppKit",
 					"-lsqlite3",
 				);
 				LIBRARY_SEARCH_PATHS = (
@@ -1300,6 +1312,8 @@
 					"$(inherited)",
 					"-framework CoreFoundation",
 					"-framework SystemConfiguration",
+					"-framework Network",
+					"-framework AppKit",
 					"-lsqlite3",
 				);
 				LIBRARY_SEARCH_PATHS = (

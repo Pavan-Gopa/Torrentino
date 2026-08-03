@@ -167,6 +167,16 @@ public struct SettingsChangedEvent: Codable, Sendable, Equatable {
     }
 }
 
+/// The agent's system condition snapshot changed (network/thermal/memory/
+/// Low Power/sleep). Lets the UI surface recovery states without polling.
+public struct SystemConditionEvent: Codable, Sendable, Equatable {
+    public let conditions: SystemConditions
+
+    public init(conditions: SystemConditions) {
+        self.conditions = conditions
+    }
+}
+
 /// The complete v1 push surface (plan §7.5). Case names are wire discriminators.
 public enum EngineEventV1: Codable, Sendable, Equatable {
     case engineLifecycleChanged(EngineLifecycleChangedEvent)
@@ -180,6 +190,7 @@ public enum EngineEventV1: Codable, Sendable, Equatable {
     case snapshotRequired(SnapshotRequiredEvent)
     case inspectionInvalidated(InspectionInvalidatedEvent)
     case settingsChanged(SettingsChangedEvent)
+    case systemCondition(SystemConditionEvent)
 
     /// Every v1 event, once, with minimal payloads. Enumeration/diagnostics only.
     public static let allCases: [EngineEventV1] = {
@@ -210,6 +221,7 @@ public enum EngineEventV1: Codable, Sendable, Equatable {
             .snapshotRequired(SnapshotRequiredEvent(reason: .initialConnection, afterRevision: 0)),
             .inspectionInvalidated(InspectionInvalidatedEvent(recordID: recordID, scope: .all, revision: 0)),
             .settingsChanged(SettingsChangedEvent(revision: 0)),
+            .systemCondition(SystemConditionEvent(conditions: .normal)),
         ]
     }()
 }
@@ -229,6 +241,7 @@ extension EngineEventV1 {
         case .snapshotRequired: return "snapshotRequired"
         case .inspectionInvalidated: return "inspectionInvalidated"
         case .settingsChanged: return "settingsChanged"
+        case .systemCondition: return "systemCondition"
         }
     }
 }

@@ -35,6 +35,7 @@ final class TorrentListViewModel: ObservableObject {
     @Published var searchText = ""
     @Published var searchFocusRequest = 0
     @Published private(set) var busy = false
+    @Published private(set) var systemConditions = SystemConditions.normal
 
     let client: EngineClient
     private(set) var directoryStack: [String] = []
@@ -156,8 +157,13 @@ final class TorrentListViewModel: ObservableObject {
             case .inspectionInvalidated(let payload):
                 if selection.contains(payload.recordID),
                    payload.scope == .files || payload.scope == .all {
-                    Task { await loadFiles(for: payload.recordID) }
-                }
+                     Task { await loadFiles(for: payload.recordID) }
+                 }
+            case .systemCondition(let payload):
+                // This is an agent observation, not UI-owned state. Keeping it
+                // published lets the presentation layer show offline/sleep/
+                // pressure recovery without polling the heavy command lane.
+                systemConditions = payload.conditions
             case .engineHealthChanged, .engineLifecycleChanged, .operationProgress,
                  .operationCompleted, .recoverableIssue, .settingsChanged:
                 break

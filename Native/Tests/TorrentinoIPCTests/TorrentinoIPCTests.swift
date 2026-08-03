@@ -291,10 +291,10 @@ final class TorrentinoIPCTests: TestProfileCase {
             "engineLifecycleChanged", "torrentAdded", "torrentDelta",
             "torrentRemoved", "operationProgress", "operationCompleted",
             "recoverableIssue", "engineHealthChanged", "snapshotRequired",
-            "inspectionInvalidated", "settingsChanged",
+            "inspectionInvalidated", "settingsChanged", "systemCondition",
         ]
         XCTAssertEqual(EngineEventV1.allCases.map(\.name), expectedNames)
-        XCTAssertEqual(EngineEventV1.allCases.count, 11)
+        XCTAssertEqual(EngineEventV1.allCases.count, 12)
     }
 
     func testEngineEventV1RoundTripAllCases() throws {
@@ -876,6 +876,60 @@ final class TorrentinoIPCTests: TestProfileCase {
         XCTAssertNil(policy.delayNanoseconds(forAttempt: 100))
         XCTAssertTrue(policy.isBudgetExhausted(afterAttempt: policy.maxAttempts))
         XCTAssertFalse(policy.isBudgetExhausted(afterAttempt: policy.maxAttempts - 1))
+    }
+
+    // MARK: - WP-09 fault recovery and resource policy
+
+    func testWP09ResourceBudgetIsBoundedAndShrinksUnderPressure() {
+        let constrained = SystemConditions(
+            network: .satisfied,
+            networkGeneration: 4,
+            thermal: .critical,
+            memoryPressure: .critical,
+            lowPower: true,
+            sleeping: false
+        )
+        let budget = SystemConditionPolicy.budget(for: constrained)
+        XCTAssertFalse(budget.acceptsHeavyWork)
+        XCTAssertGreaterThan(budget.maxPeerConnections, 0)
+        XCTAssertLessThan(budget.maxPeerConnections, EngineResourceBudget.balanced.maxPeerConnections)
+        XCTAssertLessThanOrEqual(budget.maxReaddsPerPump, 1)
+        XCTAssertGreaterThan(budget.pumpIntervalNanoseconds, 0)
+
+        let offline = SystemConditionPolicy.budget(for: constrained.merged(network: .unsatisfied))
+        XCTAssertEqual(offline.maxConnectionAttempts, 0)
+        XCTAssertEqual(offline.maxReaddsPerPump, 0)
+    }
+
+    func testWP09TypedStorageFaultsCarryVolumeAndRoundTrip() throws {
+        let recordID = TorrentRecordID(rawValue: UUID())
+        let fault = EngineFault.volumeUnavailable(
+            recordID: recordID,
+            volumeIdentifier: "disk-1"
+        )
+        XCTAssertEqual(fault.code, .volumeUnavailable)
+        XCTAssertEqual(fault.affectedRecord, recordID)
+        XCTAssertEqual(fault.affectedVolume, "disk-1")
+        let decoded = try JSONDecoder().decode(EngineFault.self, from: JSONEncoder().encode(fault))
+        XCTAssertEqual(decoded, fault)
+        XCTAssertEqual(EngineFault.storageFailure(details: "No space left on device").code, .insufficientSpace)
+        XCTAssertEqual(EngineFault.storageFailure(details: "permission denied").code, .permissionDenied)
+    }
+
+    func testWP09IdempotencyTrackerEvictsOldestEntry() async {
+        let tracker = IdempotencyTracker(maxEntries: 2)
+        let firstRequest = RequestID()
+        let secondRequest = RequestID()
+        let thirdRequest = RequestID()
+        await tracker.remember(commandName: "pause", requestID: firstRequest, idempotencyKey: nil, outcome: .success(.ack))
+        await tracker.remember(commandName: "pause", requestID: secondRequest, idempotencyKey: nil, outcome: .success(.ack))
+        await tracker.remember(commandName: "pause", requestID: thirdRequest, idempotencyKey: nil, outcome: .success(.ack))
+        let count = await tracker.count
+        let firstReplay = await tracker.replay(commandName: "pause", requestID: firstRequest, idempotencyKey: nil)
+        let thirdReplay = await tracker.replay(commandName: "pause", requestID: thirdRequest, idempotencyKey: nil)
+        XCTAssertEqual(count, 2)
+        XCTAssertNil(firstReplay)
+        XCTAssertNotNil(thirdReplay)
     }
 
     // MARK: - TestProfile

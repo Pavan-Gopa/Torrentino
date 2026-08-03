@@ -50,6 +50,11 @@ public enum EngineErrorCode: String, Codable, Sendable, Equatable, CaseIterable 
     case operationCancelled
     case storeError
     case internalError
+    case resourceConstrained
+    case systemSleeping
+    case crashLoopSafeMode
+    case resourceLimitExceeded
+    case engineUnresponsive
 }
 
 /// How bad a fault is; drives UI presentation priority.
@@ -66,6 +71,9 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
     public let code: EngineErrorCode
     public let severity: FaultSeverity
     public let affectedRecord: TorrentRecordID?
+    /// Stable volume identity when a storage fault is localized to a volume.
+    /// The path itself is never put on the wire.
+    public let affectedVolume: String?
     /// String Catalog key (e.g. "fault.record_not_found"). Never the raw error text.
     public let localizationKey: String
     /// Safe user-facing recovery actions (not raw instructions from C++).
@@ -77,6 +85,7 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         code: EngineErrorCode,
         severity: FaultSeverity,
         affectedRecord: TorrentRecordID? = nil,
+        affectedVolume: String? = nil,
         localizationKey: String? = nil,
         recoveryActions: [String] = [],
         redactedContext: String? = nil
@@ -84,6 +93,7 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         self.code = code
         self.severity = severity
         self.affectedRecord = affectedRecord
+        self.affectedVolume = affectedVolume
         self.localizationKey = localizationKey ?? "fault.\(code.rawValue)"
         self.recoveryActions = recoveryActions
         self.redactedContext = redactedContext
@@ -91,6 +101,40 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
 
     public var errorDescription: String? {
         localizationKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case severity
+        case affectedRecord
+        case affectedVolume
+        case localizationKey
+        case recoveryActions
+        case redactedContext
+    }
+
+    /// `affectedVolume` was added after the first v1 payloads. Decode it
+    /// optionally so a reconnect can still understand an older fault.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.code = try container.decode(EngineErrorCode.self, forKey: .code)
+        self.severity = try container.decode(FaultSeverity.self, forKey: .severity)
+        self.affectedRecord = try container.decodeIfPresent(TorrentRecordID.self, forKey: .affectedRecord)
+        self.affectedVolume = try container.decodeIfPresent(String.self, forKey: .affectedVolume)
+        self.localizationKey = try container.decode(String.self, forKey: .localizationKey)
+        self.recoveryActions = try container.decode([String].self, forKey: .recoveryActions)
+        self.redactedContext = try container.decodeIfPresent(String.self, forKey: .redactedContext)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(code, forKey: .code)
+        try container.encode(severity, forKey: .severity)
+        try container.encodeIfPresent(affectedRecord, forKey: .affectedRecord)
+        try container.encodeIfPresent(affectedVolume, forKey: .affectedVolume)
+        try container.encode(localizationKey, forKey: .localizationKey)
+        try container.encode(recoveryActions, forKey: .recoveryActions)
+        try container.encodeIfPresent(redactedContext, forKey: .redactedContext)
     }
 
     // MARK: - Factories (stable constructors for the common contract faults)
@@ -219,6 +263,120 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             severity: .warning,
             recoveryActions: ["retry_op"],
             redactedContext: details
+        )
+    }
+
+    public static func permissionDenied(
+        recordID: TorrentRecordID? = nil,
+        volumeIdentifier: String? = nil,
+        details: String? = nil
+    ) -> EngineFault {
+        EngineFault(
+            code: .permissionDenied,
+            severity: .error,
+            affectedRecord: recordID,
+            affectedVolume: volumeIdentifier,
+            recoveryActions: ["check_permissions", "choose_storage"],
+            redactedContext: details ?? "storage_permissions"
+        )
+    }
+
+    public static func insufficientSpace(
+        recordID: TorrentRecordID? = nil,
+        volumeIdentifier: String? = nil,
+        availableBytes: Int64? = nil
+    ) -> EngineFault {
+        EngineFault(
+            code: .insufficientSpace,
+            severity: .error,
+            affectedRecord: recordID,
+            affectedVolume: volumeIdentifier,
+            recoveryActions: ["free_disk_space", "choose_storage"],
+            redactedContext: availableBytes.map { "availableBytes=\($0)" } ?? "disk_full"
+        )
+    }
+
+    public static func volumeUnavailable(
+        recordID: TorrentRecordID? = nil,
+        volumeIdentifier: String? = nil,
+        details: String? = nil
+    ) -> EngineFault {
+        EngineFault(
+            code: .volumeUnavailable,
+            severity: .warning,
+            affectedRecord: recordID,
+            affectedVolume: volumeIdentifier,
+            recoveryActions: ["attach_volume", "choose_storage"],
+            redactedContext: details ?? "volume_unavailable"
+        )
+    }
+
+    public static func resourceConstrained(details: String) -> EngineFault {
+        EngineFault(
+            code: .resourceConstrained,
+            severity: .warning,
+            recoveryActions: ["wait_for_resources"],
+            redactedContext: details
+        )
+    }
+
+    public static func systemSleeping() -> EngineFault {
+        EngineFault(
+            code: .systemSleeping,
+            severity: .info,
+            recoveryActions: ["wait_for_wake"],
+            redactedContext: "system_sleep"
+        )
+    }
+
+    public static func crashLoopSafeMode() -> EngineFault {
+        EngineFault(
+            code: .crashLoopSafeMode,
+            severity: .error,
+            recoveryActions: ["review_diagnostics", "restart_engine_safely"],
+            redactedContext: "safe_recovery_after_repeated_start_failures"
+        )
+    }
+
+    public static func resourceLimitExceeded(resource: String, limit: Int) -> EngineFault {
+        EngineFault(
+            code: .resourceLimitExceeded,
+            severity: .warning,
+            recoveryActions: ["wait_for_resources"],
+            redactedContext: "resource=\(resource) limit=\(limit)"
+        )
+    }
+
+    public static func engineUnresponsive(details: String) -> EngineFault {
+        EngineFault(
+            code: .engineUnresponsive,
+            severity: .error,
+            recoveryActions: ["export_diagnostics", "restart_engine_safely"],
+            redactedContext: details
+        )
+    }
+
+    /// Maps storage text from a lower layer to a stable, non-sensitive fault.
+    /// Raw bridge/SQLite text stays in logs and is never returned to the UI.
+    public static func storageFailure(
+        details: String,
+        recordID: TorrentRecordID? = nil,
+        volumeIdentifier: String? = nil
+    ) -> EngineFault {
+        let text = details.lowercased()
+        if text.contains("no space") || text.contains("disk full") || text.contains("enospc") {
+            return .insufficientSpace(recordID: recordID, volumeIdentifier: volumeIdentifier)
+        }
+        if text.contains("permission") || text.contains("access denied") || text.contains("read-only") || text.contains("eacces") {
+            return .permissionDenied(recordID: recordID, volumeIdentifier: volumeIdentifier)
+        }
+        return EngineFault(
+            code: .storeError,
+            severity: .error,
+            affectedRecord: recordID,
+            affectedVolume: volumeIdentifier,
+            recoveryActions: ["retry_op", "export_diagnostics"],
+            redactedContext: "storage_failure"
         )
     }
 

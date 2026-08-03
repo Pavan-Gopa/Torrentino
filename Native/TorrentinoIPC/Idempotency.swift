@@ -26,9 +26,13 @@ public actor IdempotencyTracker {
     }
 
     private var entries: [String: Entry]
+    private let maxEntries: Int
+    private var insertionOrder: [String]
 
-    public init() {
+    public init(maxEntries: Int = 1024) {
         self.entries = [:]
+        self.maxEntries = max(1, maxEntries)
+        self.insertionOrder = []
     }
 
     /// Deterministic dedup key. Same command + same requestID + same
@@ -43,8 +47,16 @@ public actor IdempotencyTracker {
 
     /// Stores the outcome of a mutating command.
     public func remember(commandName: String, requestID: RequestID, idempotencyKey: IdempotencyKey?, outcome: EngineCommandResult) {
-        entries[Self.canonicalKey(commandName: commandName, requestID: requestID, idempotencyKey: idempotencyKey)] =
-            Entry(commandName: commandName, requestID: requestID, outcome: outcome, recordedAt: Date())
+        let key = Self.canonicalKey(commandName: commandName, requestID: requestID, idempotencyKey: idempotencyKey)
+        entries[key] = Entry(commandName: commandName, requestID: requestID, outcome: outcome, recordedAt: Date())
+        if let index = insertionOrder.firstIndex(of: key) {
+            insertionOrder.remove(at: index)
+        }
+        insertionOrder.append(key)
+        while entries.count > maxEntries, let oldest = insertionOrder.first {
+            insertionOrder.removeFirst()
+            entries.removeValue(forKey: oldest)
+        }
     }
 
     /// Returns the previously stored outcome for an identical replay, nil when
@@ -55,7 +67,9 @@ public actor IdempotencyTracker {
 
     /// Removes an entry (e.g. after a bounded retention window).
     public func forget(commandName: String, requestID: RequestID, idempotencyKey: IdempotencyKey?) {
-        entries.removeValue(forKey: Self.canonicalKey(commandName: commandName, requestID: requestID, idempotencyKey: idempotencyKey))
+        let key = Self.canonicalKey(commandName: commandName, requestID: requestID, idempotencyKey: idempotencyKey)
+        entries.removeValue(forKey: key)
+        insertionOrder.removeAll { $0 == key }
     }
 
     public var count: Int { entries.count }

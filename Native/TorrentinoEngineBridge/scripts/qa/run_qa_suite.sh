@@ -2,7 +2,7 @@
 #
 # Torrentino — QA suite runner (Test Engineer).
 #
-# Role:     runs EVERY test_wp01_*.sh … test_wp08_*.sh script (monotonic
+# Role:     runs EVERY test_wp01_*.sh … test_wp09_*.sh script (monotonic
 #           regression) and reports a per-script pass/fail table. Exit 0 only
 #           if all scripts pass.
 #
@@ -24,6 +24,7 @@ while IFS= read -r s; do scripts+=("${s}"); done < <(
 		find "${QA_DIR}" -maxdepth 1 -name 'test_wp06_*.sh'
 		find "${QA_DIR}" -maxdepth 1 -name 'test_wp07_*.sh'
 		find "${QA_DIR}" -maxdepth 1 -name 'test_wp08_*.sh'
+		find "${QA_DIR}" -maxdepth 1 -name 'test_wp09_*.sh'
 	} | sort
 )
 [[ ${#scripts[@]} -gt 0 ]] || { echo "no test_wp0{1,2,3,4,5,6,7,8}_*.sh scripts found" >&2; exit 2; }
@@ -62,7 +63,7 @@ echo
 
 pass_n=$(printf '%s\n' "${results[@]}" | grep -c '^PASS' || true)
 fail_n=$(printf '%s\n' "${results[@]}" | grep -c '^FAIL' || true)
-wp01_n=0; wp02_n=0; wp03_n=0; wp04_n=0; wp05_n=0; wp06_n=0; wp07_n=0; wp08_n=0
+wp01_n=0; wp02_n=0; wp03_n=0; wp04_n=0; wp05_n=0; wp06_n=0; wp07_n=0; wp08_n=0; wp09_n=0
 for n in "${names[@]}"; do
 	case "${n}" in
 		test_wp01_*) wp01_n=$((wp01_n+1)) ;;
@@ -73,9 +74,10 @@ for n in "${names[@]}"; do
 		test_wp06_*) wp06_n=$((wp06_n+1)) ;;
 		test_wp07_*) wp07_n=$((wp07_n+1)) ;;
 		test_wp08_*) wp08_n=$((wp08_n+1)) ;;
+		test_wp09_*) wp09_n=$((wp09_n+1)) ;;
 	esac
 done
-echo "total: ${#names[@]}  pass: ${pass_n}  fail: ${fail_n}  (wp01: ${wp01_n}  wp02: ${wp02_n}  wp03: ${wp03_n}  wp04: ${wp04_n}  wp05: ${wp05_n}  wp06: ${wp06_n}  wp07: ${wp07_n}  wp08: ${wp08_n})"
+echo "total: ${#names[@]}  pass: ${pass_n}  fail: ${fail_n}  (wp01: ${wp01_n}  wp02: ${wp02_n}  wp03: ${wp03_n}  wp04: ${wp04_n}  wp05: ${wp05_n}  wp06: ${wp06_n}  wp07: ${wp07_n}  wp08: ${wp08_n}  wp09: ${wp09_n})"
 if [[ ${overall} -eq 0 ]]; then
 	echo "SUITE RESULT: GREEN"
 else

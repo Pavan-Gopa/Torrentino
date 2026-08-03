@@ -17,6 +17,8 @@ public actor BridgeTransferEngine: TransferEngine {
     private let coordinator: EngineCoordinator
     private var started = false
     private var latestPerTorrent: [String: (fraction: Double, state: Int, error: String?)] = [:]
+    private var latestOrder: [String] = []
+    private let maxCachedTorrents = 1024
 
     public init(coordinator: EngineCoordinator) {
         self.coordinator = coordinator
@@ -41,6 +43,7 @@ public actor BridgeTransferEngine: TransferEngine {
         do {
             try await coordinator.apply(settings: settings)
             latestPerTorrent.removeAll(keepingCapacity: true)
+            latestOrder.removeAll(keepingCapacity: true)
             started = true
         } catch {
             started = false
@@ -96,10 +99,20 @@ public actor BridgeTransferEngine: TransferEngine {
     /// Drains the alert queue, folds the latest per-torrent progress/state
     /// into the cache, and reports one status per known torrent.
     public func statusUpdate() async throws -> [TransferTorrentStatus] {
-        let alerts = try await coordinator.drainAlerts(maxCount: 200)
+        try await statusUpdate(maxAlerts: 200)
+    }
+
+    public func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
+        let alerts = try await coordinator.drainAlerts(maxCount: max(1, min(maxAlerts, 200)))
         for alert in alerts {
             guard let torrentID = alert.torrentID else { continue }
             latestPerTorrent[torrentID] = (alert.progress, alert.state, alert.error)
+            latestOrder.removeAll { $0 == torrentID }
+            latestOrder.append(torrentID)
+            while latestOrder.count > maxCachedTorrents, let oldest = latestOrder.first {
+                latestOrder.removeFirst()
+                latestPerTorrent.removeValue(forKey: oldest)
+            }
         }
         return latestPerTorrent.map { torrentID, snapshot in
             TransferTorrentStatus(
@@ -112,7 +125,7 @@ public actor BridgeTransferEngine: TransferEngine {
                 peersConnected: 0,
                 seedsTotal: 0,
                 activity: Self.activity(from: snapshot.state),
-                health: snapshot.error != nil ? .recoverableError(.internalError) : .healthy,
+                health: Self.health(from: snapshot.error),
                 etaSeconds: nil
             )
         }
@@ -138,6 +151,24 @@ public actor BridgeTransferEngine: TransferEngine {
         case 1, 2, 7, 8: return .checking // queued_for_checking, checking_files, allocating, checking_resume_data
         default: return .idle
         }
+    }
+
+    private static func health(from error: String?) -> TorrentHealth {
+        guard let error else { return .healthy }
+        let text = error.lowercased()
+        if text.contains("no space") || text.contains("disk full") || text.contains("enospc") {
+            return .waitingForSpace
+        }
+        if text.contains("permission") || text.contains("access denied") || text.contains("read-only") || text.contains("eacces") {
+            return .permissionDenied
+        }
+        if text.contains("network") || text.contains("connection") || text.contains("unreachable") {
+            return .waitingForNetwork
+        }
+        if text.contains("volume") || text.contains("not found") {
+            return .waitingForVolume
+        }
+        return .recoverableError(.internalError)
     }
 
     private static func mappedBridgeError(_ error: Error, operation: String) -> Error {

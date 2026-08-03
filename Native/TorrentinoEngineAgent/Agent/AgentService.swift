@@ -21,6 +21,7 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     private static let ipcSchemaVersion = IPCVersion.current
     private let store: CounterStore
     private let persistence: PersistenceStore
+    let healthLane: AgentHealthLane
     /// Wired by AgentRuntime immediately after construction and never replaced
     /// (set-once). Kept settable so the runtime can inject a [weak self] hook
     /// AFTER its own stored properties are fully initialized (Swift phase-1
@@ -31,16 +32,16 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     /// with a typed engineNotReady fault envelope.
     var coordinator: TransferCoordinator?
     var eventBus: TransferEventBus?
-    private let startDate = Date()
     private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
     /// Single active event sink (the UI process). Guarded by sinkLock.
     private let sinkLock = NSLock()
     private var eventSink: TorrentinoEventSink?
     private var busSinkID: UUID?
 
-    init(store: CounterStore, persistence: PersistenceStore) {
+    init(store: CounterStore, persistence: PersistenceStore, healthLane: AgentHealthLane = AgentHealthLane()) {
         self.store = store
         self.persistence = persistence
+        self.healthLane = healthLane
     }
 
     func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
@@ -55,33 +56,23 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
 
     func health(reply: @escaping @Sendable ([String: Any]) -> Void) {
         let store = store
-        let persistence = persistence
-        let started = startDate
+        let lane = healthLane
         let format = store.formatName
         let serverRange = Handshake.serverSupportedRange
         Task {
             let counter = await store.current()
-            let uptime = Date().timeIntervalSince(started)
-            let health = await persistence.healthSnapshot()
             // Extra keys (e.g. protocolRange) are ignored by AgentHealth; keep
             // required keys stable. protocolRange advertises the agent's
             // supported protocol for the WP-05 handshake negotiation.
-            reply([
+            var payload = lane.snapshot(counter: counter, counterFormat: format)
+            payload.merge([
                 "agentVersion": AgentRuntime.agentVersion,
                 "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier),
-                "uptimeSeconds": NSNumber(value: uptime),
-                "counter": NSNumber(value: counter),
-                "counterFormat": format,
                 "machService": TorrentinoXPCSecurity.machServiceName,
                 "ipcVersion": Self.ipcSchemaVersion.description,
                 "protocolRange": "\(serverRange.lowerBound)...\(serverRange.upperBound)",
-                // WP-06 persistence health (plist types only).
-                "persistenceState": health.state,
-                "cleanShutdown": NSNumber(value: health.cleanShutdown),
-                "degraded": NSNumber(value: health.degraded),
-                "quarantined": NSNumber(value: health.quarantinedCount),
-                "reconciliation": health.reconciliation,
-            ])
+            ]) { _, new in new }
+            reply(payload)
         }
     }
 
@@ -123,7 +114,12 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
             reply(Self.faultEnvelope(EngineFault.engineNotReady(details: "agent booting")))
             return
         }
+        guard healthLane.tryBeginCommand() else {
+            reply(Self.faultEnvelope(.resourceLimitExceeded(resource: "command_lane", limit: AgentHealthLane.commandLimit)))
+            return
+        }
         Task {
+            defer { healthLane.endCommand() }
             reply(await coordinator.processCommand(commandData))
         }
     }
@@ -187,5 +183,128 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     private static func faultEnvelope(_ fault: EngineFault) -> Data {
         let envelope = IPCEnvelope.result(requestID: RequestID(), result: .failure(fault))
         return (try? JSONEncoder().encode(envelope)) ?? Data()
+    }
+}
+
+/// Small lock-backed health state shared by the XPC health lane and the agent
+/// workers. It deliberately has no file/network/engine calls, so health stays
+/// responsive while the heavy command lane is blocked or faulting.
+final class AgentHealthLane: @unchecked Sendable, EngineHealthReporter {
+    static let commandLimit = 64
+
+    private let lock = NSLock()
+    private let startedAt = Date()
+    private var conditions = SystemConditions.normal
+    private var commandInFlight = 0
+    private var eventQueueDepth = 0
+    private var engineTicks: UInt64 = 0
+    private var engineFailures: UInt64 = 0
+    private var lastEngineTick: Date?
+    private var lastCheckpoint: Date?
+    private var persistenceState = "unopened"
+    private var persistenceDegraded = false
+    private var cleanShutdown = false
+    private var quarantined = 0
+    private var reconciliation = "none"
+    private var safeRecovery = false
+
+    func tryBeginCommand() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard commandInFlight < Self.commandLimit else { return false }
+        commandInFlight += 1
+        return true
+    }
+
+    func endCommand() {
+        lock.lock()
+        commandInFlight = max(0, commandInFlight - 1)
+        lock.unlock()
+    }
+
+    func noteEngineTick() {
+        lock.lock()
+        engineTicks += 1
+        lastEngineTick = Date()
+        lock.unlock()
+    }
+
+    func noteEngineFailure() {
+        lock.lock()
+        engineFailures += 1
+        lock.unlock()
+    }
+
+    func updateSystemConditions(_ conditions: SystemConditions) {
+        lock.lock()
+        self.conditions = conditions
+        lock.unlock()
+    }
+
+    func updateEventQueueDepth(_ depth: Int) {
+        lock.lock()
+        eventQueueDepth = max(0, depth)
+        lock.unlock()
+    }
+
+    func updatePersistence(_ health: PersistenceHealthSnapshot) {
+        lock.lock()
+        persistenceState = health.state
+        persistenceDegraded = health.degraded
+        cleanShutdown = health.cleanShutdown
+        quarantined = health.quarantinedCount
+        reconciliation = health.reconciliation
+        lock.unlock()
+    }
+
+    func updatePersistenceFailure() {
+        lock.lock()
+        persistenceState = "degraded"
+        persistenceDegraded = true
+        lock.unlock()
+    }
+
+    func markCheckpoint() {
+        lock.lock()
+        lastCheckpoint = Date()
+        lock.unlock()
+    }
+
+    func markSafeRecovery(_ enabled: Bool) {
+        lock.lock()
+        safeRecovery = enabled
+        lock.unlock()
+    }
+
+    func snapshot(counter: Int64, counterFormat: String) -> [String: Any] {
+        lock.lock()
+        let conditions = self.conditions
+        let payload: [String: Any] = [
+            "uptimeSeconds": NSNumber(value: Date().timeIntervalSince(startedAt)),
+            "counter": NSNumber(value: counter),
+            "counterFormat": counterFormat,
+            "persistenceState": persistenceState,
+            "cleanShutdown": NSNumber(value: cleanShutdown),
+            "degraded": NSNumber(value: persistenceDegraded),
+            "quarantined": NSNumber(value: quarantined),
+            "reconciliation": reconciliation,
+            "healthLane": "liveness",
+            "commandInFlight": NSNumber(value: commandInFlight),
+            "commandLimit": NSNumber(value: Self.commandLimit),
+            "eventQueueDepth": NSNumber(value: eventQueueDepth),
+            "engineTicks": NSNumber(value: engineTicks),
+            "engineFailures": NSNumber(value: engineFailures),
+            "lastEngineTick": NSNumber(value: lastEngineTick?.timeIntervalSince1970 ?? 0),
+            "lastCheckpoint": NSNumber(value: lastCheckpoint?.timeIntervalSince1970 ?? 0),
+            "watchdog": "disabled",
+            "safeRecovery": NSNumber(value: safeRecovery),
+            "network": conditions.network.rawValue,
+            "networkGeneration": NSNumber(value: conditions.networkGeneration),
+            "thermal": conditions.thermal.rawValue,
+            "memoryPressure": conditions.memoryPressure.rawValue,
+            "lowPower": NSNumber(value: conditions.lowPower),
+            "sleeping": NSNumber(value: conditions.sleeping),
+        ]
+        lock.unlock()
+        return payload
     }
 }

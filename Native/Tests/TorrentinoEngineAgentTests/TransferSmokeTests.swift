@@ -1357,6 +1357,79 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(events.count, 3, "a burst must coalesce into a single delivery")
     }
 
+    // MARK: - WP-09 fault matrix
+
+    func testWP09StorageProbeNeverCreatesMissingVolumePath() throws {
+        let missing = profile.rootURL.appendingPathComponent("detached-volume/downloads")
+        let location = PersistedLocation(path: missing.path, volumeIdentifier: "disk-1")
+        let state = StorageLocationProbe.assess(location: location)
+        XCTAssertEqual(state, .volumeUnavailable(volumeIdentifier: "disk-1"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        XCTAssertEqual(
+            StorageLocationProbe.classify(
+                exists: true,
+                isDirectory: true,
+                writable: true,
+                availableBytes: 0,
+                requiredBytes: 0,
+                volumeIdentifier: "disk-1"
+            ),
+            .insufficientSpace(volumeIdentifier: "disk-1", availableBytes: 0)
+        )
+        XCTAssertEqual(
+            StorageLocationProbe.classify(
+                exists: true,
+                isDirectory: true,
+                writable: false,
+                availableBytes: 1_000,
+                volumeIdentifier: "disk-1"
+            ),
+            .permissionDenied(volumeIdentifier: "disk-1")
+        )
+    }
+
+    func testWP09EventBusOverflowRequestsSnapshotAndStaysBounded() async {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 5_000, maxPendingEvents: 8)
+        for revision in 0..<100 {
+            await bus.publish([.engineHealthChanged(EngineHealthChangedEvent(healthy: true, reason: nil, engineRevision: UInt64(revision)))])
+        }
+        let overflowed = await bus.overflowed()
+        let pending = await bus.pendingEventCount()
+        XCTAssertTrue(overflowed)
+        XCTAssertLessThanOrEqual(pending, 8)
+    }
+
+    func testWP09OfflinePreservesDesiredStateAndRecoversWithoutSpin() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .unsatisfied,
+            networkGeneration: 1,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: false,
+            sleeping: false
+        ))
+        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))")
+        let offline = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
+        XCTAssertEqual(offline.torrents.first?.id, recordID)
+        XCTAssertEqual(offline.torrents.first?.desiredState, .running)
+        XCTAssertEqual(offline.torrents.first?.health, .waitingForNetwork)
+
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .satisfied,
+            networkGeneration: 2,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: false,
+            sleeping: false
+        ))
+        let recovered = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
+        XCTAssertEqual(recovered.torrents.first?.desiredState, .running)
+        XCTAssertEqual(recovered.torrents.first?.health, .healthy)
+    }
+
     // MARK: - Concurrency stress (shared coordinator state)
 
     func testConcurrentMixedCommandsAllResolve() async throws {

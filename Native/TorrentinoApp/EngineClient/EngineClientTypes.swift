@@ -22,6 +22,19 @@ struct AgentHealth: Sendable, Equatable {
     let counterFormat: String
     let machService: String
     let ipcVersion: String
+    let healthLane: String
+    let commandInFlight: Int
+    let commandLimit: Int
+    let eventQueueDepth: Int
+    let engineFailures: UInt64
+    let watchdog: String
+    let safeRecovery: Bool
+    let network: NetworkReachability
+    let networkGeneration: UInt64
+    let thermal: ThermalCondition
+    let memoryPressure: MemoryPressureLevel
+    let lowPower: Bool
+    let sleeping: Bool
 
     /// Parses the plist dictionary returned by health(reply:). Nil on any
     /// missing/mistyped key => protocol mismatch, surfaced as an error.
@@ -42,11 +55,25 @@ struct AgentHealth: Sendable, Equatable {
         self.counterFormat = counterFormat
         self.machService = machService
         self.ipcVersion = ipcVersion
+        self.healthLane = dictionary["healthLane"] as? String ?? "unknown"
+        self.commandInFlight = (dictionary["commandInFlight"] as? NSNumber)?.intValue ?? 0
+        self.commandLimit = (dictionary["commandLimit"] as? NSNumber)?.intValue ?? 0
+        self.eventQueueDepth = (dictionary["eventQueueDepth"] as? NSNumber)?.intValue ?? 0
+        self.engineFailures = (dictionary["engineFailures"] as? NSNumber)?.uint64Value ?? 0
+        self.watchdog = dictionary["watchdog"] as? String ?? "unknown"
+        self.safeRecovery = (dictionary["safeRecovery"] as? NSNumber)?.boolValue ?? false
+        self.network = NetworkReachability(rawValue: dictionary["network"] as? String ?? "") ?? .unknown
+        self.networkGeneration = (dictionary["networkGeneration"] as? NSNumber)?.uint64Value ?? 0
+        self.thermal = ThermalCondition(rawValue: dictionary["thermal"] as? String ?? "") ?? .nominal
+        self.memoryPressure = MemoryPressureLevel(rawValue: dictionary["memoryPressure"] as? String ?? "") ?? .normal
+        self.lowPower = (dictionary["lowPower"] as? NSNumber)?.boolValue ?? false
+        self.sleeping = (dictionary["sleeping"] as? NSNumber)?.boolValue ?? false
     }
 
     var summary: String {
-        String(format: "version=%@ pid=%d uptime=%.1fs counter=%d format=%@",
-               agentVersion, pid, uptimeSeconds, counter, counterFormat)
+        String(format: "version=%@ pid=%d uptime=%.1fs counter=%d format=%@ lane=%@ queue=%d/%d network=%@",
+               agentVersion, pid, uptimeSeconds, counter, counterFormat, healthLane,
+               commandInFlight, commandLimit, network.rawValue)
     }
 }
 

@@ -8,6 +8,7 @@
 // advisory only (add still proceeds).
 
 import Foundation
+import TorrentinoIPC
 
 public enum PreflightError: Error, Sendable, Equatable, CustomStringConvertible {
     case torrentFileTooLarge(Int)
@@ -60,5 +61,78 @@ public enum Preflight {
             warnings.append("long_name")
         }
         return warnings
+    }
+}
+
+/// Result of checking the destination before handing it to libtorrent. The
+/// probe never creates a directory: a missing external mount must remain an
+/// honest unavailable state rather than turning `/Volumes/OldName` into an
+/// ordinary folder.
+public enum StorageAvailabilityState: Sendable, Equatable {
+    case available(volumeIdentifier: String?, availableBytes: Int64?)
+    case volumeUnavailable(volumeIdentifier: String?)
+    case permissionDenied(volumeIdentifier: String?)
+    case insufficientSpace(volumeIdentifier: String?, availableBytes: Int64)
+}
+
+public enum StorageLocationProbe {
+    /// A one-byte reserve catches a genuinely full filesystem while allowing
+    /// tiny test fixtures and normal users to use their available space. A
+    /// product-level reserve can be added to settings without changing the
+    /// fault classification contract.
+    public static let minimumFreeSpaceReserveBytes: Int64 = 1
+
+    public static func assess(
+        location: PersistedLocation,
+        requiredBytes: Int64 = 0,
+        minimumFreeSpaceReserveBytes: Int64 = Self.minimumFreeSpaceReserveBytes,
+        fileManager: FileManager = .default
+    ) -> StorageAvailabilityState {
+        let expanded = (location.path as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else {
+            return .volumeUnavailable(volumeIdentifier: location.volumeIdentifier)
+        }
+
+        let url = URL(fileURLWithPath: expanded).standardizedFileURL
+        guard fileManager.fileExists(atPath: url.path) else {
+            // Do not call createDirectory here. In particular, a detached
+            // `/Volumes/<name>` path must not be recreated as a local folder.
+            return .volumeUnavailable(volumeIdentifier: location.volumeIdentifier)
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return .permissionDenied(volumeIdentifier: location.volumeIdentifier)
+        }
+        guard fileManager.isWritableFile(atPath: url.path) else {
+            return .permissionDenied(volumeIdentifier: location.volumeIdentifier)
+        }
+
+        let available = (try? fileManager.attributesOfFileSystem(forPath: url.path)[.systemFreeSize] as? NSNumber)?.int64Value
+        if let available, available < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
+            return .insufficientSpace(
+                volumeIdentifier: location.volumeIdentifier,
+                availableBytes: available
+            )
+        }
+        return .available(volumeIdentifier: location.volumeIdentifier, availableBytes: available)
+    }
+
+    /// Pure classification entry point used by the fault matrix tests.
+    public static func classify(
+        exists: Bool,
+        isDirectory: Bool,
+        writable: Bool,
+        availableBytes: Int64?,
+        requiredBytes: Int64 = 0,
+        minimumFreeSpaceReserveBytes: Int64 = Self.minimumFreeSpaceReserveBytes,
+        volumeIdentifier: String? = nil
+    ) -> StorageAvailabilityState {
+        guard exists, isDirectory else { return .volumeUnavailable(volumeIdentifier: volumeIdentifier) }
+        guard writable else { return .permissionDenied(volumeIdentifier: volumeIdentifier) }
+        if let availableBytes,
+           availableBytes < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
+            return .insufficientSpace(volumeIdentifier: volumeIdentifier, availableBytes: availableBytes)
+        }
+        return .available(volumeIdentifier: volumeIdentifier, availableBytes: availableBytes)
     }
 }

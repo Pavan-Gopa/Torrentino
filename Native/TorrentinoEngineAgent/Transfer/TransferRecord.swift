@@ -203,7 +203,25 @@ public protocol TransferEngine: Sendable {
     func reannounce(torrentID: String) async throws
     /// Live per-torrent status (progress/rates/peers). Called by the pump.
     func statusUpdate() async throws -> [TransferTorrentStatus]
+    /// Bounded alert drain variant. The default keeps test engines and older
+    /// adapters source-compatible while production bridges honor the budget.
+    func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus]
     /// Engine-wide aggregate health (used when per-torrent rates are
     /// unavailable from the underlying engine).
     func aggregateHealth() async throws -> TransferAggregateStats
+}
+
+public extension TransferEngine {
+    func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
+        try await statusUpdate()
+    }
+}
+
+/// Optional, synchronous liveness sink used by the agent's light health lane.
+/// It carries counters only; it never owns engine or persistence state.
+public protocol EngineHealthReporter: Sendable {
+    func noteEngineTick()
+    func noteEngineFailure()
+    func updateSystemConditions(_ conditions: SystemConditions)
+    func updateEventQueueDepth(_ depth: Int)
 }
