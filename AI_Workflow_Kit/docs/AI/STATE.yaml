@@ -1,9 +1,8 @@
 current_step: WP-10
 step_description: >-
-  Safe file operations fix round after CHANGES_REQUESTED. Manifest-scoped trash
-  only (no recursive dir trash of unlisted files), TOCTOU on mutation path,
-  move recovery via fileListJSON evidence, no delete_files API, durable journal
-  errors, pending removal recovery + UI batch results, adversarial tests.
+  Safe file operations fix under review. Manifest-scoped trash, TOCTOU on
+  mutation path, fileListJSON move evidence, no delete_files, fail-closed
+  journals, pending removal UI, adversarial tests.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -26,23 +25,21 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: in_progress
+  status: waiting_review
   attempts: 2
-  note: >-
-    Review CHANGES_REQUESTED on 0725b57. Multiple gate FAILs: dir trash scope,
-    TOCTOU unused, move recovery shallow, delete_files still exposed.
+  note: Fix 7758e4b after fac8ac5 CHANGES_REQUESTED. Coder claims all gates PASS.
 review:
-  status: changes_requested
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
-  note: See FEEDBACK §2–§5. Keep-data and Swift6 PASS only.
+  verdict: null
+  note: Independent re-review of prior FAIL gates only; do not trust self-PASS table.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-10
   bugs_open: open
-  note: Tester after APPROVED.
-next_actor: coder
+  note: Tester after APPROVED. Legacy env waived.
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -53,9 +50,9 @@ security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-10
   last_post_tag: torrentino/WP-09-done
-  last_commit: 0725b57
+  last_commit: 7758e4b
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Fix FEEDBACK.md WP-10 gates FAIL/PARTIAL. Adversarial tests required. No WP-11+.
+  Fix round awaiting independent review.
