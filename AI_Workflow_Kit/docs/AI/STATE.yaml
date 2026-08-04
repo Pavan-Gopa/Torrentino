@@ -1,13 +1,20 @@
-current_step: WP-09
+current_step: WP-10
 step_description: >-
-  Fault recovery — Review APPROVED. Tester full suite + WP-09 fault matrix
-  coverage.
+  Safe file operations. prepareRemoval/commitRemoval, exact manifest/token,
+  Trash only, shared-path detection, symlink/hardlink/TOCTOU protection,
+  durable per-item Trash journal + partial rollback/guided recovery,
+  per-record batch result, same/cross-volume move journal, force recheck.
+  No permanent delete API.
 target_files:
+- Native/TorrentinoApp/
+- Native/TorrentinoEngineAgent/
+- Native/TorrentinoIPC/
+- Native/TorrentinoDomain/
 - Native/Tests/
+- Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
-- AI_Workflow_Kit/docs/AI/COVERAGE.md
-- Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-- Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
+- Native/TorrentinoEngineBridge/bridge/
+- Native/TorrentinoEngineBridge/adapter/
 completed_steps:
 - WP-00
 - WP-01
@@ -18,38 +25,39 @@ completed_steps:
 - WP-06
 - WP-07
 - WP-08
+- WP-09
 implementation:
-  status: done
-  attempts: 2
-  note: Review APPROVED on 3383abb fix round.
-review:
-  status: approved
-  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: APPROVED
-  note: All prior §5 items PASS. Legacy env fail waived.
-qa:
   status: pending
+  attempts: 0
+  note: PRE torrentino/pre-WP-10. WP-09 PRODUCT GREEN closed.
+review:
+  status: pending
+  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
+  verdict: null
+  note: ''
+qa:
+  status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-09
   bugs_open: 0
   note: >-
-    Tester run FUNCTIONAL only (ADR-015). Security Engineer is separate/on-demand.
-    ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL from Human Legacy dirt
-    — do not fix Legacy. Product GREEN if product scripts + xcodebuild test pass.
-
-next_actor: tester
+    WP-09 PRODUCT GREEN / ENVIRONMENTAL Legacy waived. 227 XCTest, fault matrix
+    green. Security Engineer not invoked (ADR-015 on-demand).
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
 - .
 legacy_hard_ban: >-
   Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
+security_engineer: on_demand_only
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-09
-  last_post_tag: torrentino/WP-08-done
-  last_commit: 3383abb
+  last_pre_tag: torrentino/pre-WP-10
+  last_post_tag: torrentino/WP-09-done
+  last_commit: 8de5143
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  N/A — Tester phase. On PRODUCT GREEN → Orchestrator POST WP-09 + PRE WP-10.
+  WP-10 safe file ops. Trash-only removal, journals, TOCTOU, no permanent delete.
+  No WP-11 creator / WP-12 Metal. No Legacy.
