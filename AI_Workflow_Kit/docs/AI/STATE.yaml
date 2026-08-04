@@ -25,19 +25,18 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: pending
+  status: waiting_review
   attempts: 1
   note: >-
-    Attempts reset per case C after QA FAIL on attempt 2 (7758e4b: review
-    APPROVED but QA red). Scope narrowed to WP10-BUG-001 only: 7 ignored
-    throwing failures on mutation/recovery paths in TransferCoordinator.swift
-    (see BUG_REPORT.md). History: att1 0725b57 review CHANGES_REQUESTED;
-    att2 7758e4b review APPROVED / QA FAIL.
+    WP10-BUG-001 fix committed 0ec428f (7 fail-closed spots in
+    TransferCoordinator.swift). Orchestrator spot-check:
+    test_wp10_fail_closed_contract.sh PASS. Process note: Coder did not fill
+    FEEDBACK.md handoff this round — Reviewer verifies independently as usual.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: null
-  note: Re-review after WP10-BUG-001 fix; verify fail-closed contract independently.
+  note: Re-review of 0ec428f after WP10-BUG-001 fix; verify fail-closed contract + full regression independently.
 qa:
   status: failed
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
@@ -47,7 +46,7 @@ qa:
     QA 2026-08-04 FAIL: test_wp10_fail_closed_contract.sh detects 7 ignored
     errors; all other gates PASS (252/252 XCTest, 110/112 QA, Legacy env
     waived ADR-013). Re-run after fix + review.
-next_actor: coder
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -58,7 +57,7 @@ security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-10
   last_post_tag: torrentino/WP-09-done
-  last_commit: 7758e4b
+  last_commit: 0ec428f
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
