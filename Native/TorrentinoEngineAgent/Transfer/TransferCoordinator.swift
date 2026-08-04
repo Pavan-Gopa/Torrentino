@@ -281,13 +281,25 @@ public actor TransferCoordinator {
                 }
                 record = record.with(saveLocation: destination)
                 records[TorrentRecordID(rawValue: uuid)] = record
-                try? await persistence.deleteMoveJournal(recordID: recordID)
-                log.info("move recovery: resumed interrupted move for \(recordID)")
+                // The journal row is dropped only once the resume is durably
+                // confirmed; a failed drop keeps the row for the next recovery
+                // pass (convergent — the resume is idempotent).
+                do {
+                    try await persistence.deleteMoveJournal(recordID: recordID)
+                    log.info("move recovery: resumed interrupted move for \(recordID)")
+                } catch {
+                    log.error("move recovery: journal drop failed for \(recordID), retrying next pass: \(String(describing: error))")
+                }
             case .rollbackNoop(let recordID, _):
                 // Crash before the engine move was issued and the payload is
                 // still at the origin: nothing to fix, drop the journal row.
-                try? await persistence.deleteMoveJournal(recordID: recordID)
-                log.info("move recovery: rolled back never-started move for \(recordID)")
+                // A failed drop keeps the row for the next recovery pass.
+                do {
+                    try await persistence.deleteMoveJournal(recordID: recordID)
+                    log.info("move recovery: rolled back never-started move for \(recordID)")
+                } catch {
+                    log.error("move recovery: journal drop failed for \(recordID), retrying next pass: \(String(describing: error))")
+                }
             case .guided(let recordID, let fromPath, let toPath, let reason):
                 // Ambiguous evidence: keep the journal row; the next explicit
                 // move attempt reports the situation to the user.
@@ -1773,7 +1785,18 @@ extension TransferCoordinator {
         guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
-        let pendingCount = (try? await persistence.removalTokenCount()) ?? 0
+        // Fail-closed admission: an unreadable token count must not be read as
+        // zero, or the pending-token capacity check would fail open.
+        let pendingCount: Int
+        do {
+            pendingCount = try await persistence.removalTokenCount()
+        } catch {
+            return .failure(Self.persistenceFault(
+                error,
+                recordID: request.recordID,
+                volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
         guard pendingCount < Self.pendingRemovalTokenLimit else {
             return .failure(.resourceLimitExceeded(resource: "pending_removal_tokens", limit: Self.pendingRemovalTokenLimit))
         }
@@ -1885,7 +1908,14 @@ extension TransferCoordinator {
             guard let recordID = UUID(uuidString: token.recordID).map({ TorrentRecordID(rawValue: $0) }) else {
                 continue
             }
-            let journal = (try? await persistence.trashJournalEntries(token: token.token)) ?? []
+            // Fail-closed: a journal read error must not fabricate zero
+            // progress evidence for a pending batch — surface a typed fault.
+            let journal: [TrashJournalEntry]
+            do {
+                journal = try await persistence.trashJournalEntries(token: token.token)
+            } catch {
+                return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: nil))
+            }
             let trashed = journal.filter { $0.status == TrashJournalEntry.Status.trashed.rawValue }.count
             let failed = journal.filter { $0.status == TrashJournalEntry.Status.failed.rawValue }.count
             let total = (try? JSONDecoder().decode(RemovalManifest.self, from: Data(token.manifestJSON.utf8)))?.entries.count ?? 0
@@ -1936,6 +1966,16 @@ extension TransferCoordinator {
                let record = records[recordID],
                outcome.outcome == .completed {
                 await finishCommittedRemoval(record: record)
+            }
+            // Convergent cleanup retry: a crash (or a failed drop) left the
+            // settled evidence in place; every replay retries the cleanup
+            // until the drop is confirmed, without duplicating any mutation.
+            do {
+                try await settleRemovalEvidenceCleanup(token: request.token.rawValue)
+            } catch {
+                log.error("commitRemoval: settled evidence cleanup failed on replay: \(String(describing: error))")
+                let recordID = UUID(uuidString: tokenRecord.recordID).map({ TorrentRecordID(rawValue: $0) })
+                return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: nil))
             }
             return .success(.removalResult(outcome))
         }
@@ -2178,8 +2218,18 @@ extension TransferCoordinator {
         lastReannounceAt.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
 
-        try? await persistence.deleteTrashJournal(token: request.token.rawValue)
-        try? await persistence.pruneSettledRemovalTokens(keepNewest: 128)
+        // Fail-closed evidence cleanup: the settled token/journal rows are
+        // kept until the drop is confirmed; a failure surfaces as a fault and
+        // the next re-commit of this token replays the same outcome and
+        // retries the cleanup (convergent — no mutation is duplicated).
+        do {
+            try await settleRemovalEvidenceCleanup(token: request.token.rawValue)
+        } catch {
+            log.error("commitRemoval: settled evidence cleanup failed: \(String(describing: error))")
+            return .failure(Self.persistenceFault(
+                error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
         return .success(.removalResult(result))
     }
 
@@ -2206,6 +2256,15 @@ extension TransferCoordinator {
         recordRevisions.removeValue(forKey: recordID)
         lastReannounceAt.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
+    }
+
+    /// Convergent post-settle evidence cleanup (trash journal rows + bounded
+    /// token prune). Throws fail-closed: the durable evidence is kept until
+    /// the drop is confirmed, and a replayed commit retries the cleanup until
+    /// it converges.
+    private func settleRemovalEvidenceCleanup(token rawToken: String) async throws {
+        try await persistence.deleteTrashJournal(token: rawToken)
+        try await persistence.pruneSettledRemovalTokens(keepNewest: 128)
     }
 
     private static func isRemovalTargetAlreadyGone(_ error: Error) -> Bool {
@@ -2247,8 +2306,18 @@ extension TransferCoordinator {
         }
 
         // A pending journal row means a move is already in flight for this
-        // record: refuse rather than interleave two moves.
-        if (try? await persistence.moveJournal(recordID: request.recordID.rawValue.uuidString)) != nil {
+        // record: refuse rather than interleave two moves. A lookup failure is
+        // fail-closed: it must never be read as "no journal" — the durable
+        // admission check could not be confirmed, so the move aborts.
+        let inFlightMove: MoveJournalEntry?
+        do {
+            inFlightMove = try await persistence.moveJournal(recordID: request.recordID.rawValue.uuidString)
+        } catch {
+            return .failure(Self.persistenceFault(
+                error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
+        if inFlightMove != nil {
             return .failure(.engineBusy(details: "storage move already in progress for this record"))
         }
         // Gate 5: the payload file list (relative paths) is journaled with the
@@ -2352,13 +2421,29 @@ extension TransferCoordinator {
         }
         records[request.recordID] = record.with(saveLocation: request.destination)
         bumpEngineRevision(change: .updated(request.recordID))
-        // The row is dropped only after the record was durably updated; if the
-        // drop fails the row self-heals on the next recovery pass (payload
-        // evidence at the destination resumes the same move).
-        try? await persistence.deleteMoveJournal(recordID: request.recordID.rawValue.uuidString)
 
-        // Force recheck so the engine re-validates the moved payload.
-        try? await engine.recheck(torrentID: engineID)
+        // Force recheck BEFORE the journal row is dropped: a failed recheck
+        // keeps the row, and recovery converges on the same move instead of
+        // interleaving a fresh one over the already-moved payload.
+        do {
+            try await engine.recheck(torrentID: engineID)
+        } catch {
+            return .failure(Self.engineFault(
+                error, operation: "recheck", recordID: request.recordID, fallback: "moved payload recheck failed"
+            ))
+        }
+        // The row is dropped only after the record was durably updated AND the
+        // recheck was confirmed; a failed drop keeps the row, and the next
+        // recovery pass converges on the same outcome (payload evidence at the
+        // destination resumes the same move).
+        do {
+            try await persistence.deleteMoveJournal(recordID: request.recordID.rawValue.uuidString)
+        } catch {
+            log.error("moveStorage: move journal deletion failed: \(String(describing: error))")
+            return .failure(Self.persistenceFault(
+                error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
         return .success(.ack)
     }
 
