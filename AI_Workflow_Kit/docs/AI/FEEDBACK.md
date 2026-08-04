@@ -1,4 +1,56 @@
-# FEEDBACK — WP-10 FIX round 2: WP10-BUG-001 fail-closed journal contract
+# FEEDBACK — WP-10 FIX-2 Review (WP10-BUG-001, commit 0ec428f)
+### 1. Build & tests
+- Builds/tests after changes? Yes
+- Commands run:
+  - `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` (BUILD SUCCEEDED, 0 errors, 0 new warnings)
+  - `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` (TEST SUCCEEDED, 252/252 tests passed)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_fail_closed_contract.sh` (PASS — all 7 checks pass)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_move_recovery.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_removal_durable.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_delete_free_abi.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_manifest_safety_contract.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_trash_only.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_ui_recovery_contract.sh` (PASS)
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_test_inventory.sh` (PASS)
+*Comment:*
+Project compiles cleanly with 0 errors and 0 warnings. Full XCTest suite (252 tests) passes. All 8 WP-10 QA scripts pass including `test_wp10_fail_closed_contract.sh`.
+
+### 2. WP compliance
+- All 7 WP10-BUG-001 spots fixed fail-closed? Yes
+- No scope creep / no work from future WPs? Yes
+- target_files only? Yes (`git diff bb8262b..0ec428f --stat` shows changes ONLY in `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift`)
+*Comment:*
+All 7 defect spots from WP10-BUG-001 were verified:
+1. `removalTokenCount()` in `prepareRemoval`: replaced `try?` default 0 with throwing `do/catch` returning typed `persistenceFault` (pending token capacity check cannot fail open).
+2. `trashJournalEntries()` in `fetchPendingRemovals`: replaced `try?` default `[]` with throwing `do/catch` returning typed `persistenceFault` (no fabricated zero progress).
+3. Evidence cleanup in `commitRemoval`: `deleteTrashJournal` and `pruneSettledRemovalTokens` wrapped in throwing `settleRemovalEvidenceCleanup`; failures return typed `persistenceFault`, preserving token/journal evidence until drop is confirmed; settled token replay path retries cleanup convergently.
+4. `moveJournal` lookup in `moveStorage`: replaced `try?` lookup with throwing `do/catch` returning typed `persistenceFault` (lookup error aborts move admission fail-closed).
+5. `move journal` deletion & `recheck`: `engine.recheck` reordered BEFORE journal deletion; both use throwing `do/catch` returning typed `engineFault`/`persistenceFault`; deletion occurs only after confirmed recheck.
+6. Interrupted-move recovery (`.resume` and `.rollbackNoop`): throwing `do/catch` wraps `deleteMoveJournal`; a failed drop logs error and retains journal row for next recovery pass (convergent, idempotent).
+7. `settleRemovalEvidenceCleanup` replayed on settled token re-commit so cleanup failure retries convergently without duplicating mutations.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency Complete? Yes
+- No MainActor blocking ops? Yes (`TransferCoordinator` is actor-isolated off MainActor)
+- Recovery convergent (no duplicated mutations on replay)? Yes
+- Legacy/Tauri HARD BAN honored (git diff -- Legacy/ empty in product range)? Yes (`git diff bb8262b..0ec428f -- Legacy/` is empty)
+*Comment:*
+Strict concurrency compilation clean with zero warnings. Product scope strictly limited to `TransferCoordinator.swift`.
+
+### 4. Comments & readability
+- Fail-closed/convergence rationale documented? Yes
+*Comment:*
+Non-obvious logic and fail-closed/convergence semantics are clearly documented with precise inline/doc comments at every modified site.
+
+### 5. If changes_requested — concrete list
+N/A
+
+---
+**RESULT:** [APPROVED]
+
+──────────────────────────────────────────────────────────────────────
+
+# FEEDBACK — WP-10 FIX round 2: WP10-BUG-001 fail-closed journal contract (HISTORICAL Coder Report)
 
 Date: 2026-08-04
 Role: Implementation Engineer (coder; fix of QA finding WP10-BUG-001)

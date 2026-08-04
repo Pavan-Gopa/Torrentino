@@ -25,28 +25,28 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: waiting_review
+  status: done
   attempts: 1
   note: >-
     WP10-BUG-001 fix committed 0ec428f (7 fail-closed spots in
-    TransferCoordinator.swift). Orchestrator spot-check:
-    test_wp10_fail_closed_contract.sh PASS. Coder FEEDBACK.md handoff filled
-    (RESULT: waiting_review). Reviewer verifies independently as usual.
+    TransferCoordinator.swift). Independent review APPROVED.
 review:
-  status: pending
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: Re-review of 0ec428f after WP10-BUG-001 fix; verify fail-closed contract + full regression independently.
+  verdict: APPROVED
+  note: >-
+    FIX-2 review of 0ec428f APPROVED: 252/252 XCTest, all 8 WP-10 QA scripts
+    PASS incl. fail_closed_contract, all 7 spots verified fail-closed, scope
+    limited to TransferCoordinator.swift, Legacy diff empty.
 qa:
-  status: failed
+  status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-10
-  bugs_open: WP10-BUG-001
+  bugs_open: WP10-BUG-001 (pending re-run)
   note: >-
-    QA 2026-08-04 FAIL: test_wp10_fail_closed_contract.sh detects 7 ignored
-    errors; all other gates PASS (252/252 XCTest, 110/112 QA, Legacy env
-    waived ADR-013). Re-run after fix + review.
-next_actor: reviewer
+    Tester re-run after APPROVED fix: confirm WP10-BUG-001 closed + full
+    regression green. Legacy env waived (ADR-013).
+next_actor: tester
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
