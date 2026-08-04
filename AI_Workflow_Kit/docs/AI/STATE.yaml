@@ -1,8 +1,7 @@
 current_step: WP-09
 step_description: >-
-  Fault recovery fix round after CHANGES_REQUESTED. Wire resource budgets and
-  acceptsHeavyWork, restartEngineSafely, bounds/backoff, volume identity,
-  real fault-matrix tests.
+  Fault recovery fix round under review. Budgets enforced, safe restart,
+  bounds/backoff, volume identity, production-path fault tests.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -24,23 +23,23 @@ completed_steps:
 - WP-07
 - WP-08
 implementation:
-  status: in_progress
+  status: waiting_review
   attempts: 2
   note: >-
-    Independent review CHANGES_REQUESTED. Health lane + watchdog PASS; budgets,
-    crash-loop restart, bounds, volume identity, and matrix tests FAIL/PARTIAL.
+    Fix commit 3383abb after CHANGES_REQUESTED. Coder claims §5 closed;
+    build/test/fault_matrix/bridge green; suite 100/101 Legacy env.
 review:
-  status: changes_requested
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
-  note: See FEEDBACK §5 concrete file list (13 items).
+  verdict: null
+  note: Re-review prior §5 items only. Independent verdict required.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-09
   bugs_open: open
   note: Tester after APPROVED. Legacy env fail waived.
-next_actor: coder
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -50,10 +49,9 @@ legacy_hard_ban: >-
 checkpoint:
   last_pre_tag: torrentino/pre-WP-09
   last_post_tag: torrentino/WP-08-done
-  last_commit: 0918a3d
+  last_commit: 3383abb
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Fix FEEDBACK.md §5 only. Wire budgets for real; executable recovery; tests
-  that exercise production paths. No WP-10+. No Legacy.
+  Fix round awaiting independent review.
