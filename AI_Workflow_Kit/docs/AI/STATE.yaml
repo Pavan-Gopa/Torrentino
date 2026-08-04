@@ -1,18 +1,20 @@
-current_step: WP-10
+current_step: WP-11
 step_description: >-
-  Safe file operations — QA found WP10-BUG-001 (fail-closed journal contract
-  violated: 7 ignored throwing failures on mutation/recovery paths in
-  TransferCoordinator.swift). Coder fix round open; scope narrowed to that bug.
+  Torrent Creator CPU reference: production-correct v1/v2/hybrid creator per
+  plan §15 (Creator sheet UI, source scan/exclusions, tracker tiers/private,
+  piece size, CPU hashing with progress/cancel, inspectCreateSource +
+  CreatorPlanToken + commitCreate, atomic output, identity validation,
+  independent parse/recheck, start seeding). No Metal dependency.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
 - Native/TorrentinoIPC/
 - Native/TorrentinoDomain/
+- Native/TorrentinoHashing/
+- Native/TorrentinoEngineBridge/
 - Native/Tests/
 - Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
-- Native/TorrentinoEngineBridge/bridge/
-- Native/TorrentinoEngineBridge/adapter/
 completed_steps:
 - WP-00
 - WP-01
@@ -24,29 +26,23 @@ completed_steps:
 - WP-07
 - WP-08
 - WP-09
+- WP-10
 implementation:
-  status: done
+  status: pending
   attempts: 1
-  note: >-
-    WP10-BUG-001 fix committed 0ec428f (7 fail-closed spots in
-    TransferCoordinator.swift). Independent review APPROVED.
+  note: WP-11 opens fresh after WP-10 closed PRODUCT GREEN (tag WP-10-done).
 review:
-  status: approved
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: APPROVED
-  note: >-
-    FIX-2 review of 0ec428f APPROVED: 252/252 XCTest, all 8 WP-10 QA scripts
-    PASS incl. fail_closed_contract, all 7 spots verified fail-closed, scope
-    limited to TransferCoordinator.swift, Legacy diff empty.
+  verdict: null
+  note: WP-10 closed APPROVED; WP-11 awaits first implementation.
 qa:
   status: pending
-  last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
-  suite: WP-10
-  bugs_open: WP10-BUG-001 (pending re-run)
-  note: >-
-    Tester re-run after APPROVED fix: confirm WP10-BUG-001 closed + full
-    regression green. Legacy env waived (ADR-013).
-next_actor: tester
+  last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
+  suite: WP-11
+  bugs_open: none
+  note: WP-10 closed GREEN (WP10-BUG-001 closed, 257/257 XCTest, Legacy env waived ADR-013).
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -55,14 +51,16 @@ legacy_hard_ban: >-
   Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
 security_engineer: on_demand_only
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-10
-  last_post_tag: torrentino/WP-09-done
-  last_commit: 0ec428f
+  last_pre_tag: torrentino/pre-WP-11
+  last_post_tag: torrentino/WP-10-done
+  last_commit: d8116fd
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Fix WP10-BUG-001 only: replace 7 ignored throwing failures on
-  mutation/recovery paths in TransferCoordinator.swift with fail-closed
-  handling (BUG_REPORT.md has exact lines). No scope creep; keep the 252
-  green tests green; test_wp10_fail_closed_contract.sh must PASS.
+  WP-11 Torrent Creator CPU reference per plan §15 + WP-11 section.
+  IPC scaffolding exists (inspectCreateSource/commitCreate/
+  fetchCreatorManifestPage payloads in TorrentinoIPC; coordinator returns
+  unsupported). Implement agent creator flow + bridge creation path + CPU
+  hashing + Creator sheet UI + atomic output + independent recheck + start
+  seeding. v1/v2/hybrid, no Metal. All §15.4 invariants, §15.5 edge cases.
