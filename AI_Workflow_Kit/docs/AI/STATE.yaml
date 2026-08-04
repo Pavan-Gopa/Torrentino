@@ -1,7 +1,9 @@
 current_step: WP-10
 step_description: >-
-  Safe file operations under review. Trash journals, prepare/commit removal,
-  move recovery, no permanent delete.
+  Safe file operations fix round after CHANGES_REQUESTED. Manifest-scoped trash
+  only (no recursive dir trash of unlisted files), TOCTOU on mutation path,
+  move recovery via fileListJSON evidence, no delete_files API, durable journal
+  errors, pending removal recovery + UI batch results, adversarial tests.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -24,23 +26,23 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: waiting_review
-  attempts: 1
+  status: in_progress
+  attempts: 2
   note: >-
-    feat 0725b57. Coder claims all WP-10 gates PASS; build/test green; 106/107
-    suite (Legacy env). Independent Reviewer required.
+    Review CHANGES_REQUESTED on 0725b57. Multiple gate FAILs: dir trash scope,
+    TOCTOU unused, move recovery shallow, delete_files still exposed.
 review:
-  status: pending
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: Overwrite coder-shaped WAITING_REVIEW FEEDBACK with real verdict.
+  verdict: CHANGES_REQUESTED
+  note: See FEEDBACK §2–§5. Keep-data and Swift6 PASS only.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-10
   bugs_open: open
-  note: Tester after APPROVED. Legacy env waived.
-next_actor: reviewer
+  note: Tester after APPROVED.
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -56,4 +58,4 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Awaiting independent WP-10 review.
+  Fix FEEDBACK.md WP-10 gates FAIL/PARTIAL. Adversarial tests required. No WP-11+.
