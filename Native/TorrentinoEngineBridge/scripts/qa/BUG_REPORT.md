@@ -1,3 +1,130 @@
+# BUG REPORT - WP-10 Safe File Operations (FIX round, attempt 2)
+
+Date: 2026-08-04
+Role: Test Engineer (functional QA; test code and defect detection only)
+Scope: fix 7758e4b / safe file operations and recovery
+Verdict: FAIL - functional fail-closed journal contract is still violated
+
+## Executive Summary
+
+The WP-10 runtime behavior is green across 25 XCTest cases and the full
+scheme is green at 252/252. The delete-free native bridge, manifest-scoped
+Trash, TOCTOU refusals, move evidence recovery, pending-removal IPC/UI
+contracts, and all WP-10 gates except fail-closed journal handling pass.
+
+The new `test_wp10_fail_closed_contract.sh` detects seven ignored errors on
+mutation/recovery paths. This is a product finding, not a Legacy waiver. QA
+did not modify product code.
+
+| Layer | Result |
+| --- | --- |
+| WP-10 XCTest | 25/25 PASS |
+| WP-10 QA scripts | 7/8 PASS; fail-closed contract FAIL |
+| Full QA suite | 110/112 PASS; fail-closed FAIL + Legacy environmental FAIL |
+| Full `xcodebuild test` | 252/252 PASS |
+| Direct headless bridge | PASS |
+| Direct Swift bridge | PASS |
+| Product changes by QA | none |
+
+## Findings
+
+### WP10-BUG-001 - Mutation/recovery paths ignore throwing failures (P1)
+
+Detected by: `test_wp10_fail_closed_contract.sh`.
+
+Evidence in `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift`:
+
+- Line 1776: `removalTokenCount()` failure defaults to `0`, so the pending
+  token capacity check can fail open.
+- Line 1888: `trashJournalEntries()` failure defaults to an empty journal, so
+  `fetchPendingRemovals` can report fabricated zero progress instead of a
+  typed persistence fault.
+- Lines 2181-2182: `deleteTrashJournal` and
+  `pruneSettledRemovalTokens` use `try?` after record removal. Cleanup failure
+  is silently discarded, losing durable recovery evidence while the command
+  can still report success.
+- Line 2251: `moveJournal` lookup failure is treated as if no journal exists,
+  allowing a new move to proceed after a failed durable admission check.
+- Lines 2358 and 2361: move-journal deletion and the force recheck use `try?`,
+  so a successful-looking move can return with stale journal state or without
+  the required recheck.
+- Lines 284 and 289: interrupted-move recovery also ignores journal deletion
+  failures.
+
+Impact: a persistence or engine failure can leave the durable journal,
+in-memory record, and reported command outcome inconsistent. This contradicts
+the WP-10 fail-closed requirement that mutation-path persistence calls use
+throwing handling and that recovery remain convergent.
+
+Reproduction:
+
+```text
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_fail_closed_contract.sh
+```
+
+Observed failures:
+
+- pending token limit defaults open on persistence failure
+- pending progress defaults to fabricated zero evidence
+- removal journal cleanup failure is ignored
+- settled token prune failure is ignored
+- move admission journal lookup failure is ignored
+- successful move journal deletion failure is ignored
+- move recheck failure is ignored
+
+Required product-side follow-up: replace these `try?` mutation/recovery paths
+with explicit throwing/error-return handling, preserving the durable token or
+move journal until cleanup/recheck is known to have completed. QA does not
+apply that fix.
+
+## WP-10 Gate Matrix
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| File outside manifest cannot be removed | `testWP10UnmanifestedSiblingSurvivesDirectoryTrash`; manifest safety contract | PASS |
+| Keep-data leaves payload unchanged | `testWP10KeepDataRemovalLeavesPayloadByteIdentical` | PASS |
+| Failed Trash keeps the record | partial/total failure XCTest cases | PASS |
+| Partial Trash remains recoverable/guided | journal replay + pending restore XCTest cases | PASS |
+| Move crash recovery | resume, rollback-noop, empty destination, split payload, symlink evidence cases | PASS |
+| No permanent delete API | `test_wp10_delete_free_abi.sh`; bridge runners | PASS |
+| Fail-closed journals | `test_wp10_fail_closed_contract.sh` | FAIL |
+
+## Feature Coverage
+
+| Feature | Dedicated evidence | Result |
+| --- | --- | --- |
+| Manifest-scoped directory Trash and leaf-first order | `test_wp10_manifest_safety_contract.sh` + runtime sibling/order cases | PASS |
+| TOCTOU chain and file identity refusal | symlink, same-size replacement, hardlink swap XCTest cases | PASS |
+| `fileListJSON` move recovery evidence | `test_wp10_move_recovery.sh` and 8 move XCTest cases | PASS |
+| Delete-free bridge/adapter ABI | `test_wp10_delete_free_abi.sh` + direct bridge runners | PASS |
+| Pending token restore and read-only IPC | restart/no-auto-resume XCTest + UI contract | PASS |
+| Fail-closed journals and convergent settle repair | 3 failpoint cases + repair XCTest + strict static detector | FAIL |
+| UI result/pending/retry/banner/localization | `test_wp10_ui_recovery_contract.sh` | PASS (source contract) |
+| WP-10 XCTest inventory | `test_wp10_test_inventory.sh` | PASS, 25 methods |
+
+## Environmental Waiver
+
+`test_wp03_legacy_untouched.sh` reports pre-existing Human research changes in
+`Legacy/Tauri`: tracked `README.md`, `Cargo.lock`, `Cargo.toml`, `engine.rs`,
+`gui.rs`, `gui.rs.fixed`, `app.js`, `styles.css`, and untracked
+`Torrentino.command`, `build-macos.sh`, `run-dev.sh`.
+
+Per ADR-013, QA did not read, edit, restore, stage, or commit any
+`Legacy/Tauri/` path. This failure is environmental and does not change the
+WP-10 functional finding above.
+
+## Verification Commands
+
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh` -> 110/112;
+  two failures listed above.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh` -> PASS.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh` -> PASS.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` -> 252/252 PASS.
+
+No product fix, git commit, or git push was performed.
+
+---
+
 # BUG REPORT - WP-08 Native UX Completeness (historical record)
 
 Date: 2026-08-04

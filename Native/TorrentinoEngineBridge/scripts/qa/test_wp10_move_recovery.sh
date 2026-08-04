@@ -14,6 +14,7 @@
 #         gone)
 #       - engine_moved + destination missing              -> guided (row KEPT, no
 #         silent auto-resume, record never rewritten)
+#       - symlink destination/payload evidence              -> guided
 #   * Gate 5: an EXISTING destination without the payload is never adopted as
 #     success (rollback-noop), and a split payload (one file on each side) is
 #     guided — fileListJSON evidence decides, never directory existence
@@ -33,8 +34,9 @@ xcodebuild test \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageEngineFailureLeavesJournalForRecovery \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryResumesInterruptedMove \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryRollsBackNeverStartedMove \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryGuidedKeepsJournalWhenEvidenceAmbiguous \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryDestinationWithoutPayloadIsNotResume \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryGuidedKeepsJournalWhenEvidenceAmbiguous \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoverySymlinkPayloadEvidenceStaysGuided \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryDestinationWithoutPayloadIsNotResume \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoverySplitPayloadStaysGuided \
     CODE_SIGN_IDENTITY="Developer ID Application" \
     DEVELOPMENT_TEAM=438UQRF7JV \

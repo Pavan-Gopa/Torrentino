@@ -1,9 +1,8 @@
 current_step: WP-10
 step_description: >-
-  Safe file operations fix APPROVED by independent review; functional QA
-  pending. Manifest-scoped trash, TOCTOU on mutation path, fileListJSON move
-  evidence, no delete_files, fail-closed journals, pending removal UI,
-  adversarial tests.
+  Safe file operations — QA found WP10-BUG-001 (fail-closed journal contract
+  violated: 7 ignored throwing failures on mutation/recovery paths in
+  TransferCoordinator.swift). Coder fix round open; scope narrowed to that bug.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -26,21 +25,29 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: done
-  attempts: 2
-  note: Fix 7758e4b after fac8ac5 CHANGES_REQUESTED. Independent review APPROVED.
-review:
-  status: approved
-  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: APPROVED
-  note: All 8 prior FAIL gates independently verified fixed; 248 XCTests + WP-10 QA scripts green in review.
-qa:
   status: pending
-  last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
+  attempts: 1
+  note: >-
+    Attempts reset per case C after QA FAIL on attempt 2 (7758e4b: review
+    APPROVED but QA red). Scope narrowed to WP10-BUG-001 only: 7 ignored
+    throwing failures on mutation/recovery paths in TransferCoordinator.swift
+    (see BUG_REPORT.md). History: att1 0725b57 review CHANGES_REQUESTED;
+    att2 7758e4b review APPROVED / QA FAIL.
+review:
+  status: pending
+  last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
+  verdict: null
+  note: Re-review after WP10-BUG-001 fix; verify fail-closed contract independently.
+qa:
+  status: failed
+  last_report: Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
   suite: WP-10
-  bugs_open: open
-  note: Tester runs full regression + WP-10 fix features after APPROVED. Legacy env waived (ADR-013).
-next_actor: tester
+  bugs_open: WP10-BUG-001
+  note: >-
+    QA 2026-08-04 FAIL: test_wp10_fail_closed_contract.sh detects 7 ignored
+    errors; all other gates PASS (252/252 XCTest, 110/112 QA, Legacy env
+    waived ADR-013). Re-run after fix + review.
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -56,4 +63,7 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-10 fix APPROVED by Reviewer; functional QA (Tester) is the current gate.
+  Fix WP10-BUG-001 only: replace 7 ignored throwing failures on
+  mutation/recovery paths in TransferCoordinator.swift with fail-closed
+  handling (BUG_REPORT.md has exact lines). No scope creep; keep the 252
+  green tests green; test_wp10_fail_closed_contract.sh must PASS.

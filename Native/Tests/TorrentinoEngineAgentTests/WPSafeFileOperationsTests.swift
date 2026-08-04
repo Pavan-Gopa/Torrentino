@@ -222,6 +222,44 @@ final class WPSafeFileOperationsTests: TestProfileCase {
                        "record-only removal carries no payload manifest")
     }
 
+    func testWP10KeepDataRemovalLeavesPayloadByteIdentical() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let saveLocation = try profile.subdirectory("sl-keep-data")
+        let payloadURL = saveLocation.appendingPathComponent("keep.bin")
+        let before = Data(repeating: 0x6B, count: 777)
+        try before.write(to: payloadURL)
+
+        let metainfo = MetainfoBuilder.singleFile(
+            name: "keep.bin",
+            size: Int64(before.count),
+            pieceLength: 256,
+            piecesCount: 1
+        )
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: false)
+
+        let result = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(result.outcome, .completed)
+        XCTAssertEqual(result.trashedItems, 0, "keep-data removal must not offer payload to Trash")
+        XCTAssertEqual(result.skippedSharedItems, 0)
+        XCTAssertTrue(result.failedItems.isEmpty)
+        XCTAssertEqual(
+            try Data(contentsOf: payloadURL),
+            before,
+            "record removal with deleteFiles=false must preserve payload bytes"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: payloadURL.path))
+        let snap = try await snapshot(coordinator)
+        XCTAssertNil(snap.torrents.first { $0.id == recordID })
+        let removed = await engineRef.removedCount(for: "stub-1")
+        XCTAssertEqual(removed, 1)
+
+        let settled = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(settled?.status, "committed")
+    }
+
     // MARK: - WP-10: commit — full success path
 
     func testWP10CommitRemovalTrashesEveryManifestItemAndRemovesRecord() async throws {
@@ -678,6 +716,33 @@ final class WPSafeFileOperationsTests: TestProfileCase {
                        "guided recovery never rewrites the record")
     }
 
+    func testWP10MoveRecoverySymlinkPayloadEvidenceStaysGuided() throws {
+        let from = try profile.subdirectory("sl-symlink-evidence-from")
+        let to = profile.rootURL.appendingPathComponent("sl-symlink-evidence-to")
+        let decoy = try profile.subdirectory("sl-symlink-evidence-decoy")
+        try Data(repeating: 0x68, count: 64).write(to: from.appendingPathComponent("payload.bin"))
+        try FileManager.default.createSymbolicLink(at: to, withDestinationURL: decoy)
+
+        let entry = MoveJournalEntry(
+            seq: 1,
+            recordID: UUID().uuidString,
+            fromPath: from.path,
+            toPath: to.path,
+            fileListJSON: "[\"payload.bin\"]",
+            stage: MoveJournalEntry.Stage.engineMoved.rawValue,
+            status: MoveJournalEntry.Status.pending.rawValue,
+            startedAt: Self.nowMilliseconds(),
+            updatedAt: Self.nowMilliseconds(),
+            failureReason: nil
+        )
+
+        guard case .guided(_, _, _, let reason) = MoveStorageRecovery.recommendation(for: entry) else {
+            return XCTFail("symlink destination evidence must never produce resume")
+        }
+        XCTAssertTrue(reason.contains("lacks the payload"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: from.appendingPathComponent("payload.bin").path))
+    }
+
     // MARK: - WP-10 (Gate 1): manifest-scoped trash only
 
     func testWP10UnmanifestedSiblingSurvivesDirectoryTrash() async throws {
@@ -959,6 +1024,99 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         XCTAssertEqual(settled?.status, "committed")
         let snapAfter = try await snapshot(restarted)
         XCTAssertNil(snapAfter.torrents.first { $0.id == recordID })
+    }
+
+    func testWP10PendingRemovalRestoreDoesNotAutoResume() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-no-auto-resume")
+        let payload = saveLocation.appendingPathComponent("payload.bin")
+        try Data(repeating: 0x7C, count: 128).write(to: payload)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 128, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+        trash.fail(path: payload.path)
+
+        let first = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(first.outcome, .failed)
+        XCTAssertTrue(trash.recorded().isEmpty)
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path),
+            trashProvider: trash
+        )
+        await restarted.restoreFromPersistence()
+
+        XCTAssertTrue(trash.recorded().isEmpty, "restore must not auto-resume a pending removal")
+        let snap = try await snapshot(restarted)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        let pendingReply = await restarted.processCommand(encode(.fetchPendingRemovals(
+            FetchPendingRemovalsRequest(requestID: RequestID())
+        )))
+        let pendingPayload = try resultPayload(from: pendingReply)
+        guard case .pendingRemovals(let summaries) = pendingPayload else {
+            return XCTFail("unexpected \(pendingPayload)")
+        }
+        XCTAssertEqual(summaries.map(\.token), [token])
+        XCTAssertEqual(summaries.first?.failedItemCount, 1)
+    }
+
+    func testWP10CommittedOutcomeReplayRepairsRecordAfterSettlementCrash() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let saveLocation = try profile.subdirectory("sl-settled-repair")
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 1, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: false)
+
+        // Simulate a crash after durable settle and before record cleanup.
+        let settledOutcome = RemovalBatchResult(
+            recordID: recordID,
+            token: token,
+            outcome: .completed,
+            trashedItems: 0,
+            skippedSharedItems: 0,
+            failedItems: []
+        )
+        let outcomeJSON = String(
+            data: try JSONEncoder().encode(settledOutcome),
+            encoding: .utf8
+        )!
+        try await store.settleRemovalToken(
+            token: token.rawValue,
+            status: "committed",
+            outcomeJSON: outcomeJSON,
+            at: Self.nowMilliseconds()
+        )
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+        let snapBeforeReplay = try await snapshot(restarted)
+        XCTAssertNotNil(snapBeforeReplay.torrents.first { $0.id == recordID })
+
+        let replay = try await commitRemoval(restarted, token: token)
+        XCTAssertEqual(replay, settledOutcome, "replay must return the durable outcome byte-for-byte")
+        let snapAfterReplay = try await snapshot(restarted)
+        XCTAssertNil(
+            snapAfterReplay.torrents.first { $0.id == recordID },
+            "settled replay must converge by removing the leftover record"
+        )
+        let settled = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(settled?.status, "committed")
     }
 
     // MARK: - WP-10 (Gate 5): move recovery requires payload evidence

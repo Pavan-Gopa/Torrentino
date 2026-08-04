@@ -6,6 +6,7 @@
 #   * prepareRemoval mints a durable token whose exact manifest is served back
 #     through fetchRemovalManifestPage (never re-derived)
 #   * record-only removal (deleteFiles=false) carries an empty manifest
+#   * keep-data commit removes only the record and preserves payload bytes
 #   * commit trashes EVERY manifest item (files first, then empty directories)
 #     and removes the record only on full success
 #   * partial failure keeps the record + journal, keeps the token PENDING, and
@@ -20,6 +21,8 @@
 #   * Gate 8: journal append/update failures abort fail-closed; a settle
 #     failure keeps the record and the pending token is restored + enumerable
 #     after a restart (fetchPendingRemovals), then resumes to completion
+#   * pending removal restore is read-only until an explicit retry
+#   * a settled outcome repairs a leftover record after a restart
 #
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
@@ -32,9 +35,10 @@ xcodebuild test \
     -project "${PROJECT}" \
     -scheme Torrentino \
     -destination 'platform=macOS,arch=arm64' \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalCreatesDurableTokenAndExactManifestPage \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalWithoutDeleteFilesKeepsEmptyManifest \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTrashesEveryManifestItemAndRemovesRecord \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalCreatesDurableTokenAndExactManifestPage \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalWithoutDeleteFilesKeepsEmptyManifest \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10KeepDataRemovalLeavesPayloadByteIdentical \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTrashesEveryManifestItemAndRemovesRecord \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalPartialFailureKeepsRecordAndJournalWithResumableReplay \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTotalFailureKeepsRecordAndJournal \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SharedPathRemovalSkipsFilesSharedWithAnotherTorrent \
@@ -43,9 +47,11 @@ xcodebuild test \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10AncestorSymlinkSwapRefusedBeforeAnyMutation \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SameSizeReplacementRefusedByIdentity \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10HardlinkSwapRefusedByIdentity \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalAppendFailureAbortsBatchBeforeAnyMutation \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalUpdateFailureAbortsFailClosedAndResumes \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SettleFailureFailsClosedAndPendingTokenSurvivesRestart \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalAppendFailureAbortsBatchBeforeAnyMutation \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalUpdateFailureAbortsFailClosedAndResumes \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SettleFailureFailsClosedAndPendingTokenSurvivesRestart \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PendingRemovalRestoreDoesNotAutoResume \
+     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommittedOutcomeReplayRepairsRecordAfterSettlementCrash \
     CODE_SIGN_IDENTITY="Developer ID Application" \
     DEVELOPMENT_TEAM=438UQRF7JV \
     2>&1 | tail -30
