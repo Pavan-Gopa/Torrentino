@@ -23,7 +23,8 @@ cd "/Users/pavan/Documents/AI Projects/Torrentino"
 |-------|-------------|---------------|
 | Coder | **Orchestrator** | `KICK_CODER.md` + STATE/card |
 | Reviewer | **Orchestrator** | `KICK_REVIEWER.md` + diff scope |
-| Tester | **Orchestrator** | `KICK_TESTER.md` + WP scope |
+| Tester | **Orchestrator** | `KICK_TESTER.md` + WP scope (functional only) |
+| Security | **Orchestrator** | `KICK_SECURITY.md` + scoped surfaces (**on-demand**, not every WP) |
 | Architect | **Orchestrator** | Architect packet (design-only) |
 
 ### Запрещено Orchestrator'у
@@ -61,14 +62,17 @@ Workers **не** планируют pipeline и **не** выдают промп
 ### A) `review.status == approved` and implementation done
 - After review **approved** and tests not yet green → `next_actor: tester` → **kick Tester**.
 - After tests **green** → POST checkpoint → **`/graphify . --update`** → advance / PRE next → `next_actor: coder` → **kick Coder**.
-- After tests **bugs** and/or **High/Critical security findings** → do **not** advance:
-  1. Read `BUG_REPORT.md` + `SECURITY_FINDINGS.md`
-  2. Open fix/retry for **Coder only** (merge functional + security items into one kick)
+- After tests **bugs** → do **not** advance:
+  1. Read `BUG_REPORT.md`
+  2. Open fix/retry for **Coder only**
   3. **Kick Coder** (fix)
   4. After Coder done → **kick Reviewer** (re-review)
-  5. After approve → **kick Tester** (re-run + security regression)
-  6. Green (and no open High/Critical security) → next WP
-- After tests **PRODUCT GREEN** with only Low/Info security notes → may advance, but copy residual risks into `coder_brief` / DECISIONS if needed; do not drop findings on the floor.
+  5. After approve → **kick Tester** (re-run)
+  6. Green → next WP
+- **Security Engineer** is **not** part of the default per-WP loop (ADR-015).
+  Schedule only on Human request or late PRODUCT/RELEASE gates.
+  When Security reports High/Critical → Coder fix kick → Reviewer → Tester regression
+  (re-invoke Security only if Human wants confirmation audit).
 
 ### B) `changes_requested`
 - `attempts += 1`, same WP, `next_actor: coder`

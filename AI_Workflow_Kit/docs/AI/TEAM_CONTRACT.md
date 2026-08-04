@@ -16,7 +16,8 @@
 | **Orchestrator** | Jcode (this session) | no product code | STATE, DECISIONS, checkpoints, kick prompts |
 | **Implementation Engineer** | Coder (fresh terminal) | **yes** product | `target_files` only |
 | **Verification Engineer** | Reviewer (fresh terminal) | no | `FEEDBACK.md`, code review |
-| **Test Engineer** | Tester (fresh terminal) | **test code only** (+ security tests) | test targets, QA scripts, `BUG_REPORT.md`, `REPORT.md`, `SECURITY_FINDINGS.md` |
+| **Test Engineer** | Tester (fresh terminal) | **test code only** (functional) | test targets, QA scripts, `BUG_REPORT.md`, `REPORT.md`, `COVERAGE.md` |
+| **Security Engineer** | Security (fresh terminal, **on-demand**) | **test/findings only** | `SECURITY_FINDINGS.md`, optional `test_*_sec_*.sh` |
 | **Architect** *(on demand)* | Orchestrator or dedicated | no product features | ADR → DECISIONS |
 | **Human** | Pavel | — | switch models, paste kickoffs, approve decisions |
 
@@ -41,27 +42,32 @@ Human ↔ Orchestrator only (control plane)
   → Orchestrator: green → POST + PRE next + kick Coder; red → fix + kick Coder
 ```
 
-### Who does what when Tester finds a bug or security issue
+### Who does what when Tester finds a bug
 
 | Actor | Action |
 |-------|--------|
-| **Tester** | Detects functional **and security** issues; writes `BUG_REPORT.md` and/or `SECURITY_FINDINGS.md`; tells Human: «вернись к оркестратору». **Never** patches product code. |
-| **Orchestrator** | Reads reports, prioritizes, opens fix/retry, **issues full Coder kick** (functional + security fixes). |
+| **Tester** | Detects **functional** failure, writes `BUG_REPORT.md`, tells Human: «вернись к оркестратору». **Never** patches product. |
+| **Orchestrator** | Reads bugs, opens fix/retry, **issues full Coder kick** |
 | **Coder** | **Only one who fixes product code** |
 | **Reviewer** | Re-reviews after Orchestrator issues Reviewer kick |
-| **Tester** | Re-runs suite + security regression after Orchestrator issues Tester kick |
+| **Tester** | Re-runs functional suite after Orchestrator issues Tester kick |
 
-### Tester security mandate (every WP)
+### Who does what when Security Engineer finds issues
 
-Torrentino is network-facing (BitTorrent, magnet/HTTP sources, XPC, filesystem paths, Keychain). On **every** Tester turn the agent must:
+| Actor | Action |
+|-------|--------|
+| **Security Engineer** | On-demand audit; writes `SECURITY_FINDINGS.md` (+ optional sec tests); **never** patches product. |
+| **Orchestrator** | Prioritizes findings; **Coder kick** for High/Critical (and chosen Medium); residual risks → DECISIONS if accepted. |
+| **Coder** | Implements security fixes in `target_files` only |
+| **Reviewer** | Re-review |
+| **Tester** | Functional regression after fix (not a full re-audit unless Security re-invoked) |
 
-1. Run functional regression + new feature tests (as always).
-2. Perform a **WP-scoped security pass**: threat model the *new/changed* surfaces; add **negative/abuse tests** where practical; record residual risks.
-3. Write findings to `Native/TorrentinoEngineBridge/scripts/qa/SECURITY_FINDINGS.md` (append or rewrite section for current WP).
-4. **Never** exploit production systems outside the local TestProfile harness; **never** write real malware/exploits against external hosts; use local disposable fixtures only.
-5. Security findings do **not** auto-block PRODUCT GREEN alone if severity is Low/Informational — but **High/Critical** product-reachable issues → treat as FAIL for the WP until Orchestrator routes a Coder fix (or Human accepts residual risk in DECISIONS).
+### Security Engineer schedule (ADR-015)
 
-Security themes (pick those relevant to the WP): path traversal / symlink / TOCTOU; XPC authz & untrusted payloads; SSRF/unsafe URL fetch; injection in bencode/magnet/HTTP; IPC deserialization; secret leakage (logs, diagnostics, Keychain misuse); sandbox-adjacent assumptions; DoS via unbounded queues/payloads; permission / volume spoofing.
+- **Not every WP.** Separate agent from Tester to save tokens/time.
+- Invoke when Human asks, or Orchestrator schedules near end of PRODUCT / before RELEASE soak (e.g. after WP-10/11 or pre-WP-15), or after a large trust-boundary change.
+- Kick template: `AI_Workflow_Kit/docs/AI/KICK_SECURITY.md`.
+- Tester keeps ordinary invalid-input/permissions/bounds tests as **functional** robustness only.
 | **Reviewer** | Re-reviews after Orchestrator issues Reviewer kick |
 | **Tester** | Re-runs suite after Orchestrator issues Tester kick |
 
@@ -128,7 +134,8 @@ Security themes (pick those relevant to the WP): path traversal / symlink / TOCT
 | `приступай` / `статус` / `дальше` | Read STATE/FEEDBACK; sync; **output full kick** for `next_actor` |
 | `зови кодер` | Full Coder kick in reply |
 | `зови ревью` | Full Reviewer kick in reply |
-| `зови тестер` | Full Tester kick in reply |
+| `зови тестер` | Full Tester kick in reply (functional only) |
+| `зови security` | Full Security Engineer kick (on-demand audit; not every WP) |
 | `следующий шаг` | Only if review approved + tests green → PRE next + Coder kick |
 | `retry` | Same WP, attempts++; Coder kick with FEEDBACK §5 |
 

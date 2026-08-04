@@ -33,10 +33,9 @@ qa:
   suite: WP-09
   bugs_open: 0
   note: >-
-    Tester run WITH security pass (ADR-014). Write SECURITY_FINDINGS.md.
-    Critical/High findings → FAIL. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched
-    may FAIL from Human Legacy dirt — do not fix Legacy. Product GREEN if all other
-    checks pass and no open Critical/High security.
+    Tester run FUNCTIONAL only (ADR-015). Security Engineer is separate/on-demand.
+    ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL from Human Legacy dirt
+    — do not fix Legacy. Product GREEN if product scripts + xcodebuild test pass.
 
 next_actor: tester
 track: PRODUCT

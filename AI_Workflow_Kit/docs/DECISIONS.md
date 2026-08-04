@@ -162,3 +162,21 @@
 **Consequences:**
 - `KICK_TESTER.md`, `TEAM_CONTRACT.md`, `ORCHESTRATOR.md` updated.
 - COVERAGE.md should track security scripts alongside functional ones.
+
+---
+
+## ADR-015 — Separate Security Engineer (on-demand); Tester stays functional
+
+**Date:** 2026-08-04
+**Status:** Accepted (Human directive; supersedes ADR-014 operational practice)
+**Context:** Combining full security audit into every Tester turn burns tokens and is unnecessary cadence. Functional QA must stay cheap and frequent.
+
+**Decision:**
+- **Test Engineer** = functional regression + new feature tests every WP. Ordinary invalid-input/bounds tests OK. No mandatory deep security audit. Does not own `SECURITY_FINDINGS.md`.
+- **Security Engineer** = separate role (`KICK_SECURITY.md`). Invoked **periodically / near release** (or after large trust-boundary WPs), not each WP.
+- Findings still flow: Security → Orchestrator → Coder fix → Reviewer → Tester regression.
+- ADR-014 intent (security matters; Tester never patches) remains; **cadence and role split** change per this ADR.
+
+**Consequences:**
+- Default pipeline: Coder → Reviewer → Tester only.
+- Human may say «зови security» when ready for an engagement.

@@ -1,22 +1,22 @@
 # SECURITY FINDINGS — Torrentino Native
 
-> Maintained by **Test Engineer** only. Product fixes: Orchestrator → Coder.
-> Local TestProfile / mktemp only. No external offensive testing.
+> Owned by **Security Engineer** (on-demand role, ADR-015).
+> **Not** written by the regular Test Engineer each WP.
+> Product fixes: Orchestrator → Coder only. Local TestProfile / mktemp only.
 
-## Format per WP section
+## Format per engagement
 
-### WP-XX — YYYY-MM-DD
+### Security engagement — YYYY-MM-DD (scope: …)
 
 | ID | Severity | Surface | Impact | Repro (local) | Evidence | Suggested fix direction |
 |----|----------|---------|--------|---------------|----------|-------------------------|
-| SEC-WPXX-001 | High/Med/Low/Info | … | … | … | path/symbol | … |
 
 **Residual risks:** …
 
-**Security scripts added this run:** …
+**Security scripts added:** …
 
 ---
 
 ## Log
 
-_(newest WP section above previous)_
+_(newest engagement above)_
