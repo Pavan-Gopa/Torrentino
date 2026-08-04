@@ -28,21 +28,29 @@ completed_steps:
 - WP-09
 - WP-10
 implementation:
-  status: pending
+  status: waiting_review
   attempts: 1
-  note: WP-11 opens fresh after WP-10 closed PRODUCT GREEN (tag WP-10-done).
+  note: >-
+    WP-11 delivered, committed 9e920a8: Creator sheet UI, SourceScanner,
+    CPUHasher, MetainfoGenerator, CreatorPlanStore (6 stages), atomic output,
+    cancel, identity checks, independent recheck, start seeding; Bencode/
+    Magnet/Metainfo parsers moved EngineAgent→Domain. Coder self-reports 4
+    minor gaps (agent-side cancelOperation wiring, engine-level DHT/PEX/LSD
+    for private, tracker reorder/paste UI, ETA) and claims pre-existing
+    non-deterministic test failures — Reviewer must verify independently
+    (suite was 257/257 green at WP-10 close).
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: null
-  note: WP-10 closed APPROVED; WP-11 awaits first implementation.
+  note: Independent review of 9e920a8 vs plan §15; do not trust self-PASS table.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-11
   bugs_open: none
-  note: WP-10 closed GREEN (WP10-BUG-001 closed, 257/257 XCTest, Legacy env waived ADR-013).
-next_actor: coder
+  note: Tester after review APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -53,7 +61,7 @@ security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-11
   last_post_tag: torrentino/WP-10-done
-  last_commit: d8116fd
+  last_commit: 9e920a8
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
