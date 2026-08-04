@@ -144,10 +144,22 @@ final class SystemConditionMonitor: @unchecked Sendable {
         @unknown default: reachability = .unknown
         }
         let interfaces = path.availableInterfaces
-            .map { String(describing: $0.type) }
+            .map { "\($0.type):\(String(describing: $0))" }
             .sorted()
             .joined(separator: ",")
-        let signature = "\(path.status)|\(interfaces)|\(path.isExpensive)|\(path.isConstrained)|\(path.supportsIPv4)|\(path.supportsIPv6)"
+        // NWPath's description includes the selected route and endpoint
+        // identity that is not exposed as a stable typed property. Keeping it
+        // in the signature catches same-interface VPN/address changes.
+        let routeIdentity = String(reflecting: path)
+        let signature = Self.pathSignature(
+            status: String(describing: path.status),
+            interfaces: interfaces,
+            isExpensive: path.isExpensive,
+            isConstrained: path.isConstrained,
+            supportsIPv4: path.supportsIPv4,
+            supportsIPv6: path.supportsIPv6,
+            routeIdentity: routeIdentity
+        )
         lock.lock()
         let changed = signature != pathSignature
         pathSignature = signature
@@ -180,6 +192,18 @@ final class SystemConditionMonitor: @unchecked Sendable {
         let snapshot = conditions
         lock.unlock()
         if force { callback(snapshot) }
+    }
+
+    static func pathSignature(
+        status: String,
+        interfaces: String,
+        isExpensive: Bool,
+        isConstrained: Bool,
+        supportsIPv4: Bool,
+        supportsIPv6: Bool,
+        routeIdentity: String
+    ) -> String {
+        "\(status)|\(interfaces)|\(isExpensive)|\(isConstrained)|\(supportsIPv4)|\(supportsIPv6)|route=\(routeIdentity)"
     }
 
     private static func thermalCondition(_ state: ProcessInfo.ThermalState) -> ThermalCondition {

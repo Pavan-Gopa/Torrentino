@@ -203,6 +203,10 @@ SessionConfiguration configurationFromJSON(NSDictionary* dict)
 	config.enable_natpmp = boolValue(dict, "enable-natpmp", false);
 	config.encryption_enabled = boolValue(dict, "encryption-enabled", true);
 	config.max_connections = static_cast<int>(int64Value(dict, "max-connections", 120));
+	config.max_active_downloads = static_cast<int>(int64Value(dict, "max-active-downloads", 4));
+	config.max_active_seeds = static_cast<int>(int64Value(dict, "max-active-seeds", 8));
+	config.max_connection_attempts = static_cast<int>(int64Value(dict, "max-connection-attempts", 20));
+	config.cache_bytes = int64Value(dict, "cache-bytes", 64 * 1024 * 1024);
 	config.max_download_bytes_per_sec = int64Value(dict, "max-download-bytes-per-sec", 0);
 	config.max_upload_bytes_per_sec = int64Value(dict, "max-upload-bytes-per-sec", 0);
 	NSDictionary* proxy = dict[jsonKey("proxy")];

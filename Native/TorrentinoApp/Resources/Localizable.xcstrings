@@ -2795,6 +2795,83 @@
         "ru": { "stringUnit": { "state": "translated", "value": "Эта операция движка не поддерживается" } }
       }
     },
+    "error.network_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Network is unavailable; the transfer will resume when it returns" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Сеть недоступна; передача возобновится после восстановления соединения" } }
+      }
+    },
+    "error.volume_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The download volume is unavailable or has changed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Том загрузки недоступен или был заменён" } }
+      }
+    },
+    "error.permission_denied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The download location is not writable" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "В каталог загрузки нельзя записать" } }
+      }
+    },
+    "error.insufficient_space": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "There is not enough free space for this transfer" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Недостаточно свободного места для этой передачи" } }
+      }
+    },
+    "error.resource_constrained": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Transfers are paused while system resources are constrained" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Передачи приостановлены из-за ограниченных ресурсов системы" } }
+      }
+    },
+    "error.system_sleeping": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Transfers will resume after wake" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Передачи возобновятся после выхода из сна" } }
+      }
+    },
+    "error.restart_engine_safely": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine needs a safe restart" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Требуется безопасный перезапуск движка" } }
+      }
+    },
+    "error.store_error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The transfer state could not be saved" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось сохранить состояние передачи" } }
+      }
+    },
+    "recovery.restart_engine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Restart Engine Safely" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Безопасно перезапустить движок" } }
+      }
+    },
+    "recovery.restart_engine.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Stop, restart, and reconcile the engine without changing torrent intent" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Остановить, перезапустить и сверить движок без изменения намерений торрентов" } }
+      }
+    },
+    "recovery.restart_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine could not be safely restarted" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось безопасно перезапустить движок" } }
+      }
+    },
     "snapshot.failed": {
       "extractionState": "manual",
       "localizations": {

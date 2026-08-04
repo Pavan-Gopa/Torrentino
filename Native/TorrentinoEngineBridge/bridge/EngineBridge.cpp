@@ -368,6 +368,9 @@ lt::settings_pack make_settings(const SessionConfiguration& config)
 	pack.set_bool(lt::settings_pack::enable_upnp, config.enable_upnp);
 	pack.set_bool(lt::settings_pack::enable_natpmp, config.enable_natpmp);
 	pack.set_int(lt::settings_pack::connections_limit, config.max_connections);
+	pack.set_int(lt::settings_pack::active_downloads, config.max_active_downloads);
+	pack.set_int(lt::settings_pack::active_seeds, config.max_active_seeds);
+	pack.set_int(lt::settings_pack::connection_speed, config.max_connection_attempts);
 	pack.set_int(lt::settings_pack::download_rate_limit,
 		static_cast<int>(config.max_download_bytes_per_sec));
 	pack.set_int(lt::settings_pack::upload_rate_limit,
@@ -418,6 +421,14 @@ bool validate_configuration(const SessionConfiguration& config, std::string& mes
 	}
 	if (config.max_connections <= 0) {
 		message = "max_connections must be positive";
+		return false;
+	}
+	if (config.max_active_downloads <= 0 || config.max_active_seeds <= 0) {
+		message = "active torrent limits must be positive";
+		return false;
+	}
+	if (config.max_connection_attempts < 0 || config.cache_bytes <= 0) {
+		message = "connection and cache limits must be non-negative and positive respectively";
 		return false;
 	}
 	if (config.max_download_bytes_per_sec < 0

@@ -126,6 +126,19 @@ final class TorrentListViewModel: ObservableObject {
         }
     }
 
+    func restartEngineSafely() {
+        Task {
+            do {
+                try await client.restartEngineSafely()
+                commandError = nil
+                connectionNote = nil
+                try await fetchFullSnapshot()
+            } catch {
+                surfaceCommandError(error, fallback: "recovery.restart_failed")
+            }
+        }
+    }
+
     // MARK: - Event application (reconciliation)
 
     private func apply(_ events: [EngineEventV1]) {
@@ -467,6 +480,16 @@ final class TorrentListViewModel: ObservableObject {
             case .unsupportedOperation: return String(localized: "error.unsupported_operation")
             case .engineBusy, .engineNotReady, .operationTimeout:
                 return String(localized: "error.engine_operation")
+            case .networkUnavailable: return String(localized: "error.network_unavailable")
+            case .volumeUnavailable: return String(localized: "error.volume_unavailable")
+            case .permissionDenied: return String(localized: "error.permission_denied")
+            case .insufficientSpace: return String(localized: "error.insufficient_space")
+            case .resourceConstrained: return String(localized: "error.resource_constrained")
+            case .systemSleeping: return String(localized: "error.system_sleeping")
+            case .crashLoopSafeMode, .engineUnresponsive:
+                return String(localized: "error.restart_engine_safely")
+            case .storeError: return String(localized: "error.store_error")
+            case .internalError: return String(localized: "error.internal")
             default: break
             }
         }

@@ -54,7 +54,13 @@ public actor EngineCoordinator {
     /// destroying torrent handles. The download directory is retained by the
     /// bridge as the default for future add requests.
     public func apply(settings: EngineSettings) throws {
-        let configuration = Self.sessionConfiguration(for: settings)
+        try apply(configuration: Self.sessionConfiguration(for: settings))
+    }
+
+    /// Applies a complete bridge configuration without losing the engine's
+    /// torrent handles. Resource pressure uses this entry point so the native
+    /// session receives the same limits the coordinator uses for admission.
+    public func apply(configuration: SessionConfigurationDTO) throws {
         if started {
             let data = try encode(configuration)
             _ = try envelope { try adapter.applyEngine(withConfigurationData: data) }
@@ -165,7 +171,10 @@ public actor EngineCoordinator {
         started = false
     }
 
-    private static func sessionConfiguration(for settings: EngineSettings) -> SessionConfigurationDTO {
+    public static func sessionConfiguration(
+        for settings: EngineSettings,
+        budget: EngineResourceBudget = .balanced
+    ) -> SessionConfigurationDTO {
         SessionConfigurationDTO(
             listenPort: Int(settings.listenPort),
             downloadDir: settings.downloadDirectory,
@@ -174,6 +183,12 @@ public actor EngineCoordinator {
             enableUPnP: settings.upnpEnabled,
             enableNATPMP: settings.natPmpEnabled,
             encryptionEnabled: settings.encryptionEnabled,
+            maxConnections: max(1, budget.maxPeerConnections),
+            maxActiveDownloads: max(1, budget.maxActiveDownloads),
+            maxActiveSeeds: max(1, budget.maxActiveSeeds),
+            maxConnectionAttempts: max(0, budget.maxConnectionAttempts),
+            cacheBytes: max(1, budget.cacheBytes),
+            alertQueueSize: UInt32(clamping: max(1, budget.alertDrainBatch * 4)),
             maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
             maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
             proxy: SessionProxyDTO(

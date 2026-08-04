@@ -151,7 +151,10 @@ final class AgentRuntime: @unchecked Sendable {
             defaultSaveLocation: PersistedLocation(path: Self.defaultDownloadsPath),
             pumpIntervalNanoseconds: 500_000_000,
             healthReporter: healthLane,
-            safeRecovery: safeRecovery
+            safeRecovery: safeRecovery,
+            clearSafeRecovery: { [weak self] in
+                self?.clearSafeRecoveryAfterExplicitRestart()
+            }
         )
         stateQueue.sync {
             self.transferCoordinator = coordinator
@@ -181,6 +184,13 @@ final class AgentRuntime: @unchecked Sendable {
         }
         stateQueue.sync { conditionMonitor = monitor }
         monitor.start()
+    }
+
+    private func clearSafeRecoveryAfterExplicitRestart() {
+        stateQueue.sync {
+            crashLoopGuard.clearHistory()
+            healthLane.markSafeRecovery(false)
+        }
     }
 
     /// Default torrent save location: the current user's Downloads folder.
@@ -347,41 +357,5 @@ final class AgentRuntime: @unchecked Sendable {
             log.notice("accepted ui connection effectiveUserIdentifier=\(connection.effectiveUserIdentifier)")
             return true
         }
-    }
-}
-
-/// Durable start history used only to enter safe recovery after a real
-/// crash-loop. The launchd `ThrottleInterval` remains the first line of
-/// defense; this guard prevents repeated auto-resume even when launchd keeps
-/// attempting to start the job. A clean stop removes the bounded history.
-final class CrashLoopGuard: @unchecked Sendable {
-    private static let window: TimeInterval = 5 * 60
-    private static let threshold = 3
-    private let fileURL: URL
-    let isSafeRecovery: Bool
-
-    private init(fileURL: URL, isSafeRecovery: Bool) {
-        self.fileURL = fileURL
-        self.isSafeRecovery = isSafeRecovery
-    }
-
-    static func begin(in engineDirectory: URL) -> CrashLoopGuard {
-        let fileURL = engineDirectory.appendingPathComponent("crash-history.json", isDirectory: false)
-        let now = Date().timeIntervalSince1970
-        let previous = (try? Data(contentsOf: fileURL))
-            .flatMap { try? JSONDecoder().decode([Double].self, from: $0) }
-            ?? []
-        let recent = previous.filter { now - $0 < Self.window }
-        let starts = recent + [now]
-        let safe = starts.count >= Self.threshold
-        if let data = try? JSONEncoder().encode(starts) {
-            try? data.write(to: fileURL, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-        }
-        return CrashLoopGuard(fileURL: fileURL, isSafeRecovery: safe)
-    }
-
-    func markClean() {
-        try? FileManager.default.removeItem(at: fileURL)
     }
 }

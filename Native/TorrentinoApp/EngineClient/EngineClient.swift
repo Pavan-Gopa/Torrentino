@@ -136,6 +136,17 @@ actor EngineClient {
         }
     }
 
+    /// Performs the agent-side safe restart. The command succeeds only after
+    /// the coordinator has restarted the engine and reconciled its handles.
+    func restartEngineSafely() async throws {
+        let command = EngineCommandV1.restartEngineSafely(
+            RestartEngineSafelyRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey())
+        )
+        guard case .ack = try await sendCommand(command) else {
+            throw EngineClientError.protocolMismatch(details: "restartEngineSafely returned an unexpected payload")
+        }
+    }
+
     /// Low-level variant returning the raw result envelope (tests, diagnostics).
     func sendEnvelope(_ envelope: IPCEnvelope) async throws -> IPCEnvelope {
         guard envelope.kind == .request, let requestID = envelope.requestID else {

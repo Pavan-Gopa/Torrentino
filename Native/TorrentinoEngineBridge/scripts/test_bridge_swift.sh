@@ -106,6 +106,7 @@ AGENT_SOURCES=(
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MagnetParser.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Metainfo.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Preflight.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/StatusCache.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TorrentAdder.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferEventBus.swift"

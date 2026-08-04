@@ -47,6 +47,14 @@ struct TorrentListView: View {
                     }
                     .help(String(localized: "menu.torrent.inspector"))
                     .accessibilityLabel(String(localized: "menu.torrent.inspector"))
+
+                    Button {
+                        viewModel.restartEngineSafely()
+                    } label: {
+                        Label(String(localized: "recovery.restart_engine"), systemImage: "arrow.clockwise.circle")
+                    }
+                    .disabled(viewModel.usingFixture)
+                    .help(String(localized: "recovery.restart_engine.help"))
                 }
             }
         }

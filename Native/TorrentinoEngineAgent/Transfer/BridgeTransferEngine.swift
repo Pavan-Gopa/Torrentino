@@ -16,9 +16,9 @@ import TorrentinoIPC
 public actor BridgeTransferEngine: TransferEngine {
     private let coordinator: EngineCoordinator
     private var started = false
-    private var latestPerTorrent: [String: (fraction: Double, state: Int, error: String?)] = [:]
-    private var latestOrder: [String] = []
-    private let maxCachedTorrents = 1024
+    private var statusCache = ByteBoundedStatusCache()
+    private var resourceBudget = EngineResourceBudget.balanced
+    private var activeSettings = EngineSettings.default
 
     public init(coordinator: EngineCoordinator) {
         self.coordinator = coordinator
@@ -28,27 +28,61 @@ public actor BridgeTransferEngine: TransferEngine {
         started
     }
 
+    public var currentResourceBudget: EngineResourceBudget {
+        resourceBudget
+    }
+
     public func start(configuration: EngineSettings? = nil) async throws {
         guard !started else { return }
         // Bridge defaults: ephemeral loopback port, DHT off (WP-01 hermetic).
+        let bridgeConfiguration: SessionConfigurationDTO
         if let configuration {
-            _ = try await coordinator.start(configuration: Self.sessionConfiguration(for: configuration))
+            activeSettings = configuration
+            bridgeConfiguration = EngineCoordinator.sessionConfiguration(
+                for: configuration,
+                budget: resourceBudget
+            )
         } else {
-            _ = try await coordinator.start()
+            bridgeConfiguration = Self.defaultSessionConfiguration(for: resourceBudget)
         }
+        _ = try await coordinator.start(configuration: bridgeConfiguration)
         started = true
     }
 
     public func apply(settings: EngineSettings) async throws {
         do {
-            try await coordinator.apply(settings: settings)
-            latestPerTorrent.removeAll(keepingCapacity: true)
-            latestOrder.removeAll(keepingCapacity: true)
+            activeSettings = settings
+            try await coordinator.apply(configuration: EngineCoordinator.sessionConfiguration(
+                for: settings,
+                budget: resourceBudget
+            ))
+            statusCache.removeAll()
             started = true
         } catch {
             started = false
             throw Self.mappedBridgeError(error, operation: "applySettings")
         }
+    }
+
+    public func apply(resourceBudget: EngineResourceBudget) async throws {
+        self.resourceBudget = resourceBudget
+        statusCache.setByteLimit(resourceBudget.cacheBytes)
+        guard started else { return }
+        do {
+            try await coordinator.apply(configuration: EngineCoordinator.sessionConfiguration(
+                for: activeSettings,
+                budget: resourceBudget
+            ))
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "applyResourceBudget")
+        }
+    }
+
+    public func restart(configuration: EngineSettings? = nil) async throws {
+        await coordinator.shutdown()
+        started = false
+        statusCache.removeAll()
+        try await start(configuration: configuration ?? activeSettings)
     }
 
     public func add(specification: AddSpecificationDTO) async throws -> AddResultDTO {
@@ -103,18 +137,16 @@ public actor BridgeTransferEngine: TransferEngine {
     }
 
     public func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
-        let alerts = try await coordinator.drainAlerts(maxCount: max(1, min(maxAlerts, 200)))
+        let boundedBatch = max(1, min(maxAlerts, resourceBudget.alertDrainBatch))
+        let alerts = try await coordinator.drainAlerts(maxCount: boundedBatch)
         for alert in alerts {
             guard let torrentID = alert.torrentID else { continue }
-            latestPerTorrent[torrentID] = (alert.progress, alert.state, alert.error)
-            latestOrder.removeAll { $0 == torrentID }
-            latestOrder.append(torrentID)
-            while latestOrder.count > maxCachedTorrents, let oldest = latestOrder.first {
-                latestOrder.removeFirst()
-                latestPerTorrent.removeValue(forKey: oldest)
-            }
+            statusCache.insert(
+                CachedTorrentStatus(fraction: alert.progress, state: alert.state, error: alert.error),
+                for: torrentID
+            )
         }
-        return latestPerTorrent.map { torrentID, snapshot in
+        return statusCache.entries.map { torrentID, snapshot in
             TransferTorrentStatus(
                 engineID: torrentID,
                 progressFraction: max(0, min(1, snapshot.fraction)),
@@ -184,22 +216,24 @@ public actor BridgeTransferEngine: TransferEngine {
     }
 
     private static func sessionConfiguration(for settings: EngineSettings) -> SessionConfigurationDTO {
+        EngineCoordinator.sessionConfiguration(for: settings)
+    }
+
+    private static func defaultSessionConfiguration(for budget: EngineResourceBudget) -> SessionConfigurationDTO {
         SessionConfigurationDTO(
-            listenPort: Int(settings.listenPort),
-            downloadDir: settings.downloadDirectory,
-            enableDHT: settings.dhtEnabled,
-            enableLSD: settings.lsdEnabled,
-            enableUPnP: settings.upnpEnabled,
-            enableNATPMP: settings.natPmpEnabled,
-            encryptionEnabled: settings.encryptionEnabled,
-            maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
-            maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
-            proxy: SessionProxyDTO(
-                kind: settings.proxy.kind.rawValue,
-                host: settings.proxy.host,
-                port: settings.proxy.port,
-                username: settings.proxy.username
-            )
+            listenPort: 0,
+            downloadDir: nil,
+            enableDHT: false,
+            enableLSD: false,
+            enableUPnP: false,
+            enableNATPMP: false,
+            encryptionEnabled: true,
+            maxConnections: max(1, budget.maxPeerConnections),
+            maxActiveDownloads: max(1, budget.maxActiveDownloads),
+            maxActiveSeeds: max(1, budget.maxActiveSeeds),
+            maxConnectionAttempts: max(0, budget.maxConnectionAttempts),
+            cacheBytes: max(1, budget.cacheBytes),
+            alertQueueSize: UInt32(clamping: max(1, budget.alertDrainBatch * 4))
         )
     }
 }

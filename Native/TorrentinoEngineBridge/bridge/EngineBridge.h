@@ -59,6 +59,10 @@ struct SessionConfiguration {
 	bool enable_natpmp = false;
 	bool encryption_enabled = true;
 	int max_connections = 120;
+	int max_active_downloads = 4;
+	int max_active_seeds = 8;
+	int max_connection_attempts = 20;
+	std::int64_t cache_bytes = 64 * 1024 * 1024;
 	std::int64_t max_download_bytes_per_sec = 0;
 	std::int64_t max_upload_bytes_per_sec = 0;
 	std::string proxy_kind = "none";

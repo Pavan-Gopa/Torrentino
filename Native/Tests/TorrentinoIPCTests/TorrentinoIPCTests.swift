@@ -914,6 +914,8 @@ final class TorrentinoIPCTests: TestProfileCase {
         XCTAssertEqual(decoded, fault)
         XCTAssertEqual(EngineFault.storageFailure(details: "No space left on device").code, .insufficientSpace)
         XCTAssertEqual(EngineFault.storageFailure(details: "permission denied").code, .permissionDenied)
+        XCTAssertEqual(EngineFault.storageFailure(details: "persistence volume unavailable errno=ENOENT").code, .volumeUnavailable)
+        XCTAssertTrue(EngineFault.crashLoopSafeMode().recoveryActions.contains("restart_engine_safely"))
     }
 
     func testWP09IdempotencyTrackerEvictsOldestEntry() async {

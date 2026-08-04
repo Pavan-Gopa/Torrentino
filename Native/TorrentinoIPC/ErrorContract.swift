@@ -370,6 +370,12 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         if text.contains("permission") || text.contains("access denied") || text.contains("read-only") || text.contains("eacces") {
             return .permissionDenied(recordID: recordID, volumeIdentifier: volumeIdentifier)
         }
+        if text.contains("volume unavailable") || text.contains("not mounted")
+            || text.contains("no such file") || text.contains("enoent")
+            || text.contains("enodev") || text.contains("enxio")
+            || text.contains("stale file handle") {
+            return .volumeUnavailable(recordID: recordID, volumeIdentifier: volumeIdentifier)
+        }
         return EngineFault(
             code: .storeError,
             severity: .error,

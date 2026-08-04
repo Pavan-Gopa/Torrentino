@@ -117,6 +117,11 @@
 		4A0000000000000000000824 /* SystemConditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000814 /* SystemConditions.swift */; };
 		4A0000000000000000000825 /* SystemConditionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000815 /* SystemConditionMonitor.swift */; };
 		4A0000000000000000000826 /* EngineCoordinatorError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000165 /* EngineCoordinatorError.swift */; };
+		4A0000000000000000000827 /* CrashLoopGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000816 /* CrashLoopGuard.swift */; };
+		4A0000000000000000000828 /* StatusCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BD /* StatusCache.swift */; };
+		4A0000000000000000000829 /* CrashLoopGuard.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000816 /* CrashLoopGuard.swift */; };
+		4A000000000000000000082A /* StatusCache.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001BD /* StatusCache.swift */; };
+		4A000000000000000000082B /* SystemConditionMonitor.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000815 /* SystemConditionMonitor.swift */; };
 		4A00000000000000000005F0 /* TransferSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001AD /* TransferSmokeTests.swift */; };
 		4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000111 /* TorrentListViewModel.swift */; };
 		4A00000000000000000005F2 /* TorrentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000112 /* TorrentListView.swift */; };
@@ -314,11 +319,13 @@
 		4A00000000000000000001B6 /* NegativeCorpus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NegativeCorpus.swift; sourceTree = "<group>"; };
 		4A0000000000000000000814 /* SystemConditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemConditions.swift; sourceTree = "<group>"; };
 		4A0000000000000000000815 /* SystemConditionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemConditionMonitor.swift; sourceTree = "<group>"; };
+		4A0000000000000000000816 /* CrashLoopGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashLoopGuard.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B7 /* TransferRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferRecord.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B8 /* TransferEventBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferEventBus.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B9 /* TorrentAdder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentAdder.swift; sourceTree = "<group>"; };
 		4A00000000000000000001BA /* TransferCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferCoordinator.swift; sourceTree = "<group>"; };
 		4A00000000000000000001BB /* BridgeTransferEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTransferEngine.swift; sourceTree = "<group>"; };
+		4A00000000000000000001BD /* StatusCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusCache.swift; sourceTree = "<group>"; };
 		4A00000000000000000001BC /* PathValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathValidator.swift; sourceTree = "<group>"; };
 		4A0000000000000000000111 /* TorrentListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListViewModel.swift; sourceTree = "<group>"; };
 		4A0000000000000000000112 /* TorrentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListView.swift; sourceTree = "<group>"; };
@@ -530,6 +537,7 @@
 				4A00000000000000000001B9 /* TorrentAdder.swift */,
 				4A00000000000000000001BA /* TransferCoordinator.swift */,
 				4A00000000000000000001BB /* BridgeTransferEngine.swift */,
+				4A00000000000000000001BD /* StatusCache.swift */,
 			);
 			path = Transfer;
 			sourceTree = "<group>";
@@ -541,6 +549,7 @@
 				4A0000000000000000000109 /* AgentRuntime.swift */,
 				4A000000000000000000010A /* AgentService.swift */,
 				4A0000000000000000000815 /* SystemConditionMonitor.swift */,
+				4A0000000000000000000816 /* CrashLoopGuard.swift */,
 			);
 			path = Agent;
 			sourceTree = "<group>";
@@ -971,6 +980,7 @@
 				4A0000000000000000000509 /* AgentRuntime.swift in Sources */,
 				4A000000000000000000050A /* AgentService.swift in Sources */,
 				4A0000000000000000000825 /* SystemConditionMonitor.swift in Sources */,
+				4A0000000000000000000827 /* CrashLoopGuard.swift in Sources */,
 				4A000000000000000000050B /* CounterStore.swift in Sources */,
 				4A00000000000000000005A1 /* PersistenceStore.swift in Sources */,
 				4A00000000000000000005A2 /* AtomicGeneration.swift in Sources */,
@@ -999,6 +1009,7 @@
 				4A00000000000000000005D9 /* TorrentAdder.swift in Sources */,
 				4A00000000000000000005DA /* TransferCoordinator.swift in Sources */,
 				4A00000000000000000005DB /* BridgeTransferEngine.swift in Sources */,
+				4A0000000000000000000828 /* StatusCache.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1098,6 +1109,9 @@
 				4A00000000000000000005ED /* HTTPSourceFetcher.swift in Sources */,
 				4A00000000000000000005EE /* NegativeCorpus.swift in Sources */,
 				4A00000000000000000005F0 /* TransferSmokeTests.swift in Sources */,
+				4A0000000000000000000829 /* CrashLoopGuard.swift in Tests */,
+				4A000000000000000000082A /* StatusCache.swift in Tests */,
+				4A000000000000000000082B /* SystemConditionMonitor.swift in Tests */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

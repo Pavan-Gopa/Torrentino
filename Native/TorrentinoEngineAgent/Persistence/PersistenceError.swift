@@ -28,6 +28,10 @@ enum PersistenceError: Error, CustomStringConvertible, Sendable {
     case injectedFailpoint(FailpointID)
     /// Filesystem refused an operation on the sidecar / database files.
     case ioFailure(reason: String)
+    /// The persistence boundary observed that its backing volume is absent.
+    /// Keeping this typed prevents the coordinator from presenting a detached
+    /// volume as a generic storage failure.
+    case volumeUnavailable(volumeIdentifier: String?)
     /// Another writer already owns the data directory lock.
     case alreadyLocked(url: String)
 
@@ -52,6 +56,8 @@ enum PersistenceError: Error, CustomStringConvertible, Sendable {
             return "injected failpoint \(id.rawValue)"
         case .ioFailure(let reason):
             return "persistence IO failure: \(reason)"
+        case .volumeUnavailable(let volumeIdentifier):
+            return "persistence volume unavailable: \(volumeIdentifier ?? "unknown")"
         case .alreadyLocked(let url):
             return "data directory is already locked by another writer: \(url)"
         }

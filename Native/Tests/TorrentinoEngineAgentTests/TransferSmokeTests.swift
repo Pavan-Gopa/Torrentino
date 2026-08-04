@@ -1430,6 +1430,239 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(recovered.torrents.first?.health, .healthy)
     }
 
+    func testWP09PressureGateBlocksHeavyWorkUntilRecovery() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .satisfied,
+            networkGeneration: 1,
+            thermal: .serious,
+            memoryPressure: .warning,
+            lowPower: false,
+            sleeping: false
+        ))
+
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))"
+        )
+        let constrainedAddCalls = await engineRef.addCallCount()
+        XCTAssertEqual(constrainedAddCalls, 0, "pressure must block engine add")
+        let constrained = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(constrained.torrents.first(where: { $0.id == recordID })?.health, .recoverableError(.resourceConstrained))
+
+        await coordinator.applySystemConditions(.normal.merged(network: .satisfied, networkGeneration: 2))
+        await coordinator.pumpOnce()
+        let recoveredAddCalls = await engineRef.addCallCount()
+        let recoveredStatusCalls = await engineRef.statusCallCount()
+        XCTAssertGreaterThan(recoveredAddCalls, 0, "recovery must re-admit the durable record")
+        XCTAssertGreaterThan(recoveredStatusCalls, 0, "normal pressure must allow status polling")
+    }
+
+    func testWP09TypedEngineFailureIsNotCollapsedToBusy() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "2", count: 40))"
+        )
+        await engineRef.setCoordinatorMutationError(.engineFailure)
+        let reply = await coordinator.processCommand(encode(.setLimits(SetLimitsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            limits: TorrentinoIPC.TransferLimits(maxDownloadBytesPerSec: 1_024)
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("typed engine failure must cross the command boundary")
+        }
+        XCTAssertEqual(fault.code, .engineUnresponsive)
+    }
+
+    func testWP09ReaddUsesPerRecordBackoff() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let marker = String(repeating: "e", count: 40)
+        await engineRef.failAdds(containing: marker)
+        _ = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(marker)"
+        )
+
+        await coordinator.pumpOnce()
+        let afterFirstRetry = await engineRef.addCallCount()
+        await coordinator.pumpOnce()
+        let afterSecondPump = await engineRef.addCallCount()
+        XCTAssertEqual(afterSecondPump, afterFirstRetry, "a failed re-add must not be attempted on every pump")
+    }
+
+    func testWP09PendingInspectionBytesAreBounded() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let sourceBytes = Int64(Self.largeInspectionTorrent(index: 0).count)
+        let pendingByteLimit = Int64(64 * 1024 * 1024)
+        let expectedCapacity = Int(pendingByteLimit / sourceBytes)
+        var accepted = 0
+        for index in 0...expectedCapacity {
+            let reply = await coordinator.processCommand(encode(.inspectAddSource(
+                InspectAddSourceRequest(
+                    requestID: RequestID(),
+                    source: .torrentFileData(Self.largeInspectionTorrent(index: index))
+                )
+            )))
+            let envelope = decode(IPCEnvelope.self, from: reply)
+            if case .success(.addSourceInspection) = envelope.result {
+                accepted += 1
+            } else {
+                break
+            }
+        }
+        XCTAssertEqual(accepted, expectedCapacity, "the byte budget admits only the bounded payload set")
+        let overLimit = await coordinator.processCommand(encode(.inspectAddSource(
+            InspectAddSourceRequest(
+                requestID: RequestID(),
+                source: .torrentFileData(Self.largeInspectionTorrent(index: 99))
+            )
+        )))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: overLimit).result else {
+            return XCTFail("the inspection byte limit must reject the next payload")
+        }
+        XCTAssertEqual(fault.code, .resourceLimitExceeded)
+    }
+
+    func testWP09DuplicateCommitUsesBoundedIdempotencyPath() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet("magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))")
+        )
+        let key = IdempotencyKey()
+        let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
+        ))))
+        let replay = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
+        ))))
+        XCTAssertEqual(first, replay, "duplicate/replay must use the bounded idempotency store")
+    }
+
+    func testWP09VolumeIdentityAndUnknownFreeSpaceAreConservative() throws {
+        let directory = profile.rootURL.appendingPathComponent("volume")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let mismatch = StorageLocationProbe.assess(
+            location: PersistedLocation(path: directory.path, volumeIdentifier: "expected"),
+            volumeIdentifierProvider: { _ in "actual" }
+        )
+        XCTAssertEqual(mismatch, .volumeUnavailable(volumeIdentifier: "expected"))
+
+        let matching = StorageLocationProbe.assess(
+            location: PersistedLocation(path: directory.path, volumeIdentifier: "expected"),
+            volumeIdentifierProvider: { _ in "expected" }
+        )
+        if case .available = matching {
+            // The identity match is the assertion; free space is host-dependent.
+        } else {
+            XCTFail("matching volume identity must not be rejected")
+        }
+        XCTAssertEqual(
+            StorageLocationProbe.classify(
+                exists: true,
+                isDirectory: true,
+                writable: true,
+                availableBytes: nil,
+                volumeIdentifier: "expected"
+            ),
+            .unknown(volumeIdentifier: "expected")
+        )
+    }
+
+    func testWP09PersistenceVolumeFaultCrossesCommitBoundary() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let inspection = try await inspect(
+            coordinator,
+            source: .torrentFileData(MetainfoBuilder.singleFile(name: "volume-fault.bin"))
+        )
+        FailpointInjector.arm(.beforeTemporaryWrite) { _ in
+            throw PersistenceError.volumeUnavailable(volumeIdentifier: "disk-fault")
+        }
+        defer { FailpointInjector.disarmAll() }
+        let reply = await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            operationID: inspection.operationID
+        ))))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("persistence fault must fail commitAdd")
+        }
+        XCTAssertEqual(fault.code, .volumeUnavailable)
+        XCTAssertEqual(fault.affectedVolume, "disk-fault")
+    }
+
+    func testWP09CrashLoopSafeModeRestartClearsAndReconciles() async throws {
+        let cleared = LockedFlag()
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(
+            engine: engine,
+            bus: bus,
+            safeRecovery: true,
+            clearSafeRecovery: { cleared.set() }
+        )
+        _ = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "1", count: 40))"
+        )
+        let safeModeAddCalls = await engineRef.addCallCount()
+        XCTAssertEqual(safeModeAddCalls, 0, "safe mode must not auto-add")
+        let reply = await coordinator.processCommand(encode(.restartEngineSafely(
+            RestartEngineSafelyRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey())
+        )))
+        XCTAssertEqual(try resultPayload(from: reply), .ack)
+        let restartCalls = await engineRef.restartCallCount()
+        XCTAssertEqual(restartCalls, 1)
+        XCTAssertTrue(cleared.value)
+        let reconciledAddCalls = await engineRef.addCallCount()
+        XCTAssertGreaterThan(reconciledAddCalls, 0, "successful restart must reconcile durable records")
+    }
+
+    func testWP09MonitorGenerationIncludesRouteIdentity() {
+        let first = SystemConditionMonitor.pathSignature(
+            status: "satisfied", interfaces: "wifi:en0", isExpensive: false,
+            isConstrained: false, supportsIPv4: true, supportsIPv6: true,
+            routeIdentity: "route=192.0.2.1"
+        )
+        let second = SystemConditionMonitor.pathSignature(
+            status: "satisfied", interfaces: "wifi:en0", isExpensive: false,
+            isConstrained: false, supportsIPv4: true, supportsIPv6: true,
+            routeIdentity: "route=198.51.100.1"
+        )
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testWP09CrashLoopGuardCanBeExplicitlyCleared() throws {
+        let directory = try profile.subdirectory("crash-loop")
+        XCTAssertFalse(CrashLoopGuard.begin(in: directory).isSafeRecovery)
+        XCTAssertFalse(CrashLoopGuard.begin(in: directory).isSafeRecovery)
+        XCTAssertTrue(CrashLoopGuard.begin(in: directory).isSafeRecovery)
+        CrashLoopGuard.begin(in: directory).clearHistory()
+        XCTAssertFalse(CrashLoopGuard.begin(in: directory).isSafeRecovery)
+    }
+
+    func testWP09BridgeStatusCacheEnforcesByteBudget() {
+        var cache = ByteBoundedStatusCache(entryLimit: 8, byteLimit: 100)
+        cache.insert(CachedTorrentStatus(fraction: 0.1, state: 1, error: nil), for: "one")
+        cache.insert(CachedTorrentStatus(fraction: 0.2, state: 2, error: nil), for: "two")
+        XCTAssertLessThanOrEqual(cache.byteCount, 100)
+        XCTAssertLessThanOrEqual(cache.entries.count, 1)
+    }
+
     // MARK: - Concurrency stress (shared coordinator state)
 
     func testConcurrentMixedCommandsAllResolve() async throws {
@@ -1614,7 +1847,12 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(after.persisted, before.persisted, "persisted limits must not change")
     }
 
-    private func makeCoordinator(engine: StubTransferEngine, bus: TransferEventBus) async throws -> (TransferCoordinator, PersistenceStore, StubTransferEngine) {
+    private func makeCoordinator(
+        engine: StubTransferEngine,
+        bus: TransferEventBus,
+        safeRecovery: Bool = false,
+        clearSafeRecovery: @escaping @Sendable () -> Void = {}
+    ) async throws -> (TransferCoordinator, PersistenceStore, StubTransferEngine) {
         let store = PersistenceStore(dataDirectory: profile.rootURL)
         _ = try await store.open()
         let coordinator = TransferCoordinator(
@@ -1622,7 +1860,9 @@ final class TransferSmokeTests: TestProfileCase {
             persistence: store,
             eventBus: bus,
             agentVersion: "test",
-            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path),
+            safeRecovery: safeRecovery,
+            clearSafeRecovery: clearSafeRecovery
         )
         return (coordinator, store, engine)
     }
@@ -1757,8 +1997,40 @@ final class TransferSmokeTests: TestProfileCase {
         }
     }
 
+    private static func largeInspectionTorrent(index: Int) -> Data {
+        let info = BencodeBuilder.encode(dictionary: [
+            ("length", BencodeBuilder.encode(integer: 1)),
+            ("name", BencodeBuilder.encode(string: "bounded-\(index).bin")),
+            ("piece length", BencodeBuilder.encode(integer: 16)),
+            ("pieces", BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: 20))),
+        ])
+        return BencodeBuilder.encode(dictionary: [
+            // Keep the serialized command below IPCPayloadLimit while filling
+            // the coordinator's 64 MiB retained-source budget.
+            ("comment", BencodeBuilder.encode(bytes: Data(repeating: UInt8(index), count: 2 * 1024 * 1024))),
+            ("info", info),
+        ])
+    }
+
     private func encode(_ command: EngineCommandV1) -> Data {
         (try? JSONEncoder().encode(IPCEnvelope.request(command))) ?? Data()
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+
+    func set() {
+        lock.lock()
+        storage = true
+        lock.unlock()
+    }
+
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }
 
@@ -1767,8 +2039,12 @@ final class TransferSmokeTests: TestProfileCase {
 private actor StubTransferEngine: TransferEngine {
     private var started = false
     private var nextID = 0
+    private var addCalls = 0
+    private var statusCalls = 0
+    private var restartCalls = 0
     private var statuses: [String: TransferTorrentStatus] = [:]
     private var settingsHistory: [EngineSettings] = []
+    private var resourceBudgetHistory: [EngineResourceBudget] = []
     private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
     private var appliedTrackers: [String: [String]] = [:]
     private var reannouncedIDs: [String] = []
@@ -1776,6 +2052,7 @@ private actor StubTransferEngine: TransferEngine {
     private var failNextSettingsApply = false
     private var failTorrentMutation = false
     private var unsupportedTorrentMutation = false
+    private var coordinatorMutationError: EngineCoordinatorError?
     /// When non-nil, add() throws for every magnet whose URI contains the
     /// marker (per-record engine fault injection).
     private var failAddMarker: String?
@@ -1783,6 +2060,16 @@ private actor StubTransferEngine: TransferEngine {
     var isStarted: Bool { started }
 
     func start(configuration: EngineSettings?) async throws {
+        started = true
+    }
+
+    func apply(resourceBudget: EngineResourceBudget) async throws {
+        resourceBudgetHistory.append(resourceBudget)
+    }
+
+    func restart(configuration: EngineSettings?) async throws {
+        restartCalls += 1
+        statuses.removeAll()
         started = true
     }
 
@@ -1797,6 +2084,7 @@ private actor StubTransferEngine: TransferEngine {
     }
 
     func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws {
+        if let coordinatorMutationError { throw coordinatorMutationError }
         if unsupportedTorrentMutation {
             throw EngineFault.unsupportedOperation(operation: "stub setLimits")
         }
@@ -1805,6 +2093,7 @@ private actor StubTransferEngine: TransferEngine {
     }
 
     func editTrackers(torrentID: String, trackers: [String]) async throws {
+        if let coordinatorMutationError { throw coordinatorMutationError }
         if unsupportedTorrentMutation {
             throw EngineFault.unsupportedOperation(operation: "stub editTrackers")
         }
@@ -1832,8 +2121,28 @@ private actor StubTransferEngine: TransferEngine {
         unsupportedTorrentMutation = value
     }
 
+    func setCoordinatorMutationError(_ error: EngineCoordinatorError?) {
+        coordinatorMutationError = error
+    }
+
     func settingsApplications() -> [EngineSettings] {
         settingsHistory
+    }
+
+    func resourceBudgetApplications() -> [EngineResourceBudget] {
+        resourceBudgetHistory
+    }
+
+    func addCallCount() -> Int {
+        addCalls
+    }
+
+    func statusCallCount() -> Int {
+        statusCalls
+    }
+
+    func restartCallCount() -> Int {
+        restartCalls
     }
 
     func limits(for torrentID: String) -> TorrentinoIPC.TransferLimits? {
@@ -1859,6 +2168,7 @@ private actor StubTransferEngine: TransferEngine {
     }
 
     func add(specification: AddSpecificationDTO) async throws -> AddResultDTO {
+        addCalls += 1
         if let marker = failAddMarker, specification.magnetURI?.contains(marker) == true {
             throw EngineStubError.addFailed
         }
@@ -1872,7 +2182,8 @@ private actor StubTransferEngine: TransferEngine {
     func remove(torrentID: String) async throws {}
 
     func statusUpdate() async throws -> [TransferTorrentStatus] {
-        Array(statuses.values)
+        statusCalls += 1
+        return Array(statuses.values)
     }
 
     func aggregateHealth() async throws -> TransferAggregateStats {

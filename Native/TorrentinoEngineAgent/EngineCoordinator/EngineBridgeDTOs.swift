@@ -51,6 +51,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
     public let enableNATPMP: Bool
     public let encryptionEnabled: Bool
     public let maxConnections: Int
+    public let maxActiveDownloads: Int
+    public let maxActiveSeeds: Int
+    public let maxConnectionAttempts: Int
+    public let cacheBytes: Int64
     public let peerIDPrefix: String
     public let operationTimeoutMS: UInt32
     public let alertQueueSize: UInt32
@@ -70,6 +74,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         enableNATPMP: Bool = false,
         encryptionEnabled: Bool = true,
         maxConnections: Int = 120,
+        maxActiveDownloads: Int = 4,
+        maxActiveSeeds: Int = 8,
+        maxConnectionAttempts: Int = 20,
+        cacheBytes: Int64 = 64 * 1024 * 1024,
         peerIDPrefix: String = "-TT0400-",
         operationTimeoutMS: UInt32 = 10_000,
         alertQueueSize: UInt32 = 8_000,
@@ -85,6 +93,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         self.enableNATPMP = enableNATPMP
         self.encryptionEnabled = encryptionEnabled
         self.maxConnections = maxConnections
+        self.maxActiveDownloads = maxActiveDownloads
+        self.maxActiveSeeds = maxActiveSeeds
+        self.maxConnectionAttempts = maxConnectionAttempts
+        self.cacheBytes = cacheBytes
         self.peerIDPrefix = peerIDPrefix
         self.operationTimeoutMS = operationTimeoutMS
         self.alertQueueSize = alertQueueSize
@@ -103,6 +115,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         self.enableNATPMP = try container.decodeIfPresent(Bool.self, forKey: .enableNATPMP) ?? false
         self.encryptionEnabled = try container.decodeIfPresent(Bool.self, forKey: .encryptionEnabled) ?? true
         self.maxConnections = try container.decode(Int.self, forKey: .maxConnections)
+        self.maxActiveDownloads = try container.decodeIfPresent(Int.self, forKey: .maxActiveDownloads) ?? 4
+        self.maxActiveSeeds = try container.decodeIfPresent(Int.self, forKey: .maxActiveSeeds) ?? 8
+        self.maxConnectionAttempts = try container.decodeIfPresent(Int.self, forKey: .maxConnectionAttempts) ?? 20
+        self.cacheBytes = try container.decodeIfPresent(Int64.self, forKey: .cacheBytes) ?? 64 * 1024 * 1024
         self.peerIDPrefix = try container.decode(String.self, forKey: .peerIDPrefix)
         self.operationTimeoutMS = try container.decode(UInt32.self, forKey: .operationTimeoutMS)
         self.alertQueueSize = try container.decode(UInt32.self, forKey: .alertQueueSize)
@@ -121,6 +137,10 @@ public struct SessionConfigurationDTO: Codable, Sendable, Equatable {
         case enableNATPMP = "enable-natpmp"
         case encryptionEnabled = "encryption-enabled"
         case maxConnections = "max-connections"
+        case maxActiveDownloads = "max-active-downloads"
+        case maxActiveSeeds = "max-active-seeds"
+        case maxConnectionAttempts = "max-connection-attempts"
+        case cacheBytes = "cache-bytes"
         case peerIDPrefix = "peer-id-prefix"
         case operationTimeoutMS = "operation-timeout-ms"
         case alertQueueSize = "alert-queue-size"

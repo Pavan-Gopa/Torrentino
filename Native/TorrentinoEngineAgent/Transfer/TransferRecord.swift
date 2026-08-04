@@ -192,6 +192,12 @@ public struct TransferTorrentStatus: Sendable, Equatable {
 public protocol TransferEngine: Sendable {
     var isStarted: Bool { get async }
     func start(configuration: EngineSettings?) async throws
+    /// Applies the effective system budget to native session policy. The
+    /// default keeps lightweight test engines source-compatible; production
+    /// bridges override it.
+    func apply(resourceBudget: EngineResourceBudget) async throws
+    /// Restarts the native engine and returns only after its session is live.
+    func restart(configuration: EngineSettings?) async throws
     func apply(settings: EngineSettings) async throws
     func add(specification: AddSpecificationDTO) async throws -> AddResultDTO
     func pause(torrentID: String) async throws
@@ -212,6 +218,12 @@ public protocol TransferEngine: Sendable {
 }
 
 public extension TransferEngine {
+    func apply(resourceBudget: EngineResourceBudget) async throws {}
+
+    func restart(configuration: EngineSettings?) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("safe engine restart")
+    }
+
     func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
         try await statusUpdate()
     }

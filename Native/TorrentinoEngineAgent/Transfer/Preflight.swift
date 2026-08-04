@@ -71,6 +71,7 @@ public enum Preflight {
 public enum StorageAvailabilityState: Sendable, Equatable {
     case available(volumeIdentifier: String?, availableBytes: Int64?)
     case volumeUnavailable(volumeIdentifier: String?)
+    case unknown(volumeIdentifier: String?)
     case permissionDenied(volumeIdentifier: String?)
     case insufficientSpace(volumeIdentifier: String?, availableBytes: Int64)
 }
@@ -86,7 +87,8 @@ public enum StorageLocationProbe {
         location: PersistedLocation,
         requiredBytes: Int64 = 0,
         minimumFreeSpaceReserveBytes: Int64 = Self.minimumFreeSpaceReserveBytes,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        volumeIdentifierProvider: ((URL) -> String?)? = nil
     ) -> StorageAvailabilityState {
         let expanded = (location.path as NSString).expandingTildeInPath
         guard !expanded.isEmpty else {
@@ -103,12 +105,28 @@ public enum StorageLocationProbe {
         guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             return .permissionDenied(volumeIdentifier: location.volumeIdentifier)
         }
+        if let expected = location.volumeIdentifier, !expected.isEmpty {
+            let actual: String?
+            if let volumeIdentifierProvider {
+                actual = volumeIdentifierProvider(url)
+            } else {
+                actual = Self.mountedVolumeIdentifier(for: url)
+            }
+            guard actual == expected else {
+                return .volumeUnavailable(volumeIdentifier: expected)
+            }
+        }
         guard fileManager.isWritableFile(atPath: url.path) else {
             return .permissionDenied(volumeIdentifier: location.volumeIdentifier)
         }
 
         let available = (try? fileManager.attributesOfFileSystem(forPath: url.path)[.systemFreeSize] as? NSNumber)?.int64Value
-        if let available, available < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
+        guard let available else {
+            // Unknown free space is not proof of availability. Refusing to
+            // start is safer than accepting a full or detached volume.
+            return .unknown(volumeIdentifier: location.volumeIdentifier)
+        }
+        if available < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
             return .insufficientSpace(
                 volumeIdentifier: location.volumeIdentifier,
                 availableBytes: available
@@ -129,10 +147,15 @@ public enum StorageLocationProbe {
     ) -> StorageAvailabilityState {
         guard exists, isDirectory else { return .volumeUnavailable(volumeIdentifier: volumeIdentifier) }
         guard writable else { return .permissionDenied(volumeIdentifier: volumeIdentifier) }
-        if let availableBytes,
-           availableBytes < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
+        guard let availableBytes else { return .unknown(volumeIdentifier: volumeIdentifier) }
+        if availableBytes < max(0, requiredBytes) + max(0, minimumFreeSpaceReserveBytes) {
             return .insufficientSpace(volumeIdentifier: volumeIdentifier, availableBytes: availableBytes)
         }
         return .available(volumeIdentifier: volumeIdentifier, availableBytes: availableBytes)
+    }
+
+    private static func mountedVolumeIdentifier(for url: URL) -> String? {
+        guard let values = try? url.resourceValues(forKeys: [.volumeUUIDStringKey]) else { return nil }
+        return values.volumeUUIDString
     }
 }
