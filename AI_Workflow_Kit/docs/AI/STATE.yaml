@@ -1,10 +1,7 @@
 current_step: WP-10
 step_description: >-
-  Safe file operations. prepareRemoval/commitRemoval, exact manifest/token,
-  Trash only, shared-path detection, symlink/hardlink/TOCTOU protection,
-  durable per-item Trash journal + partial rollback/guided recovery,
-  per-record batch result, same/cross-volume move journal, force recheck.
-  No permanent delete API.
+  Safe file operations under review. Trash journals, prepare/commit removal,
+  move recovery, no permanent delete.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -27,23 +24,23 @@ completed_steps:
 - WP-08
 - WP-09
 implementation:
-  status: pending
-  attempts: 0
-  note: PRE torrentino/pre-WP-10. WP-09 PRODUCT GREEN closed.
+  status: waiting_review
+  attempts: 1
+  note: >-
+    feat 0725b57. Coder claims all WP-10 gates PASS; build/test green; 106/107
+    suite (Legacy env). Independent Reviewer required.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: null
-  note: ''
+  note: Overwrite coder-shaped WAITING_REVIEW FEEDBACK with real verdict.
 qa:
-  status: green
+  status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-09
-  bugs_open: 0
-  note: >-
-    WP-09 PRODUCT GREEN / ENVIRONMENTAL Legacy waived. 227 XCTest, fault matrix
-    green. Security Engineer not invoked (ADR-015 on-demand).
-next_actor: coder
+  suite: WP-10
+  bugs_open: open
+  note: Tester after APPROVED. Legacy env waived.
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -54,10 +51,9 @@ security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-10
   last_post_tag: torrentino/WP-09-done
-  last_commit: 8de5143
+  last_commit: 0725b57
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  WP-10 safe file ops. Trash-only removal, journals, TOCTOU, no permanent delete.
-  No WP-11 creator / WP-12 Metal. No Legacy.
+  Awaiting independent WP-10 review.
