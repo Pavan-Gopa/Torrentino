@@ -107,7 +107,7 @@ actor PersistenceStore {
 
     /// Current schema version. The migration runner applies every migration
     /// above the stored version; a stored version ABOVE this blocks the open.
-    static let schemaVersion: Int = 1
+    static let schemaVersion: Int = 2
 
     /// Session keys. clean_shutdown is the last durable write of a clean stop.
     static let cleanShutdownKey = "clean_shutdown"
@@ -940,7 +940,9 @@ actor PersistenceStore {
 
     // MARK: - Internal SQL plumbing
 
-    private func requireOpen() throws {
+    // WP-10: the RemovalJournal extension (separate file) shares these helpers;
+    // keep them internal (not private) for that file's store extension.
+    func requireOpen() throws {
         guard connection != nil, state != .closed, state != .unopened else {
             throw PersistenceError.notOpen
         }
@@ -973,7 +975,8 @@ actor PersistenceStore {
         }
     }
 
-    private func prepare(_ sql: String) throws -> SQLiteStatement {
+    // WP-10: shared with the RemovalJournal store extension (separate file).
+    func prepare(_ sql: String) throws -> SQLiteStatement {
         guard let connection else { throw PersistenceError.notOpen }
         do {
             return try connection.prepare(sql)
@@ -1194,6 +1197,53 @@ actor PersistenceStore {
                 generation INTEGER NOT NULL DEFAULT 0,
                 reason TEXT NOT NULL,
                 payload BLOB
+            )
+            """,
+        ]),
+        // WP-10: durable two-phase removal tokens + per-item Trash journal +
+        // same/cross-volume move journal. Tokens and journal rows are written
+        // BEFORE any payload mutation; they are deleted only after the record
+        // is durably removed or the move is durably committed.
+        (2, [
+            """
+            CREATE TABLE removal_tokens (
+                token TEXT PRIMARY KEY NOT NULL,
+                record_id TEXT NOT NULL,
+                delete_files INTEGER NOT NULL DEFAULT 0,
+                manifest_json TEXT NOT NULL,
+                shared_paths_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                outcome_json TEXT
+            )
+            """,
+            """
+            CREATE TABLE trash_journal (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'file',
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                failure_code TEXT,
+                failure_message TEXT,
+                updated_at INTEGER NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE move_journal (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_id TEXT NOT NULL,
+                from_path TEXT NOT NULL,
+                to_path TEXT NOT NULL,
+                file_list_json TEXT NOT NULL DEFAULT '[]',
+                stage TEXT NOT NULL DEFAULT 'prepared',
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                failure_reason TEXT
             )
             """,
         ]),

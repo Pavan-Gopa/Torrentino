@@ -41,6 +41,8 @@ public enum SuccessPayload: Codable, Sendable, Equatable {
     case proxyTest(ProxyTestResult)
     case incomingPortTest(IncomingPortTestResult)
     case removalToken(RemovalToken)
+    /// WP-10 commitRemoval batch outcome (per-record, partial success visible).
+    case removalResult(RemovalBatchResult)
     case createSourceInspection(CreateSourceInspection)
     case diagnosticsExport(DiagnosticsExportResult)
     case ack

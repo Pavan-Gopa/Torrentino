@@ -204,6 +204,9 @@ public protocol TransferEngine: Sendable {
     func resume(torrentID: String) async throws
     func recheck(torrentID: String) async throws
     func remove(torrentID: String) async throws
+    /// WP-10: async storage move for the torrent's payload to
+    /// `destinationPath` (destination files are adopted, never overwritten).
+    func moveStorage(torrentID: String, destinationPath: String) async throws
     func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws
     func editTrackers(torrentID: String, trackers: [String]) async throws
     func reannounce(torrentID: String) async throws
@@ -226,6 +229,10 @@ public extension TransferEngine {
 
     func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
         try await statusUpdate()
+    }
+
+    func moveStorage(torrentID: String, destinationPath: String) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("storage move")
     }
 }
 

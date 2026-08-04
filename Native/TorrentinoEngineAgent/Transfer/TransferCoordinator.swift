@@ -31,6 +31,8 @@ public actor TransferCoordinator {
     private let storageProbe: @Sendable (PersistedLocation, Int64) -> StorageAvailabilityState
     private let healthReporter: (any EngineHealthReporter)?
     private let clearSafeRecovery: @Sendable () -> Void
+    /// WP-10: injectable per-item Trash primitive (tests simulate failures).
+    private let trashProvider: any TrashProviding
     private let log = Logger(subsystem: "com.torrentino.app.engine-agent", category: "transfer")
 
     // MARK: - State
@@ -82,7 +84,8 @@ public actor TransferCoordinator {
         },
         healthReporter: (any EngineHealthReporter)? = nil,
         safeRecovery: Bool = false,
-        clearSafeRecovery: @escaping @Sendable () -> Void = {}
+        clearSafeRecovery: @escaping @Sendable () -> Void = {},
+        trashProvider: any TrashProviding = FileManagerTrashProvider()
     ) {
         self.engine = engine
         self.persistence = persistence
@@ -94,6 +97,7 @@ public actor TransferCoordinator {
         self.healthReporter = healthReporter
         self.safeRecovery = safeRecovery
         self.clearSafeRecovery = clearSafeRecovery
+        self.trashProvider = trashProvider
         let defaults = EngineSettings.default
         self.activeSettings = EngineSettings(
             downloadDirectory: defaultSaveLocation.path,
@@ -216,7 +220,58 @@ public actor TransferCoordinator {
         // Nothing was published for restored records (the UI connects fresh
         // and fetches a full snapshot), so the next delta starts above them.
         publishedRevision = engineRevision
+        await recoverInterruptedMoves()
         log.info("restore: rebuilt \(self.records.count) record(s), engineRevision \(self.engineRevision)")
+    }
+
+    /// WP-10 crash recovery for interrupted storage moves. Runs once at
+    /// restore; evidence-based, never guesses, never silently resumes a
+    /// half-finished move (no silent auto-resume — guided cases stay for the
+    /// user, and the UI learns of them on the next manifest/move attempt).
+    private func recoverInterruptedMoves() async {
+        let pending: [MoveJournalEntry]
+        do {
+            pending = try await persistence.pendingMoveJournals()
+        } catch {
+            log.error("move recovery: pendingMoveJournals failed: \(String(describing: error))")
+            return
+        }
+        for entry in pending {
+            let recommendation = MoveStorageRecovery.recommendation(for: entry)
+            switch recommendation {
+            case .resume(let recordID, let toPath):
+                // The engine move was issued and the destination exists: the
+                // crash happened before the record update — finish it.
+                guard let uuid = UUID(uuidString: recordID),
+                      var record = records[TorrentRecordID(rawValue: uuid)] else {
+                    log.warning("move recovery: resume target record missing, keeping journal: \(recordID)")
+                    continue
+                }
+                let destination = PersistedLocation(path: toPath, volumeIdentifier: record.saveLocation.volumeIdentifier)
+                do {
+                    try await persistence.setTorrentLocation(
+                        torrentID: recordID,
+                        location: destination
+                    )
+                } catch {
+                    log.warning("move recovery: resume persistence failed for \(recordID): \(String(describing: error))")
+                    continue
+                }
+                record = record.with(saveLocation: destination)
+                records[TorrentRecordID(rawValue: uuid)] = record
+                try? await persistence.deleteMoveJournal(recordID: recordID)
+                log.info("move recovery: resumed interrupted move for \(recordID)")
+            case .rollbackNoop(let recordID, _):
+                // Crash before the engine move was issued and the payload is
+                // still at the origin: nothing to fix, drop the journal row.
+                try? await persistence.deleteMoveJournal(recordID: recordID)
+                log.info("move recovery: rolled back never-started move for \(recordID)")
+            case .guided(let recordID, let fromPath, let toPath, let reason):
+                // Ambiguous evidence: keep the journal row; the next explicit
+                // move attempt reports the situation to the user.
+                log.warning("move recovery: guided recovery pending for \(recordID): \(reason) (\(fromPath) -> \(toPath))")
+            }
+        }
     }
 
     /// Applies an observation from the system-condition monitor. Desired state
@@ -338,8 +393,8 @@ public actor TransferCoordinator {
             return .success(.trackers(trackers(request: request)))
         case .fetchActivity(let request):
             return .success(.activity(activity(request: request)))
-        case .fetchRemovalManifestPage:
-            return .failure(unsupported("fetchRemovalManifestPage"))
+        case .fetchRemovalManifestPage(let request):
+            return await handleFetchRemovalManifestPage(request)
         case .fetchCreatorManifestPage:
             return .failure(unsupported("fetchCreatorManifestPage"))
         case .inspectAddSource(let request):
@@ -384,8 +439,9 @@ public actor TransferCoordinator {
             return await handlePrepareRemoval(request)
         case .commitRemoval(let request):
             return await handleCommitRemoval(request)
-        case .moveStorage,
-             .inspectCreateSource, .commitCreate, .exportDiagnostics:
+        case .moveStorage(let request):
+            return await handleMoveStorage(request)
+        case .inspectCreateSource, .commitCreate, .exportDiagnostics:
             return .failure(unsupported(command.name))
         }
     }
@@ -1420,6 +1476,20 @@ extension TransferRecord {
         )
     }
 
+    /// WP-10: move journal completion updates the durable save location.
+    fileprivate func with(saveLocation: PersistedLocation) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
     /// Live engine status merged into the record. Equal when nothing changed.
     fileprivate func applying(_ status: TransferTorrentStatus) -> TransferRecord {
         let fraction = min(1, max(0, status.progressFraction))
@@ -1669,44 +1739,263 @@ extension TransferCoordinator {
         return trimmed
     }
 
+    // MARK: - WP-10 removal (durable two-phase + Trash-only)
+
+    /// Mints a durable removal token. When `deleteFiles` is true, the EXACT
+    /// manifest (payload paths, shared-path protection) is derived from the
+    /// metainfo and frozen into the token row BEFORE the client may commit.
+    /// Nothing is ever deleted at prepare time.
     private func handlePrepareRemoval(_ request: PrepareRemovalRequest) async -> EngineCommandResult {
-        guard records[request.recordID] != nil else {
+        guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
-        guard pendingRemovalTokens.count < Self.pendingRemovalTokenLimit else {
+        let pendingCount = (try? await persistence.removalTokenCount()) ?? 0
+        guard pendingCount < Self.pendingRemovalTokenLimit else {
             return .failure(.resourceLimitExceeded(resource: "pending_removal_tokens", limit: Self.pendingRemovalTokenLimit))
         }
         let token = RemovalToken(rawValue: UUID().uuidString)
+        let otherPayloadFiles = records.values
+            .filter { $0.id != request.recordID }
+            .flatMap { RemovalManifestBuilder.payloadFiles(of: $0) }
+        let otherPayloadRoots = records.values
+            .filter { $0.id != request.recordID }
+            .compactMap { RemovalManifestBuilder.payloadRoot(of: $0) }
+
+        var manifestJSON = "{}"
+        var sharedPathsJSON = "[]"
+        if request.deleteFiles {
+            do {
+                let manifest = try RemovalManifestBuilder.build(
+                    record: record,
+                    otherPayloadFiles: Set(otherPayloadFiles),
+                    otherPayloadRoots: otherPayloadRoots
+                )
+                let encoder = JSONEncoder()
+                manifestJSON = String(data: try encoder.encode(manifest), encoding: .utf8) ?? "{}"
+                let shared = manifest.entries.filter(\.isShared).map(\.relativePath)
+                sharedPathsJSON = String(data: try encoder.encode(shared), encoding: .utf8) ?? "[]"
+            } catch {
+                return .failure(.invalidPayload(details: "removal manifest: \(error)"))
+            }
+        }
+        do {
+            try await persistence.createRemovalToken(
+                token: token.rawValue,
+                recordID: request.recordID.rawValue.uuidString,
+                deleteFiles: request.deleteFiles,
+                manifestJSON: manifestJSON,
+                sharedPathsJSON: sharedPathsJSON,
+                createdAt: Self.nowMilliseconds
+            )
+        } catch {
+            return .failure(Self.persistenceFault(
+                error,
+                recordID: request.recordID,
+                volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
         pendingRemovalTokens[token.rawValue] = request.recordID
         return .success(.removalToken(token))
     }
 
+    /// Serves the manifest page for a token straight from the durable token
+    /// row (never re-derived from live data). Only the exact manifest paths
+    /// are ever eligible for deletion; the UI shows them before committing.
+    private func handleFetchRemovalManifestPage(_ request: FetchRemovalManifestPageRequest) async -> EngineCommandResult {
+        let tokenRecord: RemovalTokenRecord
+        do {
+            guard let found = try await persistence.removalToken(by: request.token.rawValue) else {
+                return .failure(.invalidRequest(details: "removal token is unknown or expired"))
+            }
+            tokenRecord = found
+        } catch {
+            return .failure(.invalidRequest(details: "removal manifest lookup failed"))
+        }
+        guard let manifest = try? JSONDecoder().decode(
+            RemovalManifest.self,
+            from: Data(tokenRecord.manifestJSON.utf8)
+        ) else {
+            return .failure(.invalidPayload(details: "removal manifest is unavailable"))
+        }
+        let all = manifest.orderedEntries().map {
+            RemovalManifestEntry(relativePath: $0.relativePath, sizeBytes: $0.sizeBytes, kind: $0.kind)
+        }
+        let pageSize = PageSize.bounded(request.pageSize)
+        let offset = Self.cursorOffset(request.cursor)
+        let slice = Array(all.dropFirst(offset).prefix(pageSize))
+        let nextCursor: PageCursor? = offset + slice.count < all.count
+            ? PageCursor(token: Data("\(offset + slice.count)".utf8))
+            : nil
+        let revision = UUID(uuidString: tokenRecord.recordID)
+            .map { recordRevisions[TorrentRecordID(rawValue: $0)] ?? 0 } ?? 0
+        return .success(.removalManifestPage(Page(
+            items: slice,
+            nextCursor: nextCursor,
+            totalCount: all.count,
+            revision: revision
+        )))
+    }
+
+    private static func cursorOffset(_ cursor: PageCursor?) -> Int {
+        guard let cursor, let raw = String(data: cursor.token, encoding: .utf8), let value = Int(raw) else {
+            return 0
+        }
+        return max(0, value)
+    }
+
+    /// Commits a removal token. Idempotent: a replayed token whose outcome was
+    /// durably settled returns the IDENTICAL RemovalBatchResult. File deletion
+    /// is Trash-only, item-by-item, journaled BEFORE each item, with shared
+    /// paths skipped. The record is removed only when every payload item was
+    /// trashed (or skipped as shared); any failure settles the token as
+    /// cancelled and keeps the record + journal evidence (guided recovery —
+    /// never a silent auto-resume of a half-trashed batch).
     private func handleCommitRemoval(_ request: CommitRemovalRequest) async -> EngineCommandResult {
-        guard let recordID = pendingRemovalTokens.removeValue(forKey: request.token.rawValue),
-              let record = records[recordID] else {
-            return .failure(.invalidRequest(details: "removal token is unknown or expired"))
+        let tokenRecord: RemovalTokenRecord
+        do {
+            guard let found = try await persistence.removalToken(by: request.token.rawValue) else {
+                return .failure(.invalidRequest(details: "removal token is unknown or expired"))
+            }
+            tokenRecord = found
+        } catch {
+            return .failure(.invalidRequest(details: "removal token lookup failed"))
         }
 
+        // Idempotent replay: the outcome was durably settled.
+        if let outcomeJSON = tokenRecord.outcomeJSON,
+           let outcome = try? JSONDecoder().decode(RemovalBatchResult.self, from: Data(outcomeJSON.utf8)) {
+            return .success(.removalResult(outcome))
+        }
+        guard tokenRecord.status == "pending" else {
+            return .failure(.invalidRequest(details: "removal token is no longer active"))
+        }
+        guard let recordID = UUID(uuidString: tokenRecord.recordID).map({ TorrentRecordID(rawValue: $0) }) else {
+            return .failure(.invalidRequest(details: "removal token references an invalid record"))
+        }
+        guard let record = records[recordID] else {
+            return .failure(EngineFault.recordNotFound(recordID: recordID))
+        }
+        pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
+
+        var trashedItems: [TrashJournalEntry] = []
+        var skippedSharedItems: [String] = []
+        var failedItems: [RemovalItemFailure] = []
+
+        if tokenRecord.deleteFiles {
+            guard let manifest = try? JSONDecoder().decode(
+                RemovalManifest.self,
+                from: Data(tokenRecord.manifestJSON.utf8)
+            ) else {
+                try? await persistence.markRemovalTokenCancelled(
+                    token: request.token.rawValue,
+                    at: Self.nowMilliseconds
+                )
+                return .failure(.invalidPayload(details: "removal manifest is unavailable"))
+            }
+            let trashService = TrashService(trash: trashProvider)
+            for entry in manifest.orderedEntries() {
+                let now = Self.nowMilliseconds
+                let absolute = manifest.absolutePath(for: entry)
+                let seq = (try? await persistence.trashJournalAppend(
+                    token: request.token.rawValue,
+                    relativePath: entry.relativePath,
+                    absolutePath: absolute,
+                    kind: entry.kind.rawValue,
+                    sizeBytes: entry.sizeBytes,
+                    updatedAt: now
+                )) ?? -1
+                if entry.isShared {
+                    skippedSharedItems.append(entry.relativePath)
+                    try? await persistence.trashJournalUpdate(
+                        seq: seq,
+                        status: TrashJournalEntry.Status.skippedShared.rawValue,
+                        failureCode: nil,
+                        failureMessage: nil,
+                        updatedAt: now
+                    )
+                    continue
+                }
+                switch trashService.trash(entry: entry, manifest: manifest) {
+                case .trashed(let relativePath, let sizeBytes):
+                    trashedItems.append(TrashJournalEntry(
+                        seq: seq, token: request.token.rawValue, relativePath: relativePath,
+                        absolutePath: absolute, kind: entry.kind.rawValue, sizeBytes: sizeBytes,
+                        status: TrashJournalEntry.Status.trashed.rawValue,
+                        failureCode: nil, failureMessage: nil, updatedAt: now
+                    ))
+                    try? await persistence.trashJournalUpdate(
+                        seq: seq,
+                        status: TrashJournalEntry.Status.trashed.rawValue,
+                        failureCode: nil,
+                        failureMessage: nil,
+                        updatedAt: now
+                    )
+                case .failed(let failure):
+                    failedItems.append(RemovalItemFailure(
+                        relativePath: entry.relativePath, code: failure.code, message: failure.message
+                    ))
+                    try? await persistence.trashJournalUpdate(
+                        seq: seq,
+                        status: TrashJournalEntry.Status.failed.rawValue,
+                        failureCode: failure.code,
+                        failureMessage: failure.message,
+                        updatedAt: now
+                    )
+                }
+            }
+        }
+
+        let outcome: RemovalBatchOutcome
+        if failedItems.isEmpty {
+            outcome = .completed
+        } else if trashedItems.isEmpty {
+            outcome = .failed
+        } else {
+            outcome = .partial
+        }
+        let result = RemovalBatchResult(
+            recordID: recordID,
+            token: request.token,
+            outcome: outcome,
+            trashedItems: trashedItems.count,
+            skippedSharedItems: skippedSharedItems.count,
+            failedItems: failedItems
+        )
+
+        guard outcome == .completed else {
+            // Partial/failed: the record STAYS, the token is settled as
+            // cancelled, and the journal rows remain as recovery evidence.
+            try? await persistence.settleRemovalToken(
+                token: request.token.rawValue,
+                status: "cancelled",
+                outcomeJSON: Self.encodeOutcome(result),
+                at: Self.nowMilliseconds
+            )
+            return .success(.removalResult(result))
+        }
+
+        // Full success: remove from the engine (never asking the engine to
+        // delete files — the Trash already did, item by item), then persist.
         if let engineID = record.engineID, await ensureEngineStarted() {
             do {
                 try await engine.remove(torrentID: engineID)
             } catch {
+                try? await persistence.settleRemovalToken(
+                    token: request.token.rawValue,
+                    status: "cancelled",
+                    outcomeJSON: Self.encodeOutcome(result),
+                    at: Self.nowMilliseconds
+                )
                 return .failure(Self.engineFault(
-                    error,
-                    operation: "remove",
-                    recordID: recordID,
-                    fallback: "removal failed"
+                    error, operation: "remove", recordID: recordID, fallback: "removal failed"
                 ))
             }
         }
-
         do {
             try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
         } catch {
             return .failure(Self.persistenceFault(
-                error,
-                recordID: recordID,
-                volumeIdentifier: record.saveLocation.volumeIdentifier
+                error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
             ))
         }
 
@@ -1714,7 +2003,144 @@ extension TransferCoordinator {
         recordRevisions.removeValue(forKey: recordID)
         lastReannounceAt.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
+
+        try? await persistence.settleRemovalToken(
+            token: request.token.rawValue,
+            status: "committed",
+            outcomeJSON: Self.encodeOutcome(result),
+            at: Self.nowMilliseconds
+        )
+        try? await persistence.deleteTrashJournal(token: request.token.rawValue)
+        try? await persistence.pruneSettledRemovalTokens(keepNewest: 128)
+        return .success(.removalResult(result))
+    }
+
+    private static func encodeOutcome(_ result: RemovalBatchResult) -> String {
+        guard let data = try? JSONEncoder().encode(result),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
+    }
+
+    // MARK: - WP-10 storage move (durable journal + recovery)
+
+    /// Moves a torrent's payload to a new destination through the engine.
+    /// The move journal row is written BEFORE the destination is created and
+    /// the engine is asked to move; stage advances only on durable evidence.
+    /// On success the record's save location is persisted, the journal row is
+    /// dropped, and a force recheck validates the moved payload.
+    private func handleMoveStorage(_ request: MoveStorageRequest) async -> EngineCommandResult {
+        guard let record = records[request.recordID] else {
+            return .failure(EngineFault.recordNotFound(recordID: request.recordID))
+        }
+        let toPath = (request.destination.path as NSString).expandingTildeInPath
+        let fromPath = (record.saveLocation.path as NSString).expandingTildeInPath
+        guard toPath != fromPath else {
+            return .failure(.invalidPayload(details: "destination equals the current save location"))
+        }
+        guard let engineID = record.engineID, await ensureEngineStarted() else {
+            return .failure(EngineFault.engineNotReady(details: "engine not running"))
+        }
+
+        // A pending journal row means a move is already in flight for this
+        // record: refuse rather than interleave two moves.
+        if (try? await persistence.moveJournal(recordID: request.recordID.rawValue.uuidString)) != nil {
+            return .failure(.engineBusy(details: "storage move already in progress for this record"))
+        }
+        let fileListJSON = Self.encodePayloadFileList(of: record) ?? "[]"
+        let moveSeq: Int64
+        do {
+            moveSeq = try await persistence.moveJournalCreate(
+                recordID: request.recordID.rawValue.uuidString,
+                fromPath: fromPath,
+                toPath: toPath,
+                fileListJSON: fileListJSON,
+                startedAt: Self.nowMilliseconds
+            )
+        } catch {
+            return .failure(Self.persistenceFault(
+                error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
+
+        // stage: prepared — create the destination BEFORE the engine move.
+        do {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: toPath),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            try? await persistence.moveJournalUpdate(
+                seq: moveSeq,
+                stage: MoveJournalEntry.Stage.prepared.rawValue,
+                status: MoveJournalEntry.Status.failed.rawValue,
+                failureReason: "destination creation failed: \(error.localizedDescription)",
+                updatedAt: Self.nowMilliseconds
+            )
+            return .failure(.storageFailure(details: "cannot create destination directory"))
+        }
+
+        do {
+            try await engine.moveStorage(torrentID: engineID, destinationPath: toPath)
+        } catch {
+            try? await persistence.moveJournalUpdate(
+                seq: moveSeq,
+                stage: MoveJournalEntry.Stage.prepared.rawValue,
+                status: MoveJournalEntry.Status.failed.rawValue,
+                failureReason: String(describing: error),
+                updatedAt: Self.nowMilliseconds
+            )
+            return .failure(Self.engineFault(
+                error, operation: "moveStorage", recordID: request.recordID, fallback: "storage move failed"
+            ))
+        }
+
+        // stage: engine_moved — the payload is at the destination.
+        try? await persistence.moveJournalUpdate(
+            seq: moveSeq,
+            stage: MoveJournalEntry.Stage.engineMoved.rawValue,
+            status: MoveJournalEntry.Status.pending.rawValue,
+            failureReason: nil,
+            updatedAt: Self.nowMilliseconds
+        )
+
+        // stage: record_updated — persist the new save location, then complete.
+        do {
+            try await persistence.setTorrentLocation(
+                torrentID: request.recordID.rawValue.uuidString,
+                location: request.destination
+            )
+        } catch {
+            try? await persistence.moveJournalUpdate(
+                seq: moveSeq,
+                stage: MoveJournalEntry.Stage.recordUpdated.rawValue,
+                status: MoveJournalEntry.Status.pending.rawValue,
+                failureReason: String(describing: error),
+                updatedAt: Self.nowMilliseconds
+            )
+            return .failure(Self.persistenceFault(
+                error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
+        records[request.recordID] = record.with(saveLocation: request.destination)
+        bumpEngineRevision(change: .updated(request.recordID))
+        try? await persistence.deleteMoveJournal(recordID: request.recordID.rawValue.uuidString)
+
+        // Force recheck so the engine re-validates the moved payload.
+        try? await engine.recheck(torrentID: engineID)
         return .success(.ack)
+    }
+
+    private static func encodePayloadFileList(of record: TransferRecord) -> String? {
+        let relativePaths = record.metainfoData
+            .flatMap { try? Preflight.validateTorrentData($0) }
+            .map { $0.files.map(\.path) } ?? []
+        return String(data: (try? JSONEncoder().encode(relativePaths)) ?? Data(), encoding: .utf8)
+    }
+
+    private static var nowMilliseconds: Int64 {
+        Int64(Date.now.timeIntervalSince1970 * 1000)
     }
 
     private func setActiveSettings(_ settings: EngineSettings, revision: SettingsRevision) {

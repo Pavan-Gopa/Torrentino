@@ -2430,7 +2430,7 @@ private final class LockedFlag: @unchecked Sendable {
 
 // MARK: - Stub engine
 
-private actor StubTransferEngine: TransferEngine {
+actor StubTransferEngine: TransferEngine {
     private var started = false
     private var nextID = 0
     private var addCalls = 0
@@ -2442,6 +2442,10 @@ private actor StubTransferEngine: TransferEngine {
     private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
     private var appliedTrackers: [String: [String]] = [:]
     private var reannouncedIDs: [String] = []
+    private var recheckedIDs: [String] = []
+    private var movedStorage: [(torrentID: String, destinationPath: String)] = []
+    private var removedIDs: [String] = []
+    private var failMoveStorage = false
     private var failSettingsApply = false
     private var failNextSettingsApply = false
     private var failTorrentMutation = false
@@ -2572,8 +2576,37 @@ private actor StubTransferEngine: TransferEngine {
 
     func pause(torrentID: String) async throws {}
     func resume(torrentID: String) async throws {}
-    func recheck(torrentID: String) async throws {}
-    func remove(torrentID: String) async throws {}
+
+    func recheck(torrentID: String) async throws {
+        recheckedIDs.append(torrentID)
+    }
+
+    func remove(torrentID: String) async throws {
+        removedIDs.append(torrentID)
+    }
+
+    func moveStorage(torrentID: String, destinationPath: String) async throws {
+        if failMoveStorage {
+            throw EngineStubError.torrentMutationFailed
+        }
+        movedStorage.append((torrentID: torrentID, destinationPath: destinationPath))
+    }
+
+    func recheckCount(for torrentID: String) -> Int {
+        recheckedIDs.filter { $0 == torrentID }.count
+    }
+
+    func moveCalls() -> [(torrentID: String, destinationPath: String)] {
+        movedStorage
+    }
+
+    func removedCount(for torrentID: String) -> Int {
+        removedIDs.filter { $0 == torrentID }.count
+    }
+
+    func setFailMoveStorage(_ value: Bool) {
+        failMoveStorage = value
+    }
 
     func statusUpdate() async throws -> [TransferTorrentStatus] {
         statusCalls += 1

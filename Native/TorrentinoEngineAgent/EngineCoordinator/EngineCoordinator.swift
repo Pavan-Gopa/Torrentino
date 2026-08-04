@@ -131,6 +131,16 @@ public actor EngineCoordinator {
         return try decode(RemovalResultDTO.self, from: response)
     }
 
+    /// WP-10: async storage move for the given torrent to `destinationPath`
+    /// (bounded wait for storage_moved_alert / storage_moved_failed_alert;
+    /// dont_replace semantics: destination files are adopted, never
+    /// overwritten).
+    public func moveStorage(torrentID: String, destinationPath: String) throws {
+        guard started else { throw EngineCoordinatorError.notStarted }
+        let payload = try encode(MoveStorageRequestDTO(torrentID: torrentID, path: destinationPath))
+        try voidCall(payload) { try adapter.moveStorage(withPayloadData: $0) }
+    }
+
     /// Drains and returns the current alert batch (may be empty).
     public func drainAlerts(maxCount: Int = 100) throws -> [EngineAlertDTO] {
         guard started else { return [] } // engine not running: empty batch, like the bridge

@@ -129,6 +129,8 @@ enum class EngineAlertKind : std::int32_t {
 	removed = 7,
 	session = 8, // session-level notice (e.g. listen succeeded/failed)
 	unknown = 9,
+	storage_moved = 10,       // WP-10: async move_storage completed
+	storage_moved_failed = 11, // WP-10: async move_storage failed
 };
 
 // Stable kebab-case names shared with the Swift DTO (plist keys).
@@ -263,6 +265,10 @@ public:
 	Result<void> pause(const TorrentRecordID& id) noexcept;
 	Result<void> resume(const TorrentRecordID& id) noexcept;
 	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
+	// WP-10: async storage move. Bounded wait for storage_moved_alert /
+	// storage_moved_failed_alert. `dont_replace` semantics: files already
+	// present at the destination are adopted, never overwritten.
+	Result<void> moveStorage(const TorrentRecordID& id, const std::string& path) noexcept;
 	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits) noexcept;
 	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id) noexcept;
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;

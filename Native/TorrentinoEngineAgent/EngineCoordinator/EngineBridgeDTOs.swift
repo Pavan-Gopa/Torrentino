@@ -298,6 +298,25 @@ public struct RemovalResultDTO: Codable, Sendable, Equatable {
     }
 }
 
+/// WP-10 async storage move request (`moveStorage(id, path)`). The bridge
+/// performs a bounded wait for storage_moved_alert / storage_moved_failed_alert
+/// with dont_replace semantics (destination files are adopted, never
+/// overwritten).
+public struct MoveStorageRequestDTO: Codable, Sendable, Equatable {
+    public let torrentID: String
+    public let path: String
+
+    public init(torrentID: String, path: String) {
+        self.torrentID = torrentID
+        self.path = path
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case torrentID = "torrent-id"
+        case path = "path"
+    }
+}
+
 /// Parsed result of decoding an adapter DTO envelope.
 public enum DTODecodeResult<T: Codable & Sendable>: Sendable {
     case success(T)

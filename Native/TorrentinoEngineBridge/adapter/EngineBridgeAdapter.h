@@ -101,6 +101,13 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 - (nullable NSData *)commitRemovalWithTokenData:(NSData *)tokenData
 										  error:(NSError *_Nullable *_Nullable)error;
 
+/// WP-10: async storage move for {"torrent-id", "path"}. Returns `{}` when the
+/// move completed (storage_moved_alert); the wait is bounded by the operation
+/// timeout. dont_replace semantics: destination files are adopted, never
+/// overwritten.
+- (nullable NSData *)moveStorageWithPayloadData:(NSData *)payloadData
+										  error:(NSError *_Nullable *_Nullable)error;
+
 /// Drains pending alerts as a JSON array of EngineAlertDTO. The payload
 /// {"max-count": N} bounds the batch; an empty payload uses the default.
 /// Returns [] when the engine is not running or has been shut down.

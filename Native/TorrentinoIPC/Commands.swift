@@ -534,6 +534,62 @@ public struct IncomingPortTestResult: Codable, Sendable, Equatable {
     }
 }
 
+/// One failed item of a removal batch (WP-10 per-record batch result).
+/// The code is a stable machine-readable classifier; the message is
+/// diagnostic-only and never rendered verbatim by the UI.
+public struct RemovalItemFailure: Codable, Sendable, Equatable {
+    public let relativePath: String
+    public let code: String
+    public let message: String?
+
+    public init(relativePath: String, code: String, message: String? = nil) {
+        self.relativePath = relativePath
+        self.code = code
+        self.message = message
+    }
+}
+
+/// Batch-level outcome of a commitRemoval (WP-10: partial success is visible,
+/// never silently collapsed into success or failure).
+public enum RemovalBatchOutcome: String, Codable, Sendable, Equatable, CaseIterable {
+    /// Every manifest item was trashed (or skipped as shared) and the record
+    /// was removed.
+    case completed
+    /// Some items were trashed, at least one failed; the record was kept and
+    /// the token remains usable for guided recovery.
+    case partial
+    /// The removal could not start (e.g. token expired, engine refused);
+    /// nothing was trashed by this attempt.
+    case failed
+}
+
+/// The per-record batch result of commitRemoval (WP-10 ADR: per-record batch
+/// result, partial success visible).
+public struct RemovalBatchResult: Codable, Sendable, Equatable {
+    public let recordID: TorrentRecordID
+    public let token: RemovalToken
+    public let outcome: RemovalBatchOutcome
+    public let trashedItems: Int
+    public let skippedSharedItems: Int
+    public let failedItems: [RemovalItemFailure]
+
+    public init(
+        recordID: TorrentRecordID,
+        token: RemovalToken,
+        outcome: RemovalBatchOutcome,
+        trashedItems: Int,
+        skippedSharedItems: Int,
+        failedItems: [RemovalItemFailure]
+    ) {
+        self.recordID = recordID
+        self.token = token
+        self.outcome = outcome
+        self.trashedItems = trashedItems
+        self.skippedSharedItems = skippedSharedItems
+        self.failedItems = failedItems
+    }
+}
+
 /// Opaque one-shot token for the two-phase removal (plan ADR-010).
 public struct RemovalToken: Codable, Sendable, Equatable, CustomStringConvertible {
     public let rawValue: String

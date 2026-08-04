@@ -1,42 +1,39 @@
-# WP-09 Verification Feedback
+# WP-10 Verification Feedback
 
-**VERDICT: APPROVED**
+**VERDICT: WAITING_REVIEW**
 
-### 1. Build & tests
+### 1. Commands & results
 
-- `git diff --stat 165da59..HEAD -- Legacy/`: Empty (Legacy/ untouched in product commit range `165da59..HEAD`).
-- `xcodebuild build`: **PASS** (`Torrentino` scheme built clean for macOS arm64).
-- `xcodebuild test`: **PASS** (All unit test suites passed, including 17 new WP-09 specific tests in `TransferSmokeTests` and `TorrentinoIPCTests`).
-- `test_wp09_fault_matrix.sh`: **PASS**.
-- `test_bridge_headless.sh`: **PASS**.
-- `test_bridge_swift.sh`: **PASS**.
-- `run_qa_suite.sh`: 100/101 test scripts **PASS** (The only environment failure is `test_wp03_legacy_untouched.sh` due to pre-existing untracked human research files in `Legacy/`, which is ignored per ADR-013 / review guidelines).
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED** (Swift 6 Complete, warnings as errors, C++17 `-Werror` behind PIMPL).
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED** (full suite incl. 12 new WP-10 gates in `WPSafeFileOperationsTests`; schema test updated to expect v2).
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`: **PASS** (source list extended with the 4 new WP-10 agent files).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **106/107 PASS**; the only failure is `test_wp03_legacy_untouched.sh` due to pre-existing untracked Human research files in `Legacy/` (ADR-013 — environmental, not fixed). New `test_wp10_removal_durable.sh`, `test_wp10_move_recovery.sh`, `test_wp10_trash_only.sh` all **PASS**.
 
-### 2. WP compliance (§5 item table PASS/PARTIAL/FAIL + evidence)
+### 2. WP-10 gate table
 
-| # | WP-09 Requirement Item | Status | Evidence |
+| # | WP-10 Gate | Status | Evidence |
 |---|---|---|---|
-| 1 | `EngineResourceBudget` wired: `acceptsHeavyWork` blocks heavy work in `pumpOnce` + `handleCommitAdd`; limits reach bridge/engine consumers | **PASS** | `TransferCoordinator.swift` checks `resourceBudget.acceptsHeavyWork` in `handleCommitAdd` (lines 551-554) and `pumpOnce` (line 854). `BridgeTransferEngine.swift` passes `resourceBudget` to `EngineCoordinator.sessionConfiguration` where active/peer/cache limits configure the native engine. |
-| 2 | `restartEngineSafely` performs real recovery; `CrashLoopGuard`/`AgentRuntime` safe-mode clear/restart executable; not unconditional ack | **PASS** | `TransferCoordinator.swift` calls `engine.restart(configuration:)` (line 1025), resets `safeRecovery = false`, clears `engineID`s, and invokes `clearSafeRecovery()` callback which clears `CrashLoopGuard` start history in `AgentRuntime.swift`. |
-| 3 | Pending inspections memory-bounded; duplicate-add via `rememberIdempotency`+eviction; `StatusCache`/bridge cache enforces byte budget | **PASS** | `pendingOperationsLimit` (256) & `pendingInspectionBytesLimit` (64 MB) enforced in `handleInspect` (`TransferCoordinator.swift`). `rememberIdempotency` evicts oldest at 1024 limit. `ByteBoundedStatusCache.swift` calculates UTF-8 string sizes + payload overhead and trims entries exceeding `cacheBytes`. |
-| 4 | Re-add per-record backoff; no every-pump storm | **PASS** | `TransferCoordinator.swift` maintains `readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)]` and checks `now < backoff.nextAttemptAt` before attempting engine re-add in `pumpOnce()` (lines 885-887, 918-922). |
-| 5 | Volume-unavailable fault mapping; typed faults not collapsed to `engineBusy` when typed exists | **PASS** | `TransferCoordinator.persistenceFault` maps `PersistenceError.volumeUnavailable` to `.volumeUnavailable(recordID:volumeIdentifier:)` (lines 1251-1258). `engineHealth(from:recordID:)` maps typed `EngineFault.code` (.volumeUnavailable, .insufficientSpace, .permissionDenied, .networkUnavailable) directly without collapsing. |
-| 6 | `SystemConditionMonitor` path includes route/address identity | **PASS** | `SystemConditionMonitor.swift` incorporates `String(reflecting: path)` (route identity) into `pathSignature` (lines 150-161), incrementing `networkGeneration` on any route or interface address change. |
-| 7 | Preflight validates `volumeIdentifier` vs mounted volume; free-space unknown does not fail-open as available | **PASS** | `StorageLocationProbe.assess` in `Preflight.swift` compares `actual` vs `expected` volume identifier (lines 108-118), returning `.volumeUnavailable` on mismatch. Unknown free-space returns `.unknown`, which maps conservatively to `.recoverableError(.storeError)` rather than failing open. |
-| 8 | UI can surface key WP-09 faults; `restart_engine_safely` invokable if exposed | **PASS** | Toolbar button `recovery.restart_engine` in `TorrentListView.swift` calls `viewModel.restartEngineSafely()`, which executes `EngineClient.restartEngineSafely()` and updates snapshot state upon completion. Status bar and inspector render typed storage & recovery state. |
-| 9 | Tests exercise production paths (pressure gate, backoff, volume mismatch, crash-loop restart, cache bytes, etc.) | **PASS** | 17 comprehensive unit tests in `TransferSmokeTests.swift` and `TorrentinoIPCTests.swift` exercise pressure gating, per-record backoff, volume mismatch, crash-loop restart clearance, status cache byte limits, and typed fault round-trips. |
+| 1 | File outside manifest undeletable | **PASS** | Only manifest-validated relative paths (strict join of persisted saveLocation) are ever touched; `FileSafetyValidator.verifyChain` refuses any path escaping the root; `testWP10SafetyValidatorRefusesSymlinksMissingItemsAndSizeChanges`. |
+| 2 | Keep-data unchanged payload | **PASS** | Shared-path protection marks every path covered by another torrent (same save location or nested root) and skips it (`testWP10SharedPathRemovalSkipsFilesSharedWithAnotherTorrent`); `test_wp10_trash_only.sh` proves the untouched control payload stays byte-identical through a real platform Trash move. |
+| 3 | Failed Trash keeps record | **PASS** | `.partial`/`.failed` outcomes settle the token cancelled, keep the record, and keep the per-item journal rows as evidence (`testWP10CommitRemovalPartialFailure…`, `testWP10CommitRemovalTotalFailure…`). |
+| 4 | Partial Trash → recovery or guided recovery, no silent auto-resume | **PASS** | Partial batches never auto-resume: the token is settled with the exact outcome JSON, replay returns the IDENTICAL result, and recovery is user-guided (`testWP10MoveRecoveryGuidedKeepsJournalWhenEvidenceAmbiguous`, idempotent-replay assertions). |
+| 5 | Crash-during-move recovers | **PASS** | Move journal written BEFORE destination creation/engine move; stage advances only on durable evidence; restore derives resume / rollback-noop / guided from journal stage + lstat evidence (`testWP10MoveRecoveryResumesInterruptedMove`, `testWP10MoveRecoveryRollsBackNeverStartedMove`). |
 
-### 3. Architecture
+### 3. Invariants
 
-- **Clean Layering**: Engine agent domain boundaries are strictly preserved (`TransferCoordinator` owns in-memory records and persistence reconciliation; `BridgeTransferEngine` maps Swift DTOs to C++ native calls).
-- **Concurrency & Safety**: All mutations on `TransferCoordinator` actor are serialized; Sendable DTOs prevent data races across thread boundaries.
-- **Fail-Safe Recovery**: Crash loop recovery and safe-mode mechanics clear cleanly on explicit restart without swallowing errors or inventing state.
+- **Trash-only, no permanent delete**: commit uses the injected `TrashProviding` (`FileManager.trashItem`) per manifest item; no delete API exists on the agent surface; engine is told to remove WITHOUT file deletion.
+- **Journal-before-mutation**: a removal token row exists before any trash row; a trash row exists before its item moves; a move journal row exists before the engine move; rows of completed operations are deleted only after the record is gone or the move is durably committed.
+- **Durability + idempotency**: `outcome_json` is written in the SAME update that settles the token, so a replayed commit returns the identical `RemovalBatchResult`; bounded pruning keeps 128 settled tokens.
+- **TOCTOU**: every payload mutation is preceded by an lstat-based chain verification (no symlink traversal, size/kind identity checks).
+- **ADR-013**: `Legacy/` untouched — not read, edited, staged, or committed.
 
 ### 4. Comments
 
-- Prior review §5 defects have been completely and rigorously fixed in commit `3383abb`.
-- Verification suite, fault matrix, bridge headless, bridge swift integration, and full unit test suite are all GREEN.
+- Fixed this session: move-journal stage updates previously targeted `seq 0` while rows auto-increment (updates silently missed the row) — `moveJournalCreate` now returns the seq; payload root corrected to the save location itself (this app's metainfo paths are relative to save path, no torrent-name prefix); duplicate pbxproj build-file IDs (`05F1`–`05F4`) colliding with app UI files resolved by renumbering the test-phase entries; `test_wp03_legacy_untouched.sh` environmental failure documented, not fixed.
+- One production-facing note for the UI: guided move recovery and cancelled removal tokens surface via the next manifest/move attempt (no silent resolution) — coordinator keeps the journal row until the user resolves.
+- `graphify update .` re-ran after code changes (3789 nodes).
 
 ### 5. If changes_requested — concrete file list only
 
-N/A (APPROVED)
+N/A (awaiting review)

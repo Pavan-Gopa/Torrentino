@@ -97,6 +97,7 @@ AGENT_SOURCES=(
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/PersistenceStore.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/OperationJournal.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/QuarantineManager.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/RemovalJournal.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/ShutdownCoordinator.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/SQLiteConnection.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/StartupReconciler.swift"
@@ -105,12 +106,15 @@ AGENT_SOURCES=(
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/HTTPSourceFetcher.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MagnetParser.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Metainfo.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MoveStorageRecovery.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Preflight.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/RemovalManifest.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/StatusCache.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TorrentAdder.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferEventBus.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TransferRecord.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/TrashService.swift"
 )
 swiftc -o "${BINARY}" \
 	-swift-version 6 -strict-concurrency=complete \

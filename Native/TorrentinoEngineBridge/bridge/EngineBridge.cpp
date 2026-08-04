@@ -515,6 +515,8 @@ const char* engine_alert_kind_name(EngineAlertKind kind) noexcept
 	case EngineAlertKind::removed: return "removed";
 	case EngineAlertKind::session: return "session";
 	case EngineAlertKind::unknown: return "unknown";
+	case EngineAlertKind::storage_moved: return "storage_moved";
+	case EngineAlertKind::storage_moved_failed: return "storage_moved_failed";
 	}
 	return "unknown";
 }
@@ -828,6 +830,11 @@ struct EngineBridge::Impl {
 		case lt::save_resume_data_alert::alert_type:
 		case lt::save_resume_data_failed_alert::alert_type:
 			// Consumed synchronously inside requestResumeData; never batched.
+			dto.kind = EngineAlertKind::unknown;
+			return dto;
+		case lt::storage_moved_alert::alert_type:
+		case lt::storage_moved_failed_alert::alert_type:
+			// Consumed synchronously inside moveStorage; never batched.
 			dto.kind = EngineAlertKind::unknown;
 			return dto;
 		default:
@@ -1181,6 +1188,67 @@ struct EngineBridge::Impl {
 		}
 	}
 
+	Result<void> moveStorage(const TorrentRecordID& id, const std::string& path)
+	{
+		// unique_lock so the wait loop can release the mutex while sleeping
+		// (shutdown() must be able to acquire it and wake us).
+		std::unique_lock<std::mutex> lock(mutex_);
+		const Result<void> started = requireStartedLocked();
+		if (!started.is_ok()) {
+			return started;
+		}
+		if (path.empty()) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				"moveStorage: destination path is empty");
+		}
+		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		if (!handle.is_ok()) {
+			return Result<void>::failed(handle.error_code(), handle.error_message());
+		}
+
+		try {
+			// WP-10 safety: dont_replace adopts files that already exist at the
+			// destination and never overwrites them (destination wins).
+			handle.value().move_storage(path, lt::move_flags_t::dont_replace);
+			const Deadline deadline = Clock::now() + timeout_;
+			while (Clock::now() < deadline) {
+				if (stop_requested_.load()) {
+					return Result<void>::failed(BridgeError::stopped,
+						"storage move aborted by shutdown");
+				}
+				pumpLocked();
+				// storage_moved alerts are filtered out of pending_ by
+				// convertAlert, so they are only reachable through the raw
+				// scratch buffer here.
+				for (const lt::alert* a : scratch_) {
+					if (const auto* moved = lt::alert_cast<lt::storage_moved_alert>(a)) {
+						if (moved->handle == handle.value()) {
+							return Result<void>::success();
+						}
+					}
+					if (const auto* failed =
+						lt::alert_cast<lt::storage_moved_failed_alert>(a)) {
+						if (failed->handle == handle.value()) {
+							return Result<void>::failed(BridgeError::engine_failure,
+								std::string("move_storage failed: ")
+									+ failed->error.message());
+						}
+					}
+				}
+				wait_wake_.wait_for(lock, std::min(Millis{50}, timeout_),
+					[this] { return stop_requested_.load(); });
+			}
+			return Result<void>::failed(BridgeError::timeout,
+				"storage move timed out");
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("moveStorage failed: ") + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				"moveStorage failed: unknown exception");
+		}
+	}
+
 	Result<ResumeDataDTO> requestResumeData(const TorrentRecordID& id)
 	{
 		// unique_lock so the wait loop can release the mutex while sleeping
@@ -1421,6 +1489,19 @@ Result<void> EngineBridge::requestRecheck(const TorrentRecordID& id) noexcept
 	} catch (...) {
 		return Result<void>::failed(BridgeError::internal,
 			detail::internal_message("recheck: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::moveStorage(const TorrentRecordID& id,
+	const std::string& path) noexcept
+{
+	try {
+		return impl_->moveStorage(id, path);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("moveStorage: unknown exception"));
 	}
 }
 

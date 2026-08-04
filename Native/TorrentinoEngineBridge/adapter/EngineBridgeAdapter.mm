@@ -502,6 +502,20 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 	}, error);
 }
 
+- (nullable NSData *)moveStorageWithPayloadData:(NSData *)payloadData
+										  error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		const std::string path = std::string(stringValue(dict, "path", @"").UTF8String);
+		return voidResultToData(_engine->moveStorage(id, path), error);
+	}, error);
+}
+
 - (nullable NSData *)setLimitsWithPayloadData:(NSData *)payloadData
 																 error:(NSError *_Nullable *_Nullable)error
 {

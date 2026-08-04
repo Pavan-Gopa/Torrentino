@@ -106,6 +106,15 @@ public actor BridgeTransferEngine: TransferEngine {
         _ = try await coordinator.commitRemoval(token: token)
     }
 
+    /// WP-10: async storage move via the bridge (bounded wait, dont_replace).
+    public func moveStorage(torrentID: String, destinationPath: String) async throws {
+        do {
+            try await coordinator.moveStorage(torrentID: torrentID, destinationPath: destinationPath)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "moveStorage")
+        }
+    }
+
     public func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws {
         do {
             try await coordinator.setLimits(torrentID: torrentID, limits: limits)
