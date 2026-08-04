@@ -219,11 +219,11 @@ final class TorrentinoIPCTests: TestProfileCase {
             "setFileSelection", "setLimits", "fetchSettings", "validateSettings",
             "applySettings", "testProxy", "testIncomingPort", "editTrackers",
             "reannounce", "requestRecheck", "moveStorage", "prepareRemoval",
-            "commitRemoval", "cancelOperation", "inspectCreateSource",
+            "commitRemoval", "fetchPendingRemovals", "cancelOperation", "inspectCreateSource",
             "commitCreate", "prepareForQuit", "restartEngineSafely", "exportDiagnostics",
         ]
         XCTAssertEqual(EngineCommandV1.allCases.map(\.name), expectedNames)
-        XCTAssertEqual(EngineCommandV1.allCases.count, 32)
+        XCTAssertEqual(EngineCommandV1.allCases.count, 33)
     }
 
     func testEngineCommandV1RoundTripAllCases() throws {

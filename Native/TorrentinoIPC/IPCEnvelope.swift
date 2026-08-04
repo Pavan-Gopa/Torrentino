@@ -43,6 +43,8 @@ public enum SuccessPayload: Codable, Sendable, Equatable {
     case removalToken(RemovalToken)
     /// WP-10 commitRemoval batch outcome (per-record, partial success visible).
     case removalResult(RemovalBatchResult)
+    /// WP-10 fetchPendingRemovals: unsettled removal batches for guided recovery.
+    case pendingRemovals([PendingRemovalSummary])
     case createSourceInspection(CreateSourceInspection)
     case diagnosticsExport(DiagnosticsExportResult)
     case ack

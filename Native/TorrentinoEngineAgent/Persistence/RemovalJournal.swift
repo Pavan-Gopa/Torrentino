@@ -175,8 +175,11 @@ extension PersistenceStore {
 
     /// Atomically writes the batch outcome together with the final status, so
     /// an idempotent replay can reconstruct the exact RemovalBatchResult.
+    /// WP-10 (Gate 8): the settle is fail-closed — a throwing failpoint aborts
+    /// the commit so no payload mutation proceeds without durable evidence.
     func settleRemovalToken(token: String, status: String, outcomeJSON: String, at completedAt: Int64) throws {
         try requireOpen()
+        try FailpointInjector.fire(.beforeRemovalTokenSettle)
         let statement = try prepare("""
             UPDATE removal_tokens SET status = ?, outcome_json = ?, completed_at = ? WHERE token = ?
             """)
@@ -223,6 +226,7 @@ extension PersistenceStore {
         updatedAt: Int64
     ) throws -> Int64 {
         try requireOpen()
+        try FailpointInjector.fire(.beforeTrashJournalAppend)
         let statement = try prepare("""
             INSERT INTO trash_journal (token, relative_path, absolute_path, kind, size_bytes, status, updated_at)
             VALUES (?, ?, ?, ?, ?, 'pending', ?)
@@ -278,6 +282,7 @@ extension PersistenceStore {
         updatedAt: Int64
     ) throws {
         try requireOpen()
+        try FailpointInjector.fire(.beforeTrashJournalUpdate)
         let statement = try prepare("""
             UPDATE trash_journal SET status = ?, failure_code = ?, failure_message = ?, updated_at = ?
             WHERE seq = ?

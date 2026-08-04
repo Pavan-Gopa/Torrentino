@@ -8,12 +8,18 @@
 #   * record-only removal (deleteFiles=false) carries an empty manifest
 #   * commit trashes EVERY manifest item (files first, then empty directories)
 #     and removes the record only on full success
-#   * partial failure keeps the record, settles the token cancelled, leaves the
-#     per-item journal as evidence, and replays the IDENTICAL batch result
+#   * partial failure keeps the record + journal, keeps the token PENDING, and
+#     a resumed replay returns the IDENTICAL batch result without re-trashing
 #   * total failure trashes nothing and keeps the record + journal
 #   * shared-path protection: files covered by another torrent are skipped,
-#     never trashed, record still removed
+#     never trashed; dirs holding shared data refuse (not_empty)
 #   * FileSafetyValidator refuses symlinks / missing items / size changes
+#   * Gate 1: an unmanifested sibling inside a manifest dir survives
+#   * Gate 7: ancestor symlink swap / same-size replacement / hardlink swap are
+#     refused before any mutation (identity_changed / unsafe_symlink)
+#   * Gate 8: journal append/update failures abort fail-closed; a settle
+#     failure keeps the record and the pending token is restored + enumerable
+#     after a restart (fetchPendingRemovals), then resumes to completion
 #
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
@@ -29,10 +35,17 @@ xcodebuild test \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalCreatesDurableTokenAndExactManifestPage \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalWithoutDeleteFilesKeepsEmptyManifest \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTrashesEveryManifestItemAndRemovesRecord \
-    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalPartialFailureKeepsRecordAndJournalWithIdempotentReplay \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalPartialFailureKeepsRecordAndJournalWithResumableReplay \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTotalFailureKeepsRecordAndJournal \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SharedPathRemovalSkipsFilesSharedWithAnotherTorrent \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SafetyValidatorRefusesSymlinksMissingItemsAndSizeChanges \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10UnmanifestedSiblingSurvivesDirectoryTrash \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10AncestorSymlinkSwapRefusedBeforeAnyMutation \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SameSizeReplacementRefusedByIdentity \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10HardlinkSwapRefusedByIdentity \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalAppendFailureAbortsBatchBeforeAnyMutation \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10JournalUpdateFailureAbortsFailClosedAndResumes \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SettleFailureFailsClosedAndPendingTokenSurvivesRestart \
     CODE_SIGN_IDENTITY="Developer ID Application" \
     DEVELOPMENT_TEAM=438UQRF7JV \
     2>&1 | tail -30
@@ -41,6 +54,6 @@ RC=${PIPESTATUS[0]}
 if [[ ${RC} -ne 0 ]]; then
     qa_die "WP-10 durable removal gates FAILED"
 fi
-qa_ok "durable token + exact manifest + trash commit + partial/total failure + shared paths + safety validator GREEN"
+qa_ok "durable token + exact manifest + trash commit + partial/total failure + shared paths + safety validator + adversarial gates GREEN"
 
 qa_pass

@@ -160,18 +160,20 @@ struct ResumeDataDTO {
 };
 
 // Two-phase removal (ADR-010): prepareRemoval validates the record exists and
-// freezes keep/delete semantics into an opaque token; commitRemoval performs
-// the actual removal. Nothing is deleted at prepare time, so a never-committed
+// freezes removal semantics into an opaque token; commitRemoval performs the
+// actual removal. Nothing is deleted at prepare time, so a never-committed
 // token is harmless (the torrent simply stays).
+// WP-10 (Gate 6): the bridge is permanently delete-free. There is NO
+// delete_files flag anywhere in this ABI and commitRemoval never passes
+// lt::session_handle::delete_files — payload cleanup is exclusively the
+// Swift agent's manifest-scoped Trash (TrashService), never libtorrent.
 struct RemovalToken {
 	TorrentRecordID torrent_id;
-	bool delete_files = false;
 	std::uint64_t nonce = 0;
 };
 
 struct RemovalResult {
 	TorrentRecordID torrent_id;
-	bool files_deleted = false;
 };
 
 struct SessionStateDTO {
@@ -273,7 +275,9 @@ public:
 	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id) noexcept;
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;
 	Result<void> reannounce(const TorrentRecordID& id) noexcept;
-	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id, bool delete_files) noexcept;
+	// WP-10 (Gate 6): no delete_files parameter — the bridge can never delete
+	// payload bytes. Payload cleanup is the Swift agent's manifest-scoped Trash.
+	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id) noexcept;
 	Result<RemovalResult> commitRemoval(const RemovalToken& token) noexcept;
 	// Aggregated alert batch (never one alert per peer/piece). Returns an
 	// empty batch when the engine is not running or has been shut down.

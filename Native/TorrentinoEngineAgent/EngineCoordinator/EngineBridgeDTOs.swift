@@ -274,15 +274,15 @@ public struct ResumeDataDTO: Codable, Sendable, Equatable {
     }
 }
 
-/// Opaque removal token (`RemovalToken`), produced by prepare, consumed by commit.
+/// Opaque removal token (`RemovalToken`), produced by prepare, consumed by
+/// commit. WP-10 (Gate 6): the wire token carries NO delete-files flag — the
+/// bridge is permanently delete-free.
 public struct RemovalTokenDTO: Codable, Sendable, Equatable {
     public let torrentID: String
-    public let deleteFiles: Bool
     public let nonce: UInt64
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
-        case deleteFiles = "delete-files"
         case nonce = "nonce"
     }
 }
@@ -290,11 +290,9 @@ public struct RemovalTokenDTO: Codable, Sendable, Equatable {
 /// Removal outcome (`RemovalResult`).
 public struct RemovalResultDTO: Codable, Sendable, Equatable {
     public let torrentID: String
-    public let filesDeleted: Bool
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
-        case filesDeleted = "files-deleted"
     }
 }
 

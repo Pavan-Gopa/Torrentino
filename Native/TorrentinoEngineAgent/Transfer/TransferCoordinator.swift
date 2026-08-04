@@ -221,7 +221,29 @@ public actor TransferCoordinator {
         // and fetches a full snapshot), so the next delta starts above them.
         publishedRevision = engineRevision
         await recoverInterruptedMoves()
+        await restorePendingRemovalTokens()
         log.info("restore: rebuilt \(self.records.count) record(s), engineRevision \(self.engineRevision)")
+    }
+
+    /// WP-10 (Gate 4): restores the in-memory pending-removal map from the
+    /// durable journal so the UI can enumerate half-trashed batches and resume
+    /// them through an EXPLICIT user commit (fetchPendingRemovals +
+    /// commitRemoval replay). Nothing is auto-resumed here: a half-trashed
+    /// batch only continues when the user asks for it.
+    private func restorePendingRemovalTokens() async {
+        let pending: [RemovalTokenRecord]
+        do {
+            pending = try await persistence.pendingRemovalTokens()
+        } catch {
+            log.error("restore: pendingRemovalTokens failed: \(String(describing: error))")
+            return
+        }
+        for token in pending where pendingRemovalTokens.count < Self.pendingRemovalTokenLimit {
+            guard let recordID = UUID(uuidString: token.recordID).map({ TorrentRecordID(rawValue: $0) }) else {
+                continue
+            }
+            pendingRemovalTokens[token.token] = recordID
+        }
     }
 
     /// WP-10 crash recovery for interrupted storage moves. Runs once at
@@ -439,6 +461,8 @@ public actor TransferCoordinator {
             return await handlePrepareRemoval(request)
         case .commitRemoval(let request):
             return await handleCommitRemoval(request)
+        case .fetchPendingRemovals(let request):
+            return await handleFetchPendingRemovals(request)
         case .moveStorage(let request):
             return await handleMoveStorage(request)
         case .inspectCreateSource, .commitCreate, .exportDiagnostics:
@@ -1843,13 +1867,52 @@ extension TransferCoordinator {
         return max(0, value)
     }
 
+    /// WP-10 (Gate 4/9): lists removal tokens that are still pending (their
+    /// outcome was never durably settled), with per-batch progress derived
+    /// from the durable trash journal. The UI uses this to offer guided
+    /// recovery after a restart: each summary carries enough evidence to
+    /// resume or re-evaluate the half-finished batch — never silently
+    /// auto-resumed by the agent.
+    private func handleFetchPendingRemovals(_ request: FetchPendingRemovalsRequest) async -> EngineCommandResult {
+        let pending: [RemovalTokenRecord]
+        do {
+            pending = try await persistence.pendingRemovalTokens()
+        } catch {
+            return .failure(Self.persistenceFault(error, recordID: nil, volumeIdentifier: nil))
+        }
+        var summaries: [PendingRemovalSummary] = []
+        for token in pending {
+            guard let recordID = UUID(uuidString: token.recordID).map({ TorrentRecordID(rawValue: $0) }) else {
+                continue
+            }
+            let journal = (try? await persistence.trashJournalEntries(token: token.token)) ?? []
+            let trashed = journal.filter { $0.status == TrashJournalEntry.Status.trashed.rawValue }.count
+            let failed = journal.filter { $0.status == TrashJournalEntry.Status.failed.rawValue }.count
+            let total = (try? JSONDecoder().decode(RemovalManifest.self, from: Data(token.manifestJSON.utf8)))?.entries.count ?? 0
+            summaries.append(PendingRemovalSummary(
+                token: RemovalToken(rawValue: token.token),
+                recordID: recordID,
+                displayName: records[recordID]?.displayName,
+                deleteFiles: token.deleteFiles,
+                totalItemCount: total,
+                trashedItemCount: trashed,
+                failedItemCount: failed
+            ))
+        }
+        summaries.sort { $0.displayName ?? "" < $1.displayName ?? "" }
+        return .success(.pendingRemovals(summaries))
+    }
+
     /// Commits a removal token. Idempotent: a replayed token whose outcome was
     /// durably settled returns the IDENTICAL RemovalBatchResult. File deletion
     /// is Trash-only, item-by-item, journaled BEFORE each item, with shared
-    /// paths skipped. The record is removed only when every payload item was
-    /// trashed (or skipped as shared); any failure settles the token as
-    /// cancelled and keeps the record + journal evidence (guided recovery —
-    /// never a silent auto-resume of a half-trashed batch).
+    /// paths skipped. The token is settled (committed) ONLY after every payload
+    /// item was durably journaled as trashed or skipped — partial/failed
+    /// batches stay PENDING so an explicit re-commit resumes exactly where the
+    /// durable per-item journal left off (never re-trashing handled items, and
+    /// never auto-resuming without a user action). Fail-closed: any journal
+    /// append/update/settlement failure aborts with a typed error and keeps
+    /// the record + token + journal evidence.
     private func handleCommitRemoval(_ request: CommitRemovalRequest) async -> EngineCommandResult {
         let tokenRecord: RemovalTokenRecord
         do {
@@ -1864,6 +1927,16 @@ extension TransferCoordinator {
         // Idempotent replay: the outcome was durably settled.
         if let outcomeJSON = tokenRecord.outcomeJSON,
            let outcome = try? JSONDecoder().decode(RemovalBatchResult.self, from: Data(outcomeJSON.utf8)) {
+            // A committed outcome whose record still exists means a crash hit
+            // between settle and record removal. The payload is already
+            // trashed, so finishing the record removal is a safe repair — the
+            // settled result is still returned unchanged.
+            if tokenRecord.status == "committed",
+               let recordID = UUID(uuidString: tokenRecord.recordID).map({ TorrentRecordID(rawValue: $0) }),
+               let record = records[recordID],
+               outcome.outcome == .completed {
+                await finishCommittedRemoval(record: record)
+            }
             return .success(.removalResult(outcome))
         }
         guard tokenRecord.status == "pending" else {
@@ -1873,7 +1946,31 @@ extension TransferCoordinator {
             return .failure(.invalidRequest(details: "removal token references an invalid record"))
         }
         guard let record = records[recordID] else {
-            return .failure(EngineFault.recordNotFound(recordID: recordID))
+            // Crash between removeTorrent and settle: the token is still
+            // pending but the record is gone and the batch was fully handled.
+            // Nothing further can be removed — repair by settling as committed.
+            let outcome = RemovalBatchResult(
+                recordID: recordID,
+                token: request.token,
+                outcome: .completed,
+                trashedItems: 0,
+                skippedSharedItems: 0,
+                failedItems: []
+            )
+            do {
+                try await persistence.settleRemovalToken(
+                    token: request.token.rawValue,
+                    status: "committed",
+                    outcomeJSON: Self.encodeOutcome(outcome),
+                    at: Self.nowMilliseconds
+                )
+            } catch {
+                return .failure(Self.persistenceFault(
+                    error, recordID: recordID, volumeIdentifier: nil
+                ))
+            }
+            pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
+            return .success(.removalResult(outcome))
         }
         pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
 
@@ -1886,33 +1983,83 @@ extension TransferCoordinator {
                 RemovalManifest.self,
                 from: Data(tokenRecord.manifestJSON.utf8)
             ) else {
-                try? await persistence.markRemovalTokenCancelled(
-                    token: request.token.rawValue,
-                    at: Self.nowMilliseconds
-                )
+                do {
+                    try await persistence.markRemovalTokenCancelled(
+                        token: request.token.rawValue,
+                        at: Self.nowMilliseconds
+                    )
+                } catch {
+                    return .failure(Self.persistenceFault(
+                        error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                    ))
+                }
                 return .failure(.invalidPayload(details: "removal manifest is unavailable"))
+            }
+            // Gate 4: load the durable per-item journal BEFORE mutating so a
+            // replayed commit resumes rather than re-trashing handled items.
+            let existingJournal: [String: TrashJournalEntry]
+            do {
+                let rows = try await persistence.trashJournalEntries(token: request.token.rawValue)
+                existingJournal = Dictionary(
+                    rows.map { ($0.relativePath, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+            } catch {
+                return .failure(Self.persistenceFault(
+                    error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                ))
             }
             let trashService = TrashService(trash: trashProvider)
             for entry in manifest.orderedEntries() {
                 let now = Self.nowMilliseconds
                 let absolute = manifest.absolutePath(for: entry)
-                let seq = (try? await persistence.trashJournalAppend(
-                    token: request.token.rawValue,
-                    relativePath: entry.relativePath,
-                    absolutePath: absolute,
-                    kind: entry.kind.rawValue,
-                    sizeBytes: entry.sizeBytes,
-                    updatedAt: now
-                )) ?? -1
-                if entry.isShared {
-                    skippedSharedItems.append(entry.relativePath)
-                    try? await persistence.trashJournalUpdate(
-                        seq: seq,
-                        status: TrashJournalEntry.Status.skippedShared.rawValue,
-                        failureCode: nil,
-                        failureMessage: nil,
+                if let row = existingJournal[entry.relativePath] {
+                    // Resume semantics: rows already journaled as handled are
+                    // NEVER touched again.
+                    switch row.status {
+                    case TrashJournalEntry.Status.trashed.rawValue:
+                        trashedItems.append(row)
+                        continue
+                    case TrashJournalEntry.Status.skippedShared.rawValue:
+                        skippedSharedItems.append(entry.relativePath)
+                        continue
+                    default:
+                        break // pending/failed rows are retried below
+                    }
+                }
+                // Durable append BEFORE any mutation: a crash after this point
+                // is always resumable, and an append failure aborts the batch.
+                let seq: Int64
+                do {
+                    seq = try await persistence.trashJournalAppend(
+                        token: request.token.rawValue,
+                        relativePath: entry.relativePath,
+                        absolutePath: absolute,
+                        kind: entry.kind.rawValue,
+                        sizeBytes: entry.sizeBytes,
                         updatedAt: now
                     )
+                } catch {
+                    log.error("commitRemoval: trash journal append failed: \(String(describing: error))")
+                    return .failure(Self.persistenceFault(
+                        error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                    ))
+                }
+                if entry.isShared {
+                    skippedSharedItems.append(entry.relativePath)
+                    do {
+                        try await persistence.trashJournalUpdate(
+                            seq: seq,
+                            status: TrashJournalEntry.Status.skippedShared.rawValue,
+                            failureCode: nil,
+                            failureMessage: nil,
+                            updatedAt: now
+                        )
+                    } catch {
+                        return .failure(Self.persistenceFault(
+                            error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                        ))
+                    }
                     continue
                 }
                 switch trashService.trash(entry: entry, manifest: manifest) {
@@ -1923,24 +2070,37 @@ extension TransferCoordinator {
                         status: TrashJournalEntry.Status.trashed.rawValue,
                         failureCode: nil, failureMessage: nil, updatedAt: now
                     ))
-                    try? await persistence.trashJournalUpdate(
-                        seq: seq,
-                        status: TrashJournalEntry.Status.trashed.rawValue,
-                        failureCode: nil,
-                        failureMessage: nil,
-                        updatedAt: now
-                    )
+                    do {
+                        try await persistence.trashJournalUpdate(
+                            seq: seq,
+                            status: TrashJournalEntry.Status.trashed.rawValue,
+                            failureCode: nil,
+                            failureMessage: nil,
+                            updatedAt: now
+                        )
+                    } catch {
+                        log.error("commitRemoval: trash journal update failed: \(String(describing: error))")
+                        return .failure(Self.persistenceFault(
+                            error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                        ))
+                    }
                 case .failed(let failure):
                     failedItems.append(RemovalItemFailure(
                         relativePath: entry.relativePath, code: failure.code, message: failure.message
                     ))
-                    try? await persistence.trashJournalUpdate(
-                        seq: seq,
-                        status: TrashJournalEntry.Status.failed.rawValue,
-                        failureCode: failure.code,
-                        failureMessage: failure.message,
-                        updatedAt: now
-                    )
+                    do {
+                        try await persistence.trashJournalUpdate(
+                            seq: seq,
+                            status: TrashJournalEntry.Status.failed.rawValue,
+                            failureCode: failure.code,
+                            failureMessage: failure.message,
+                            updatedAt: now
+                        )
+                    } catch {
+                        return .failure(Self.persistenceFault(
+                            error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                        ))
+                    }
                 }
             }
         }
@@ -1963,32 +2123,46 @@ extension TransferCoordinator {
         )
 
         guard outcome == .completed else {
-            // Partial/failed: the record STAYS, the token is settled as
-            // cancelled, and the journal rows remain as recovery evidence.
-            try? await persistence.settleRemovalToken(
-                token: request.token.rawValue,
-                status: "cancelled",
-                outcomeJSON: Self.encodeOutcome(result),
-                at: Self.nowMilliseconds
-            )
+            // Partial/failed: the record STAYS, the token STAYS pending (no
+            // outcomeJSON, no cancellation), and the journal rows remain as
+            // recovery evidence. The UI re-commits the SAME token for guided
+            // recovery; the per-item journal makes the retry a resume, not a
+            // re-trash. Startup restore re-exposes the token to the UI.
             return .success(.removalResult(result))
         }
 
-        // Full success: remove from the engine (never asking the engine to
-        // delete files — the Trash already did, item by item), then persist.
+        // Full success: settle committed BEFORE any further mutation so a
+        // crash never leaves a removed record with an un-settled token, and
+        // the committed outcome is the durable evidence that cleanup is done.
+        do {
+            try await persistence.settleRemovalToken(
+                token: request.token.rawValue,
+                status: "committed",
+                outcomeJSON: Self.encodeOutcome(result),
+                at: Self.nowMilliseconds
+            )
+        } catch {
+            log.error("commitRemoval: token settlement failed: \(String(describing: error))")
+            return .failure(Self.persistenceFault(
+                error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
+
+        // Never asking the engine to delete files — the Trash already did,
+        // item by item, journaled. A missing engine entry (e.g. after an
+        // engine restart) is benign: the payload is gone either way.
         if let engineID = record.engineID, await ensureEngineStarted() {
             do {
                 try await engine.remove(torrentID: engineID)
             } catch {
-                try? await persistence.settleRemovalToken(
-                    token: request.token.rawValue,
-                    status: "cancelled",
-                    outcomeJSON: Self.encodeOutcome(result),
-                    at: Self.nowMilliseconds
-                )
-                return .failure(Self.engineFault(
-                    error, operation: "remove", recordID: recordID, fallback: "removal failed"
-                ))
+                if Self.isRemovalTargetAlreadyGone(error) {
+                    log.info("commitRemoval: engine entry already absent; continuing")
+                } else {
+                    log.warning("commitRemoval: engine remove failed: \(String(describing: error))")
+                    return .failure(Self.engineFault(
+                        error, operation: "remove", recordID: recordID, fallback: "removal failed"
+                    ))
+                }
             }
         }
         do {
@@ -2004,15 +2178,44 @@ extension TransferCoordinator {
         lastReannounceAt.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
 
-        try? await persistence.settleRemovalToken(
-            token: request.token.rawValue,
-            status: "committed",
-            outcomeJSON: Self.encodeOutcome(result),
-            at: Self.nowMilliseconds
-        )
         try? await persistence.deleteTrashJournal(token: request.token.rawValue)
         try? await persistence.pruneSettledRemovalTokens(keepNewest: 128)
         return .success(.removalResult(result))
+    }
+
+    /// Repair for a settled-committed token whose record still exists (crash
+    /// between settle and record removal). The payload is already trashed, so
+    /// completing the record removal is idempotent and safe; failures are
+    /// logged but never surface — the settled outcome is the durable truth.
+    private func finishCommittedRemoval(record: TransferRecord) async {
+        let recordID = record.id
+        if let engineID = record.engineID {
+            do {
+                try await engine.remove(torrentID: engineID)
+            } catch {
+                // Missing engine entry is benign; real faults surface later on
+                // the next explicit removal attempt.
+            }
+        }
+        do {
+            try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
+        } catch {
+            return
+        }
+        records.removeValue(forKey: recordID)
+        recordRevisions.removeValue(forKey: recordID)
+        lastReannounceAt.removeValue(forKey: recordID)
+        bumpEngineRevision(change: .removed(recordID))
+    }
+
+    private static func isRemovalTargetAlreadyGone(_ error: Error) -> Bool {
+        if let fault = error as? EngineFault, fault.code == .recordNotFound {
+            return true
+        }
+        if let coordinatorError = error as? EngineCoordinatorError, case .notFound = coordinatorError {
+            return true
+        }
+        return false
     }
 
     private static func encodeOutcome(_ result: RemovalBatchResult) -> String {
@@ -2048,6 +2251,8 @@ extension TransferCoordinator {
         if (try? await persistence.moveJournal(recordID: request.recordID.rawValue.uuidString)) != nil {
             return .failure(.engineBusy(details: "storage move already in progress for this record"))
         }
+        // Gate 5: the payload file list (relative paths) is journaled with the
+        // row so recovery can verify REAL file evidence at either side.
         let fileListJSON = Self.encodePayloadFileList(of: record) ?? "[]"
         let moveSeq: Int64
         do {
@@ -2071,39 +2276,57 @@ extension TransferCoordinator {
                 withIntermediateDirectories: true
             )
         } catch {
-            try? await persistence.moveJournalUpdate(
-                seq: moveSeq,
-                stage: MoveJournalEntry.Stage.prepared.rawValue,
-                status: MoveJournalEntry.Status.failed.rawValue,
-                failureReason: "destination creation failed: \(error.localizedDescription)",
-                updatedAt: Self.nowMilliseconds
-            )
+            // Gate 8: the journal row stays 'prepared' if the diagnostic
+            // update fails — evidence-based recovery still resolves it.
+            do {
+                try await persistence.moveJournalUpdate(
+                    seq: moveSeq,
+                    stage: MoveJournalEntry.Stage.prepared.rawValue,
+                    status: MoveJournalEntry.Status.failed.rawValue,
+                    failureReason: "destination creation failed: \(error.localizedDescription)",
+                    updatedAt: Self.nowMilliseconds
+                )
+            } catch {
+                log.error("moveStorage: journal update failed: \(String(describing: error))")
+            }
             return .failure(.storageFailure(details: "cannot create destination directory"))
         }
 
         do {
             try await engine.moveStorage(torrentID: engineID, destinationPath: toPath)
         } catch {
-            try? await persistence.moveJournalUpdate(
-                seq: moveSeq,
-                stage: MoveJournalEntry.Stage.prepared.rawValue,
-                status: MoveJournalEntry.Status.failed.rawValue,
-                failureReason: String(describing: error),
-                updatedAt: Self.nowMilliseconds
-            )
+            do {
+                try await persistence.moveJournalUpdate(
+                    seq: moveSeq,
+                    stage: MoveJournalEntry.Stage.prepared.rawValue,
+                    status: MoveJournalEntry.Status.failed.rawValue,
+                    failureReason: String(describing: error),
+                    updatedAt: Self.nowMilliseconds
+                )
+            } catch {
+                log.error("moveStorage: journal update failed: \(String(describing: error))")
+            }
             return .failure(Self.engineFault(
                 error, operation: "moveStorage", recordID: request.recordID, fallback: "storage move failed"
             ))
         }
 
-        // stage: engine_moved — the payload is at the destination.
-        try? await persistence.moveJournalUpdate(
-            seq: moveSeq,
-            stage: MoveJournalEntry.Stage.engineMoved.rawValue,
-            status: MoveJournalEntry.Status.pending.rawValue,
-            failureReason: nil,
-            updatedAt: Self.nowMilliseconds
-        )
+        // stage: engine_moved — the payload is at the destination. A failed
+        // advance aborts fail-closed: the row stays 'prepared' and evidence
+        // recovery will still find the payload at the destination.
+        do {
+            try await persistence.moveJournalUpdate(
+                seq: moveSeq,
+                stage: MoveJournalEntry.Stage.engineMoved.rawValue,
+                status: MoveJournalEntry.Status.pending.rawValue,
+                failureReason: nil,
+                updatedAt: Self.nowMilliseconds
+            )
+        } catch {
+            return .failure(Self.persistenceFault(
+                error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+            ))
+        }
 
         // stage: record_updated — persist the new save location, then complete.
         do {
@@ -2112,19 +2335,26 @@ extension TransferCoordinator {
                 location: request.destination
             )
         } catch {
-            try? await persistence.moveJournalUpdate(
-                seq: moveSeq,
-                stage: MoveJournalEntry.Stage.recordUpdated.rawValue,
-                status: MoveJournalEntry.Status.pending.rawValue,
-                failureReason: String(describing: error),
-                updatedAt: Self.nowMilliseconds
-            )
+            do {
+                try await persistence.moveJournalUpdate(
+                    seq: moveSeq,
+                    stage: MoveJournalEntry.Stage.recordUpdated.rawValue,
+                    status: MoveJournalEntry.Status.pending.rawValue,
+                    failureReason: String(describing: error),
+                    updatedAt: Self.nowMilliseconds
+                )
+            } catch {
+                log.error("moveStorage: journal update failed: \(String(describing: error))")
+            }
             return .failure(Self.persistenceFault(
                 error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
             ))
         }
         records[request.recordID] = record.with(saveLocation: request.destination)
         bumpEngineRevision(change: .updated(request.recordID))
+        // The row is dropped only after the record was durably updated; if the
+        // drop fails the row self-heals on the next recovery pass (payload
+        // evidence at the destination resumes the same move).
         try? await persistence.deleteMoveJournal(recordID: request.recordID.rawValue.uuidString)
 
         // Force recheck so the engine re-validates the moved payload.

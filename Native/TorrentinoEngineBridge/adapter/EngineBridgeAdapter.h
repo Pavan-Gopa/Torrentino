@@ -93,9 +93,10 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 															 error:(NSError *_Nullable *_Nullable)error;
 
 /// Two-phase removal (ADR-010). prepare validates the record and returns an
-/// opaque JSON RemovalToken; commit actually removes it. The payload for
-/// prepare is {"torrent-id": "...", "delete-files": true|false}; the payload
-/// for commit is the token itself.
+/// opaque JSON RemovalToken; commit actually removes it. WP-10 (Gate 6): the
+/// payload for prepare is only {"torrent-id": "..."} — no delete-files flag
+/// exists on this surface, so libtorrent's permanent deletion is unreachable;
+/// the payload for commit is the token itself.
 - (nullable NSData *)prepareRemovalWithPayloadData:(NSData *)payloadData
 											 error:(NSError *_Nullable *_Nullable)error;
 - (nullable NSData *)commitRemovalWithTokenData:(NSData *)tokenData

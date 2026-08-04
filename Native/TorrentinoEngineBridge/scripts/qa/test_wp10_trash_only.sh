@@ -8,6 +8,8 @@
 #     delete) and the file exists there afterwards
 #   * an untouched control payload in the same workspace keeps byte-identical
 #     content (keep-data unchanged payload)
+#   * Gate 1: a sibling file that is NOT the trash target stays in place — the
+#     primitive never takes unmanifested content with it
 #
 # Safety: everything lives under qa_mktemp; the probe's own Trash item is
 # removed again before exit (the QA script trashes nothing of the user's).
@@ -48,8 +50,10 @@ assert_ne "$(test -e "${ORIGIN}/${TRASH_NAME}" && echo present || echo gone)" "p
 CONTROL_SHA_AFTER="$(shasum -a 256 "${ORIGIN}/control.bin" | awk '{print $1}')"
 assert_eq "${CONTROL_SHA_AFTER}" "${CONTROL_SHA}" \
     "untouched payload must keep byte-identical content"
+assert_file "${ORIGIN}/control.bin" \
+    "unmanifested sibling must survive the trash of another item"
 
 # Clean up the probe's own Trash item (test artifact, not user data).
 rm -f "${TRASH_DEST}"
-qa_ok "Trash-only removal: origin gone, Trash holds the file, control payload unchanged"
+qa_ok "Trash-only removal: origin gone, Trash holds the file, control payload + sibling unchanged"
 qa_pass

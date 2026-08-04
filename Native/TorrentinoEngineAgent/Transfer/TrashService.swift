@@ -49,21 +49,42 @@ struct TrashService {
 
     /// Trashes one manifest entry. Shared entries are never offered to the
     /// provider; verification failures and provider failures are typed.
+    /// WP-10 Gate 7: the FULL chain is re-verified (verifyChain) immediately
+    /// before the provider call, and the leaf identity is checked on an
+    /// O_NOFOLLOW descriptor — a root/ancestor symlink swap or a same-size
+    /// replacement since prepare refuses the mutation. Gate 1: a directory is
+    /// trashed only after its manifest children were handled AND it is proven
+    /// empty (verifyDirectoryEmpty) — unmanifested files inside it survive.
     func trash(
         entry: RemovalManifestItem,
         manifest: RemovalManifest
     ) -> TrashOutcome {
         let absolute = manifest.absolutePath(for: entry)
+        // Chain first (Gate 7): every component from the save location down
+        // to the leaf must be a real directory/file right now.
+        if let issue = FileSafetyValidator.verifyChain(
+            root: manifest.payloadRootPath,
+            absolutePath: absolute
+        ) {
+            return .failed(failure(from: issue, path: absolute))
+        }
         switch entry.kind {
         case .file:
             if let issue = FileSafetyValidator.verifyFileIdentity(
                 absolutePath: absolute,
-                expectedSize: entry.sizeBytes
+                expectedSize: entry.sizeBytes,
+                expectedIdentity: entry.fileIdentity
             ) {
                 return .failed(failure(from: issue, path: absolute))
             }
         case .directory:
             if let issue = FileSafetyValidator.verifyDirectoryIdentity(absolutePath: absolute) {
+                return .failed(failure(from: issue, path: absolute))
+            }
+            // Gate 1: never trash a directory that still contains anything.
+            // Manifest children were handled first (leaf-first ordering), so a
+            // remaining entry is unmanifested (or shared) and must survive.
+            if let issue = FileSafetyValidator.verifyDirectoryEmpty(absolutePath: absolute) {
                 return .failed(failure(from: issue, path: absolute))
             }
         }
@@ -100,6 +121,16 @@ struct TrashService {
             return TrashItemFailure(
                 code: "size_mismatch",
                 message: "size changed at \(path) (expected \(expected), actual \(actual))"
+            )
+        case .identityChanged:
+            return TrashItemFailure(
+                code: "identity_changed",
+                message: "filesystem identity changed at \(path) since prepare"
+            )
+        case .notEmpty:
+            return TrashItemFailure(
+                code: "not_empty",
+                message: "directory still contains items at \(path)"
             )
         }
     }

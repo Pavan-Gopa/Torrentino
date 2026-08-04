@@ -102,7 +102,10 @@ public actor BridgeTransferEngine: TransferEngine {
     }
 
     public func remove(torrentID: String) async throws {
-        let token = try await coordinator.prepareRemoval(torrentID: torrentID, deleteFiles: false)
+        // WP-10 (Gate 6): the bridge is delete-free — never ask the engine to
+        // delete payload bytes. Payload cleanup is the coordinator's
+        // manifest-scoped Trash (see handleCommitRemoval).
+        let token = try await coordinator.prepareRemoval(torrentID: torrentID)
         _ = try await coordinator.commitRemoval(token: token)
     }
 

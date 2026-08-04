@@ -60,7 +60,10 @@ struct TorrentListView: View {
         }
         .navigationTitle(String(localized: "torrents.title"))
         .safeAreaInset(edge: .bottom) {
-            statusBar
+            VStack(spacing: 0) {
+                removalRecoveryBanner
+                statusBar
+            }
         }
         .sheet(isPresented: $viewModel.showInspector) {
             InspectorView(torrent: viewModel.selectedTorrent, viewModel: viewModel)
@@ -268,6 +271,72 @@ struct TorrentListView: View {
                 }
                 .padding(8)
             }
+        }
+    }
+
+    // MARK: - Removal recovery (WP-10 Gate 4/9)
+
+    /// Surfaces pending removal batches from a previous session (guided
+    /// recovery) and non-completed removal outcomes inline — never silently
+    /// discarded. Hidden entirely when there is nothing to report.
+    private var removalRecoveryBanner: some View {
+        let pending = viewModel.pendingRemovals
+        let result = viewModel.lastRemovalResult
+        if pending.isEmpty && (result == nil || result?.outcome == .completed) {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(pending, id: \.token.rawValue) { summary in
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(String(localized: "remove.pending.title"))
+                                .font(.subheadline.weight(.semibold))
+                            Text(String(localized: "remove.pending.detail"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(String(localized: "remove.pending.resume")) {
+                            viewModel.retryRemoval(summary)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityElement(children: .contain)
+                }
+                if let result, result.outcome != .completed {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                        Text(Self.removalResultText(result))
+                            .font(.subheadline)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+        )
+    }
+
+    /// Stable, machine-readable outcome text for the recovery banner.
+    private static func removalResultText(_ result: RemovalBatchResult) -> String {
+        let total = result.trashedItems + result.skippedSharedItems + result.failedItems.count
+        switch result.outcome {
+        case .completed:
+            return String(localized: "remove.result.completed")
+        case .partial:
+            return String(format: NSLocalizedString("remove.result.partial", comment: ""), result.trashedItems, total, result.failedItems.count)
+        case .failed:
+            return String(format: NSLocalizedString("remove.result.failed", comment: ""), result.failedItems.count)
         }
     }
 

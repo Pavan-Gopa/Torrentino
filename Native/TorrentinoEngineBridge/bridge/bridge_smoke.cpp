@@ -371,7 +371,9 @@ int main()
 	// --- two-phase removal ------------------------------------------------------
 	RemovalToken token;
 	{
-		const auto prepared = bridge.prepareRemoval(add_result.torrent_id, false);
+		// WP-10 (Gate 6): prepareRemoval carries no delete-files flag — the
+		// bridge cannot permanently delete payload bytes by construction.
+		const auto prepared = bridge.prepareRemoval(add_result.torrent_id);
 		TH_REQUIRE(prepared.is_ok(), "prepareRemoval must succeed");
 		if (prepared.is_ok()) {
 			token = prepared.value();
@@ -382,7 +384,6 @@ int main()
 		if (committed.is_ok()) {
 			TH_REQUIRE(committed.value().torrent_id == add_result.torrent_id,
 				"removal result carries the torrent id");
-			TH_REQUIRE(!committed.value().files_deleted, "files kept on removal");
 		}
 		TH_REQUIRE(wait_for_alert(bridge, 10s, is_removed), "removed alert arrives");
 	}

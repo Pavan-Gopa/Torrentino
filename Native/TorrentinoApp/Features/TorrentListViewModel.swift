@@ -36,6 +36,12 @@ final class TorrentListViewModel: ObservableObject {
     @Published var searchFocusRequest = 0
     @Published private(set) var busy = false
     @Published private(set) var systemConditions = SystemConditions.normal
+    /// WP-10 (Gate 9): the most recent commitRemoval batch outcome, surfaced
+    /// inline instead of being silently discarded.
+    @Published private(set) var lastRemovalResult: RemovalBatchResult?
+    /// WP-10 (Gate 4/9): unsettled removal batches from a previous session
+    /// (guided recovery), discovered via fetchPendingRemovals on connect.
+    @Published private(set) var pendingRemovals: [PendingRemovalSummary] = []
 
     let client: EngineClient
     private(set) var directoryStack: [String] = []
@@ -97,6 +103,7 @@ final class TorrentListViewModel: ObservableObject {
             _ = try await client.hello()
             try await subscribe()
             try await fetchFullSnapshot()
+            await refreshPendingRemovals()
             usingFixture = false
             connectionNote = nil
             connectionGeneration &+= 1
@@ -230,6 +237,8 @@ final class TorrentListViewModel: ObservableObject {
         // callback. The snapshot is still required because the agent may have
         // restarted and its revision/instance are authoritative again.
         await recoverFromFullSnapshot()
+        // A fresh engine session may hold unsettled removal batches (Gate 4/9).
+        await refreshPendingRemovals()
     }
 
     func addMagnet(_ uri: String, startPaused: Bool) async {
@@ -347,10 +356,58 @@ final class TorrentListViewModel: ObservableObject {
                         idempotencyKey: IdempotencyKey(),
                         token: token
                     ))
-                    _ = try await client.sendCommand(commit)
+                    // WP-10 (Gate 9): the batch outcome (completed/partial/
+                    // failed + per-item failures) is surfaced, never discarded.
+                    // The engine itself is resumable: a partial or failed batch
+                    // keeps its token pending for an explicit guided retry.
+                    guard case .removalResult(let result) = try await client.sendCommand(commit) else {
+                        throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
+                    }
+                    lastRemovalResult = result
                 } catch {
                     connectionNote = String(localized: "remove.failed")
                 }
+            }
+            await refreshPendingRemovals()
+        }
+    }
+
+    /// WP-10 (Gate 4/9): asks the agent for unsettled removal batches so a
+    /// half-trashed session (app or engine crash) is offered for guided
+    /// recovery instead of disappearing. Never auto-resumes anything.
+    func refreshPendingRemovals() async {
+        let command = EngineCommandV1.fetchPendingRemovals(FetchPendingRemovalsRequest(requestID: RequestID()))
+        do {
+            guard case .pendingRemovals(let summaries) = try await client.sendCommand(command) else {
+                throw EngineClientError.protocolMismatch(details: "unexpected fetchPendingRemovals reply")
+            }
+            pendingRemovals = summaries
+        } catch {
+            // Non-fatal: the removal flow still works, recovery discovery is
+            // best-effort on connect.
+            connectionNote = String(localized: "remove.pendingLookupFailed")
+        }
+    }
+
+    /// WP-10 (Gate 4/9): explicitly resumes a pending removal batch from a
+    /// previous session. The per-item journal makes this a resume — already
+    /// trashed items are never touched again — and partial outcomes keep the
+    /// token pending for further retries.
+    func retryRemoval(_ summary: PendingRemovalSummary) {
+        Task {
+            do {
+                let commit = EngineCommandV1.commitRemoval(CommitRemovalRequest(
+                    requestID: RequestID(),
+                    idempotencyKey: IdempotencyKey(),
+                    token: summary.token
+                ))
+                guard case .removalResult(let result) = try await client.sendCommand(commit) else {
+                    throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
+                }
+                lastRemovalResult = result
+                await refreshPendingRemovals()
+            } catch {
+                connectionNote = String(localized: "remove.failed")
             }
         }
     }

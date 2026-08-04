@@ -1128,7 +1128,7 @@ struct EngineBridge::Impl {
 		});
 	}
 
-	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id, bool delete_files)
+	Result<RemovalToken> prepareRemoval(const TorrentRecordID& id)
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		const Result<void> started = requireStartedLocked();
@@ -1139,12 +1139,12 @@ struct EngineBridge::Impl {
 		if (!handle.is_ok()) {
 			return Result<RemovalToken>::failed(handle.error_code(), handle.error_message());
 		}
-		// The lookup validates the record exists; the token carries the
-		// semantics and an opaque nonce so a stale token cannot be reused
-		// against a different lifecycle (defense against token confusion).
+		// The lookup validates the record exists; the token carries an opaque
+		// nonce so a stale token cannot be reused against a different lifecycle
+		// (defense against token confusion). WP-10 (Gate 6): the token carries
+		// NO delete_files flag — permanent deletion is unreachable from this ABI.
 		RemovalToken token;
 		token.torrent_id = id;
-		token.delete_files = delete_files;
 		token.nonce = static_cast<std::uint64_t>(alerts_seen_)
 			^ std::hash<std::string>{}(id)
 			^ static_cast<std::uint64_t>(
@@ -1165,10 +1165,11 @@ struct EngineBridge::Impl {
 		}
 
 		try {
+			// WP-10 (Gate 6): remove_torrent with EMPTY flags — the
+			// lt::session_handle::delete_files bit is structurally absent from
+			// this ABI (no field, no parameter). Payload cleanup is exclusively
+			// the Swift agent's manifest-scoped Trash.
 			lt::remove_flags_t flags{};
-			if (token.delete_files) {
-				flags |= lt::session_handle::delete_files;
-			}
 			// Non-blocking; libtorrent removes the torrent from the session
 			// synchronously and posts torrent_removed_alert (status category,
 			// in our mask). The record dies here so later ops fail fast.
@@ -1177,7 +1178,6 @@ struct EngineBridge::Impl {
 
 			RemovalResult result;
 			result.torrent_id = token.torrent_id;
-			result.files_deleted = token.delete_files;
 			return Result<RemovalResult>::ok(std::move(result));
 		} catch (const std::exception& e) {
 			return Result<RemovalResult>::failed(BridgeError::engine_failure,
@@ -1556,10 +1556,10 @@ Result<void> EngineBridge::reannounce(const TorrentRecordID& id) noexcept
 	}
 }
 
-Result<RemovalToken> EngineBridge::prepareRemoval(const TorrentRecordID& id, bool delete_files) noexcept
+Result<RemovalToken> EngineBridge::prepareRemoval(const TorrentRecordID& id) noexcept
 {
 	try {
-		return impl_->prepareRemoval(id, delete_files);
+		return impl_->prepareRemoval(id);
 	} catch (const std::exception& e) {
 		return Result<RemovalToken>::failed(BridgeError::internal, e.what());
 	} catch (...) {

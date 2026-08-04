@@ -2534,6 +2534,125 @@
         }
       }
     },
+    "remove.pendingLookupFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't look up pending removals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось получить список незавершённых удалений"
+          }
+        }
+      }
+    },
+    "remove.pending.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal left unfinished"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление не завершено"
+          }
+        }
+      }
+    },
+    "remove.pending.detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some files were moved to Trash. The torrent entry stays until the batch finishes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Часть файлов перенесена в Корзину. Запись торрента сохраняется до завершения пакета."
+          }
+        }
+      }
+    },
+    "remove.pending.resume": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить"
+          }
+        }
+      }
+    },
+    "remove.result.completed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed (files moved to Trash)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалено (файлы в Корзине)"
+          }
+        }
+      }
+    },
+    "remove.result.partial": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed partially: %lld of %lld items in Trash, %lld failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалено частично: %lld из %lld элементов в Корзине, ошибок: %lld"
+          }
+        }
+      }
+    },
+    "remove.result.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal failed: %lld items could not be moved to Trash"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось удалить: %lld элементов не перенесены в Корзину"
+          }
+        }
+      }
+    },
     "inspector.settings.ratio_limit": {
       "extractionState": "manual",
       "localizations": {

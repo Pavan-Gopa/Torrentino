@@ -116,10 +116,12 @@ public actor EngineCoordinator {
     }
 
     /// Two-phase removal (ADR-010). prepare returns an opaque token; commit
-    /// performs the actual removal and reports whether files were deleted.
-    public func prepareRemoval(torrentID: String, deleteFiles: Bool = false) throws -> RemovalTokenDTO {
+    /// performs the actual removal. WP-10 (Gate 6): there is no deleteFiles
+    /// parameter — the native bridge cannot delete payload bytes, so the Swift
+    /// layer cannot accidentally re-enable permanent deletion.
+    public func prepareRemoval(torrentID: String) throws -> RemovalTokenDTO {
         guard started else { throw EngineCoordinatorError.notStarted }
-        let payload = try encode(RemovalTokenDTO(torrentID: torrentID, deleteFiles: deleteFiles, nonce: 0))
+        let payload = try encode(RemovalTokenDTO(torrentID: torrentID, nonce: 0))
         let response = try envelope { try adapter.prepareRemoval(withPayloadData: payload) }
         return try decode(RemovalTokenDTO.self, from: response)
     }

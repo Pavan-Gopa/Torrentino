@@ -301,7 +301,6 @@ RemovalToken removalTokenFromJSON(NSDictionary* dict)
 {
 	RemovalToken token;
 	token.torrent_id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
-	token.delete_files = boolValue(dict, "delete-files", false);
 	token.nonce = static_cast<uint64_t>(int64Value(dict, "nonce", 0));
 	return token;
 }
@@ -310,7 +309,6 @@ NSDictionary* removalTokenToJSON(const RemovalToken& token)
 {
 	return @{
 		jsonKey("torrent-id") : [NSString stringWithUTF8String:token.torrent_id.c_str()],
-		jsonKey("delete-files") : @(token.delete_files),
 		jsonKey("nonce") : @(token.nonce),
 	};
 }
@@ -319,7 +317,6 @@ NSDictionary* removalResultToJSON(const RemovalResult& result)
 {
 	return @{
 		jsonKey("torrent-id") : [NSString stringWithUTF8String:result.torrent_id.c_str()],
-		jsonKey("files-deleted") : @(result.files_deleted),
 	};
 }
 
@@ -580,9 +577,10 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		if (dict == nil) {
 			return nil;
 		}
+		// WP-10 (Gate 6): the bridge accepts NO delete-files flag — permanent
+		// deletion is unreachable from the ObjC adapter public API.
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
-		const bool deleteFiles = boolValue(dict, "delete-files", false);
-		auto result = _engine->prepareRemoval(id, deleteFiles);
+		auto result = _engine->prepareRemoval(id);
 		return resultToData(result, removalTokenToJSON, error);
 	}, error);
 }

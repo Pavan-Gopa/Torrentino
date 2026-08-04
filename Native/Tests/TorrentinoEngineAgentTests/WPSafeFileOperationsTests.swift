@@ -18,17 +18,18 @@ final class WPSafeFileOperationsTests: TestProfileCase {
     private func makeCoordinator(
         engine: StubTransferEngine,
         bus: TransferEventBus,
-        trashProvider: any TrashProviding = RecordingTrashProvider()
+        trashProvider: (any TrashProviding)? = nil
     ) async throws -> (TransferCoordinator, PersistenceStore, StubTransferEngine) {
         let store = PersistenceStore(dataDirectory: profile.rootURL)
         _ = try await store.open()
+        let fakeTrash = profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)")
         let coordinator = TransferCoordinator(
             engine: engine,
             persistence: store,
             eventBus: bus,
             agentVersion: "test",
             defaultSaveLocation: PersistedLocation(path: profile.rootURL.path),
-            trashProvider: trashProvider
+            trashProvider: trashProvider ?? RecordingTrashProvider(fakeTrashDirectory: fakeTrash)
         )
         return (coordinator, store, engine)
     }
@@ -226,7 +227,7 @@ final class WPSafeFileOperationsTests: TestProfileCase {
     func testWP10CommitRemovalTrashesEveryManifestItemAndRemovesRecord() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let trash = RecordingTrashProvider()
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
         let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
         let saveLocation = try profile.subdirectory("sl-commit")
         let files = [("dir/a.txt", Int64(100)), ("dir/nested/b.bin", Int64(200))]
@@ -269,12 +270,12 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         XCTAssertNil(moveJournalAfterSuccess)
     }
 
-    // MARK: - WP-10: commit — partial failure keeps record + journal, idempotent replay
+    // MARK: - WP-10: commit — partial failure keeps record + journal, resumable replay
 
-    func testWP10CommitRemovalPartialFailureKeepsRecordAndJournalWithIdempotentReplay() async throws {
+    func testWP10CommitRemovalPartialFailureKeepsRecordAndJournalWithResumableReplay() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let trash = RecordingTrashProvider()
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
         let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
         let saveLocation = try profile.subdirectory("sl-partial")
         let files = [("dir/a.txt", Int64(100)), ("dir/nested/b.bin", Int64(200))]
@@ -284,13 +285,15 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
         let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
 
-        // First item in trash order fails → partial outcome with journal evidence.
+        // First item in trash order fails → partial outcome with journal
+        // evidence. The failed file stays on disk, so its parent directories
+        // are NOT empty and refuse to be trashed (Gate 1).
         trash.fail(path: saveLocation.appendingPathComponent("dir/nested/b.bin").path)
         let result = try await commitRemoval(coordinator, token: token)
         XCTAssertEqual(result.outcome, .partial)
-        XCTAssertEqual(result.trashedItems, 3)
+        XCTAssertEqual(result.trashedItems, 1, "only a.txt was trashed")
         XCTAssertEqual(result.skippedSharedItems, 0)
-        XCTAssertEqual(result.failedItems.count, 1)
+        XCTAssertEqual(result.failedItems.count, 3, "b.bin + dir/nested + dir (not empty)")
         XCTAssertEqual(result.failedItems.first?.relativePath, "dir/nested/b.bin")
         XCTAssertEqual(result.failedItems.first?.code, "trash_failed")
 
@@ -300,27 +303,30 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         let removedAfterPartial = await engineRef.removedCount(for: "stub-1")
         XCTAssertEqual(removedAfterPartial, 0, "engine remove must not fire on partial")
 
-        // Token settled cancelled with the exact outcome for replay; the
-        // per-item journal rows remain as recovery evidence.
+        // Gate 4: the token STAYS pending (no outcomeJSON, no cancellation) so
+        // an explicit re-commit can resume; the per-item journal rows remain
+        // as recovery evidence.
         let settled = try await store.removalToken(by: token.rawValue)
-        XCTAssertEqual(settled?.status, "cancelled")
+        XCTAssertEqual(settled?.status, "pending")
+        XCTAssertNil(settled?.outcomeJSON, "partial batches never settle an outcome")
         let journal = try await store.trashJournalEntries(token: token.rawValue)
         XCTAssertEqual(journal.count, 4, "journal rows survive a partial removal")
         XCTAssertEqual(journal.first?.status, TrashJournalEntry.Status.failed.rawValue)
         XCTAssertEqual(journal.first?.failureCode, "trash_failed")
-        XCTAssertTrue(journal.dropFirst().allSatisfy { $0.status == TrashJournalEntry.Status.trashed.rawValue })
+        XCTAssertEqual(journal[1].status, TrashJournalEntry.Status.trashed.rawValue)
 
-        // Idempotent replay: committing the SAME token returns the IDENTICAL
-        // batch result from the settled outcome — no second trash pass.
+        // Resumable replay: committing the SAME token resumes from the durable
+        // journal — already-trashed items are never touched again, the still
+        // failing item fails again (identical result).
         let replay = try await commitRemoval(coordinator, token: token)
-        XCTAssertEqual(replay, result, "replayed commit returns the identical settled outcome")
-        XCTAssertEqual(trash.recorded().count, 3, "replay must not trash again")
+        XCTAssertEqual(replay, result, "resumed replay returns the identical batch result")
+        XCTAssertEqual(trash.recorded().count, 1, "replay must not trash again")
     }
 
     func testWP10CommitRemovalTotalFailureKeepsRecordAndJournal() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let trash = RecordingTrashProvider()
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
         let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
         let saveLocation = try profile.subdirectory("sl-total")
         let files = [("dir/a.txt", Int64(100)), ("dir/nested/b.bin", Int64(200))]
@@ -340,8 +346,11 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
         let removedAfterTotal = await engineRef.removedCount(for: "stub-1")
         XCTAssertEqual(removedAfterTotal, 0)
+        // Gate 4: a fully failed batch stays pending and resumable (never
+        // settled cancelled — nothing was settled at all).
         let settledAfterTotal = try await store.removalToken(by: token.rawValue)
-        XCTAssertEqual(settledAfterTotal?.status, "cancelled")
+        XCTAssertEqual(settledAfterTotal?.status, "pending")
+        XCTAssertNil(settledAfterTotal?.outcomeJSON)
         let journalAfterTotal = try await store.trashJournalEntries(token: token.rawValue)
         XCTAssertEqual(journalAfterTotal.count, 4)
         XCTAssertTrue(journalAfterTotal.allSatisfy { $0.status == TrashJournalEntry.Status.failed.rawValue })
@@ -352,7 +361,7 @@ final class WPSafeFileOperationsTests: TestProfileCase {
     func testWP10SharedPathRemovalSkipsFilesSharedWithAnotherTorrent() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let trash = RecordingTrashProvider()
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
         let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
         let saveLocation = try profile.subdirectory("sl-shared")
 
@@ -373,23 +382,28 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         let token = try await prepareRemoval(coordinator, recordID: recordA, deleteFiles: true)
         _ = try await removalManifestPage(coordinator, token: token)
 
-        // Commit: shared items are skipped (never trashed), the (now-empty)
-        // directories are trashed, and the record is still removed with a
-        // completed outcome — no failed items.
+        // Commit: shared items are skipped (never trashed). The directories
+        // still hold the shared files, so they are NOT empty and refuse to be
+        // trashed (Gate 1) — the batch is partial, the record is kept, and the
+        // token stays pending for guided recovery. Never a silent full delete
+        // of a directory that other torrents' data lives in.
         let result = try await commitRemoval(coordinator, token: token)
-        XCTAssertEqual(result.outcome, .completed)
+        XCTAssertEqual(result.outcome, .failed, "nothing trashed: both dirs hold shared data")
         XCTAssertEqual(result.skippedSharedItems, 2)
-        XCTAssertEqual(result.trashedItems, 2, "only the directories were trashed")
-        XCTAssertTrue(result.failedItems.isEmpty)
+        XCTAssertEqual(result.trashedItems, 0, "no file was trashed; both dirs hold shared data")
+        XCTAssertEqual(result.failedItems.count, 2)
+        XCTAssertTrue(result.failedItems.allSatisfy { $0.code == "not_empty" })
 
         let trashed = trash.recorded()
         XCTAssertFalse(trashed.contains(saveLocation.appendingPathComponent("dir/a.txt").path))
         XCTAssertFalse(trashed.contains(saveLocation.appendingPathComponent("dir/nested/b.bin").path))
+        XCTAssertFalse(trashed.contains(saveLocation.appendingPathComponent("dir").path),
+                       "a directory with shared content must never be trashed")
 
         let snap = try await snapshot(coordinator)
-        XCTAssertNil(snap.torrents.first { $0.id == recordA }, "record A removed despite shared files")
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordA }, "record A kept for guided recovery")
         let settledShared = try await store.removalToken(by: token.rawValue)
-        XCTAssertEqual(settledShared?.status, "committed")
+        XCTAssertEqual(settledShared?.status, "pending")
     }
 
     // MARK: - WP-10: FileSafetyValidator (symlink / TOCTOU / size)
@@ -535,7 +549,8 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
 
         // Simulate a crash AFTER the engine moved the payload: journal row at
-        // stage engine_moved, destination exists on disk, record not yet updated.
+        // stage engine_moved, the payload REALLY sits at the destination,
+        // record not yet updated.
         let seq = try await store.moveJournalCreate(
             recordID: recordID.rawValue.uuidString,
             fromPath: from.path,
@@ -549,6 +564,11 @@ final class WPSafeFileOperationsTests: TestProfileCase {
             status: MoveJournalEntry.Status.pending.rawValue,
             failureReason: nil,
             updatedAt: Self.nowMilliseconds()
+        )
+        try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: from.appendingPathComponent("payload.bin"),
+            to: to.appendingPathComponent("payload.bin")
         )
 
         // Restart: a fresh coordinator over the same store recovers the move.
@@ -657,15 +677,430 @@ final class WPSafeFileOperationsTests: TestProfileCase {
                        URL(fileURLWithPath: from.path).standardizedFileURL.path,
                        "guided recovery never rewrites the record")
     }
+
+    // MARK: - WP-10 (Gate 1): manifest-scoped trash only
+
+    func testWP10UnmanifestedSiblingSurvivesDirectoryTrash() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-sibling")
+        let files = [("dir/a.txt", Int64(100))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "tree")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // A file that is NOT part of the torrent lands in the manifest dir
+        // before the commit (the Gate 1 scenario the review called out).
+        let sibling = saveLocation.appendingPathComponent("dir/unmanifested.bin")
+        try Data(repeating: 0xEE, count: 333).write(to: sibling)
+
+        let result = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(result.outcome, .partial)
+        XCTAssertEqual(result.trashedItems, 1, "only the manifested file was trashed")
+        XCTAssertTrue(result.failedItems.contains { $0.relativePath == "dir" && $0.code == "not_empty" },
+                      "the parent dir must refuse to be trashed while it holds the sibling")
+
+        // The manifested file is gone; the unmanifested sibling survives.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: saveLocation.appendingPathComponent("dir/a.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sibling.path),
+                      "unmanifested content inside a manifest dir must survive")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saveLocation.appendingPathComponent("dir").path))
+
+        // Record kept, token pending for guided recovery.
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        let removed = await engineRef.removedCount(for: "stub-1")
+        XCTAssertEqual(removed, 0)
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+    }
+
+    // MARK: - WP-10 (Gate 7): TOCTOU / identity refusal before any mutation
+
+    func testWP10AncestorSymlinkSwapRefusedBeforeAnyMutation() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-swap")
+        let files = [("dir/a.txt", Int64(100))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "tree")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // Attacker swap: the payload ROOT becomes a symlink to another
+        // directory between prepare and commit.
+        let decoy = try profile.subdirectory("sl-swap-decoy")
+        try FileManager.default.removeItem(at: saveLocation)
+        try FileManager.default.createSymbolicLink(at: saveLocation, withDestinationURL: decoy)
+
+        let result = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(result.outcome, .failed)
+        XCTAssertEqual(trash.recorded().count, 0, "no mutation may reach the provider")
+        XCTAssertTrue(result.failedItems.allSatisfy { $0.code == "unsafe_symlink" },
+                      "every item must refuse on the swapped chain: \(result.failedItems)")
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+    }
+
+    func testWP10SameSizeReplacementRefusedByIdentity() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-replace")
+        let files = [("a.bin", Int64(100))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "a.bin", size: 100, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // Same-size replacement: different inode, identical byte count — the
+        // classic TOCTOU swap a size-only check cannot catch.
+        let file = saveLocation.appendingPathComponent("a.bin")
+        try FileManager.default.removeItem(at: file)
+        try Data(repeating: 0x77, count: 100).write(to: file)
+
+        let result = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(result.outcome, .failed)
+        XCTAssertEqual(trash.recorded().count, 0, "replacement must never be trashed")
+        XCTAssertEqual(result.failedItems.first?.code, "identity_changed")
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+    }
+
+    func testWP10HardlinkSwapRefusedByIdentity() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-hardlink")
+        let files = [("a.bin", Int64(100))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "a.bin", size: 100, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // A second hardlink to the same inode: the link count changes, which
+        // proves the file is referenced elsewhere — refuse before mutation.
+        let file = saveLocation.appendingPathComponent("a.bin")
+        try FileManager.default.linkItem(
+            at: file,
+            to: saveLocation.appendingPathComponent("elsewhere.bin")
+        )
+
+        let result = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(result.outcome, .failed)
+        XCTAssertEqual(trash.recorded().count, 0, "hardlinked file must never be trashed")
+        XCTAssertEqual(result.failedItems.first?.code, "identity_changed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+    }
+
+    // MARK: - WP-10 (Gate 8): journal failures are fail-closed
+
+    func testWP10JournalAppendFailureAbortsBatchBeforeAnyMutation() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-appendfail")
+        let files = [("dir/a.txt", Int64(100))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "tree")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        FailpointInjector.arm(.beforeTrashJournalAppend) { _ in
+            throw PersistenceError.injectedFailpoint(FailpointID.beforeTrashJournalAppend)
+        }
+        do {
+            _ = try await commitRemoval(coordinator, token: token)
+            XCTFail("journal append failure must abort the batch")
+        } catch {}
+        FailpointInjector.disarmAll()
+
+        XCTAssertEqual(trash.recorded().count, 0, "no mutation may proceed without a durable journal row")
+        let journal = try await store.trashJournalEntries(token: token.rawValue)
+        XCTAssertTrue(journal.isEmpty)
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+        let removed = await engineRef.removedCount(for: "stub-1")
+        XCTAssertEqual(removed, 0)
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+    }
+
+    func testWP10JournalUpdateFailureAbortsFailClosedAndResumes() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-updatefail")
+        let files = [("dir/a.txt", Int64(100)), ("dir/nested/b.bin", Int64(200))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "tree")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // Crash after the FIRST item was trashed but before its journal row
+        // could be marked: the batch aborts with a typed failure.
+        let throwOnce = ThrowFirst(n: 1)
+        FailpointInjector.arm(.beforeTrashJournalUpdate) { _ in
+            try throwOnce.fire()
+        }
+        do {
+            _ = try await commitRemoval(coordinator, token: token)
+            XCTFail("journal update failure must abort the batch")
+        } catch {}
+        FailpointInjector.disarmAll()
+
+        // Fail-closed: the durable state says exactly "one item trashed, row
+        // pending" — never a removed record without a settled outcome.
+        XCTAssertEqual(trash.recorded().count, 1)
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+
+        // Resume: the pending row's item was already moved, so it reports a
+        // trash failure; the remaining items are processed and journaled, and
+        // the now-empty directories trash normally.
+        let resumed = try await commitRemoval(coordinator, token: token)
+        XCTAssertEqual(resumed.outcome, .partial)
+        XCTAssertEqual(resumed.trashedItems, 3, "a.txt + dir/nested + dir trashed on resume")
+        XCTAssertTrue(resumed.failedItems.contains { $0.relativePath == "dir/nested/b.bin" },
+                      "already-moved item surfaces as a typed failure, never silently lost")
+        let journal = try await store.trashJournalEntries(token: token.rawValue)
+        XCTAssertEqual(journal.count, 5, "1 row from the aborted attempt + 4 rows appended on resume")
+    }
+
+    func testWP10SettleFailureFailsClosedAndPendingTokenSurvivesRestart() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let trash = RecordingTrashProvider(fakeTrashDirectory: profile.rootURL.appendingPathComponent("fake-trash-\(UUID().uuidString)"))
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus, trashProvider: trash)
+        let saveLocation = try profile.subdirectory("sl-settlefail")
+        let files = [("dir/a.txt", Int64(100)), ("dir/nested/b.bin", Int64(200))]
+        try materializePayload(saveLocation, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "tree")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        let token = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // Crash at the settle boundary: payload fully trashed, outcome never
+        // durably settled.
+        FailpointInjector.arm(.beforeRemovalTokenSettle) { _ in
+            throw PersistenceError.injectedFailpoint(FailpointID.beforeRemovalTokenSettle)
+        }
+        do {
+            _ = try await commitRemoval(coordinator, token: token)
+            XCTFail("settlement failure must abort fail-closed")
+        } catch {}
+        FailpointInjector.disarmAll()
+
+        XCTAssertEqual(trash.recorded().count, 4, "payload fully trashed")
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID }, "record kept on settle failure")
+        let removed = await engineRef.removedCount(for: "stub-1")
+        XCTAssertEqual(removed, 0, "engine remove must not fire without a settled outcome")
+        let tokenRow = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(tokenRow?.status, "pending")
+        XCTAssertNil(tokenRow?.outcomeJSON)
+        let journal = try await store.trashJournalEntries(token: token.rawValue)
+        XCTAssertEqual(journal.count, 4)
+        XCTAssertTrue(journal.allSatisfy { $0.status == TrashJournalEntry.Status.trashed.rawValue })
+
+        // Restart: the pending token is restored and ENUMERABLE by the UI
+        // (Gate 4/9 fetchPendingRemovals), then an explicit resume finishes.
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path),
+            trashProvider: trash
+        )
+        await restarted.restoreFromPersistence()
+
+        let pendingReply = await restarted.processCommand(encode(.fetchPendingRemovals(
+            FetchPendingRemovalsRequest(requestID: RequestID())
+        )))
+        let pendingPayload = try resultPayload(from: pendingReply)
+        guard case .pendingRemovals(let summaries) = pendingPayload else {
+            return XCTFail("unexpected \(pendingPayload)")
+        }
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.token, token)
+        XCTAssertEqual(summaries.first?.recordID, recordID)
+        XCTAssertEqual(summaries.first?.deleteFiles, true)
+        XCTAssertEqual(summaries.first?.totalItemCount, 4)
+        XCTAssertEqual(summaries.first?.trashedItemCount, 4)
+        XCTAssertEqual(summaries.first?.failedItemCount, 0)
+
+        let resumed = try await commitRemoval(restarted, token: token)
+        XCTAssertEqual(resumed.outcome, .completed)
+        XCTAssertEqual(resumed.trashedItems, 4, "resume counts journaled rows, never re-trashes")
+        XCTAssertEqual(trash.recorded().count, 4)
+        let settled = try await store.removalToken(by: token.rawValue)
+        XCTAssertEqual(settled?.status, "committed")
+        let snapAfter = try await snapshot(restarted)
+        XCTAssertNil(snapAfter.torrents.first { $0.id == recordID })
+    }
+
+    // MARK: - WP-10 (Gate 5): move recovery requires payload evidence
+
+    func testWP10MoveRecoveryDestinationWithoutPayloadIsNotResume() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let from = try profile.subdirectory("sl-evidence-from")
+        let to = try profile.subdirectory("sl-evidence-to")
+        let payload = from.appendingPathComponent("payload.bin")
+        try Data(repeating: 0xAA, count: 512).write(to: payload)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
+
+        // Crash AFTER the engine move was issued, but the destination holds NO
+        // payload (empty dir left by an interrupted move). Directory existence
+        // is NOT evidence: recovery must not adopt an empty destination.
+        let seq = try await store.moveJournalCreate(
+            recordID: recordID.rawValue.uuidString,
+            fromPath: from.path,
+            toPath: to.path,
+            fileListJSON: "[\"payload.bin\"]",
+            startedAt: Self.nowMilliseconds()
+        )
+        try await store.moveJournalUpdate(
+            seq: seq,
+            stage: MoveJournalEntry.Stage.engineMoved.rawValue,
+            status: MoveJournalEntry.Status.pending.rawValue,
+            failureReason: nil,
+            updatedAt: Self.nowMilliseconds()
+        )
+        try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+
+        let snap = try await snapshot(restarted)
+        XCTAssertEqual(snap.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: from.path).standardizedFileURL.path,
+                       "an empty destination must never be adopted as success")
+        let journalAfter = try await store.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertNil(journalAfter, "origin intact + empty destination is a rollback-noop")
+    }
+
+    func testWP10MoveRecoverySplitPayloadStaysGuided() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let from = try profile.subdirectory("sl-split-from")
+        let to = try profile.subdirectory("sl-split-to")
+        let files = [("a.bin", Int64(100)), ("b.bin", Int64(200))]
+        try materializePayload(from, files: files)
+
+        let metainfo = MetainfoBuilder.multiFile(files: files, pieceLength: 256, piecesCount: 1, name: "pair")
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
+
+        // Split crash: ONE file reached the destination, the other stayed at
+        // the origin. Neither side holds the full payload — evidence is
+        // ambiguous, so recovery stays guided and touches nothing.
+        try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: from.appendingPathComponent("a.bin"),
+            to: to.appendingPathComponent("a.bin")
+        )
+        let seq = try await store.moveJournalCreate(
+            recordID: recordID.rawValue.uuidString,
+            fromPath: from.path,
+            toPath: to.path,
+            fileListJSON: "[\"a.bin\",\"b.bin\"]",
+            startedAt: Self.nowMilliseconds()
+        )
+        try await store.moveJournalUpdate(
+            seq: seq,
+            stage: MoveJournalEntry.Stage.engineMoved.rawValue,
+            status: MoveJournalEntry.Status.pending.rawValue,
+            failureReason: nil,
+            updatedAt: Self.nowMilliseconds()
+        )
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+
+        let journalAfterSplit = try await store.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertNotNil(journalAfterSplit,
+                        "split payload evidence must stay for guided recovery")
+        let snap = try await snapshot(restarted)
+        XCTAssertEqual(snap.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: from.path).standardizedFileURL.path,
+                       "guided recovery never rewrites the record")
+    }
+}
+
+// MARK: - Deterministic throw-once helper (Gate 8 journal-update tests)
+
+private final class ThrowFirst: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remaining: Int
+
+    init(n: Int) {
+        remaining = n
+    }
+
+    func fire() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if remaining > 0 {
+            remaining -= 1
+            throw PersistenceError.injectedFailpoint(FailpointID.beforeTrashJournalUpdate)
+        }
+    }
 }
 
 // MARK: - Recording / failing trash provider (no real Trash in tests)
 
+/// Records trashed paths AND physically moves the item into a scratch
+/// directory, so directory-emptiness semantics (Gate 1) behave exactly like
+/// the real Finder Trash: children leave first, then the directory is empty
+/// and trashable; unmanifested/shared siblings keep it non-empty and safe.
 private final class RecordingTrashProvider: TrashProviding, @unchecked Sendable {
     private let lock = NSLock()
+    private let fakeTrashDirectory: URL
     private var trashedPaths: [String] = []
     private var failedPaths: Set<String> = []
     private var failAll = false
+
+    init(fakeTrashDirectory: URL) {
+        self.fakeTrashDirectory = fakeTrashDirectory
+    }
 
     func moveToTrash(at absolutePath: String) throws {
         lock.lock()
@@ -677,6 +1112,22 @@ private final class RecordingTrashProvider: TrashProviding, @unchecked Sendable 
                 userInfo: [NSLocalizedDescriptionKey: "injected trash failure"]
             )
         }
+        try FileManager.default.createDirectory(
+            at: fakeTrashDirectory,
+            withIntermediateDirectories: true
+        )
+        let source = URL(fileURLWithPath: absolutePath)
+        var destination = fakeTrashDirectory.appendingPathComponent(source.lastPathComponent)
+        var counter = 1
+        while FileManager.default.fileExists(atPath: destination.path) {
+            let stem = source.deletingPathExtension().lastPathComponent
+            let ext = source.pathExtension
+            destination = fakeTrashDirectory.appendingPathComponent(
+                ext.isEmpty ? "\(stem)-\(counter)" : "\(stem)-\(counter).\(ext)"
+            )
+            counter += 1
+        }
+        try FileManager.default.moveItem(at: source, to: destination)
         trashedPaths.append(absolutePath)
     }
 

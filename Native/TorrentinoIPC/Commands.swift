@@ -377,6 +377,17 @@ public struct CommitRemovalRequest: EngineCommandPayload {
     }
 }
 
+/// WP-10 (Gate 4/9): read-only enumeration of removal tokens whose outcome was
+/// never durably settled. The UI polls this after connecting to offer guided
+/// recovery of half-trashed batches from a previous session.
+public struct FetchPendingRemovalsRequest: EngineCommandPayload {
+    public let requestID: RequestID
+
+    public init(requestID: RequestID) {
+        self.requestID = requestID
+    }
+}
+
 public struct CancelOperationRequest: EngineCommandPayload {
     public let requestID: RequestID
     public let idempotencyKey: IdempotencyKey
@@ -590,6 +601,37 @@ public struct RemovalBatchResult: Codable, Sendable, Equatable {
     }
 }
 
+/// WP-10 (Gate 4/9): one pending (unsettled) removal batch, as enumerated by
+/// fetchPendingRemovals. Derived from the durable token row and trash journal
+/// so the UI can show evidence-based guided recovery after a restart.
+public struct PendingRemovalSummary: Codable, Sendable, Equatable {
+    public let token: RemovalToken
+    public let recordID: TorrentRecordID
+    public let displayName: String?
+    public let deleteFiles: Bool
+    public let totalItemCount: Int
+    public let trashedItemCount: Int
+    public let failedItemCount: Int
+
+    public init(
+        token: RemovalToken,
+        recordID: TorrentRecordID,
+        displayName: String?,
+        deleteFiles: Bool,
+        totalItemCount: Int,
+        trashedItemCount: Int,
+        failedItemCount: Int
+    ) {
+        self.token = token
+        self.recordID = recordID
+        self.displayName = displayName
+        self.deleteFiles = deleteFiles
+        self.totalItemCount = totalItemCount
+        self.trashedItemCount = trashedItemCount
+        self.failedItemCount = failedItemCount
+    }
+}
+
 /// Opaque one-shot token for the two-phase removal (plan ADR-010).
 public struct RemovalToken: Codable, Sendable, Equatable, CustomStringConvertible {
     public let rawValue: String
@@ -696,6 +738,7 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
     case moveStorage(MoveStorageRequest)
     case prepareRemoval(PrepareRemovalRequest)
     case commitRemoval(CommitRemovalRequest)
+    case fetchPendingRemovals(FetchPendingRemovalsRequest)
     case cancelOperation(CancelOperationRequest)
     case inspectCreateSource(InspectCreateSourceRequest)
     case commitCreate(CommitCreateRequest)
@@ -739,6 +782,7 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
             .moveStorage(MoveStorageRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID, destination: PersistedLocation(path: ""))),
             .prepareRemoval(PrepareRemovalRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID, deleteFiles: false)),
             .commitRemoval(CommitRemovalRequest(requestID: rid, idempotencyKey: idempotency, token: emptyRemoval)),
+            .fetchPendingRemovals(FetchPendingRemovalsRequest(requestID: rid)),
             .cancelOperation(CancelOperationRequest(requestID: rid, idempotencyKey: idempotency, operationID: OperationID())),
             .inspectCreateSource(InspectCreateSourceRequest(requestID: rid, sourcePath: "")),
             .commitCreate(CommitCreateRequest(requestID: rid, idempotencyKey: idempotency, token: emptyPlan)),
@@ -779,6 +823,7 @@ extension EngineCommandV1 {
         case .moveStorage: return "moveStorage"
         case .prepareRemoval: return "prepareRemoval"
         case .commitRemoval: return "commitRemoval"
+        case .fetchPendingRemovals: return "fetchPendingRemovals"
         case .cancelOperation: return "cancelOperation"
         case .inspectCreateSource: return "inspectCreateSource"
         case .commitCreate: return "commitCreate"
@@ -817,6 +862,7 @@ extension EngineCommandV1 {
         case .moveStorage(let p): return p.requestID
         case .prepareRemoval(let p): return p.requestID
         case .commitRemoval(let p): return p.requestID
+        case .fetchPendingRemovals(let p): return p.requestID
         case .cancelOperation(let p): return p.requestID
         case .inspectCreateSource(let p): return p.requestID
         case .commitCreate(let p): return p.requestID

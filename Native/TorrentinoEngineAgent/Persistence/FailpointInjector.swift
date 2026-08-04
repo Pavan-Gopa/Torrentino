@@ -12,7 +12,7 @@
 
 import Foundation
 
-/// The eight deterministic injection points of the persistence pipeline.
+/// The fixed injection points of the persistence pipeline.
 enum FailpointID: String, Sendable, CaseIterable, CustomStringConvertible {
     /// 1. Before the temporary sidecar file is written.
     case beforeTemporaryWrite
@@ -30,6 +30,12 @@ enum FailpointID: String, Sendable, CaseIterable, CustomStringConvertible {
     case duringWALCheckpoint
     /// 8. Before every clean-shutdown step.
     case eachCleanShutdownStep
+    /// 9. WP-10: before a trash-journal row append (durable removal journal).
+    case beforeTrashJournalAppend
+    /// 10. WP-10: before a trash-journal row status update.
+    case beforeTrashJournalUpdate
+    /// 11. WP-10: before a removal token settle (outcome + final status).
+    case beforeRemovalTokenSettle
 
     var description: String { rawValue }
 }
