@@ -41,6 +41,9 @@ struct ContentView: View {
         .sheet(isPresented: $transfers.showAddSheet) {
             AddTorrentSheet(viewModel: transfers)
         }
+        .sheet(isPresented: $transfers.showCreateSheet) {
+            CreateTorrentSheet(viewModel: transfers)
+        }
     }
 
     private var emptyState: some View {

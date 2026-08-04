@@ -436,4 +436,21 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
             redactedContext: details ?? "operation=\(operation)"
         )
     }
+    public static func operationCancelled(details: String) -> EngineFault {
+        EngineFault(
+            code: .operationCancelled,
+            severity: .info,
+            recoveryActions: [],
+            redactedContext: details
+        )
+    }
+
+    public static func corruptData(details: String) -> EngineFault {
+        EngineFault(
+            code: .internalError,
+            severity: .error,
+            recoveryActions: ["retry_op"],
+            redactedContext: details
+        )
+    }
 }

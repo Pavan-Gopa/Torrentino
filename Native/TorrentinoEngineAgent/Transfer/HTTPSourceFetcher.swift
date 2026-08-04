@@ -9,7 +9,7 @@
 // fully buffered before returning and never written anywhere by this type.
 
 import Foundation
-
+import TorrentinoDomain
 public enum HTTPSourceError: Error, Sendable, Equatable, CustomStringConvertible {
     case invalidURL(String)
     case unsupportedScheme(String)

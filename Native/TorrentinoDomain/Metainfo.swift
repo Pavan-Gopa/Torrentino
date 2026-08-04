@@ -1,5 +1,5 @@
-// Layer: EngineAgent (Transfer).
-// Role: parsed, validated metainfo of one .torrent (BEP-3, v1). Everything
+// Layer: Domain
+// Role: parsed, validated metainfo of one .torrent (BEP-3, v1/v2). Everything
 // the engine/persistence/UI needs to know about the payload BEFORE any byte
 // is written: info hash, name, files, total size, trackers, private flag.
 // Must-not: hold engine handles, write payloads, or trust unvalidated input;
@@ -10,7 +10,6 @@
 
 import Foundation
 import CommonCrypto
-import TorrentinoDomain
 
 public enum MetainfoError: Error, Sendable, Equatable, CustomStringConvertible {
     case notADictionary
@@ -33,23 +32,23 @@ public enum MetainfoError: Error, Sendable, Equatable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .notADictionary: return "root is not a dictionary"
-        case .missingInfo: return "missing 'info' dictionary"
-        case .missingName: return "missing or invalid 'name'"
+        case .notADictionary: return "not a bencoded dictionary"
+        case .missingInfo: return "missing info dictionary"
+        case .missingName: return "missing or empty torrent name"
         case .invalidName: return "invalid torrent name"
         case .invalidPieceLength: return "invalid piece length"
-        case .missingPieces: return "missing 'pieces'"
-        case .invalidPieces: return "invalid 'pieces' payload"
-        case .singleFileMissingLength: return "single-file mode missing 'length'"
-        case .negativeLength(let n): return "negative length \(n)"
+        case .missingPieces: return "missing pieces field"
+        case .invalidPieces: return "invalid pieces field length (must be multiple of 20)"
+        case .singleFileMissingLength: return "single-file mode missing length"
+        case .negativeLength(let len): return "negative file length: \(len)"
         case .emptyPath: return "empty file path"
-        case .invalidPath(let p): return "invalid path '\(p)'"
-        case .tooManyFiles(let n): return "too many files (\(n) > \(TransferLimits.maxFiles))"
-        case .totalSizeOverflow: return "total size overflow"
-        case .invalidTrackerURL(let u): return "invalid tracker URL '\(u)'"
-        case .unsupportedFormat: return "unsupported metainfo format (v1 only in this slice)"
-        case .duplicateFileName(let n): return "duplicate file path '\(n)'"
-        case .invalidField(let f): return "invalid metainfo field '\(f)'"
+        case .invalidPath(let p): return "invalid file path: \(p)"
+        case .tooManyFiles(let count): return "file count \(count) exceeds limit (\(TransferLimits.maxFiles))"
+        case .totalSizeOverflow: return "total size exceeds 64-bit integer limit"
+        case .invalidTrackerURL(let url): return "invalid tracker URL: \(url)"
+        case .unsupportedFormat: return "unsupported torrent format"
+        case .duplicateFileName(let name): return "duplicate relative file path: \(name)"
+        case .invalidField(let f): return "invalid field '\(f)'"
         }
     }
 }
@@ -136,9 +135,12 @@ public enum MetainfoParser {
         guard case .dictionary(let infoDict, let infoSpan) = info else { throw MetainfoError.missingInfo }
         let infoDictData = data.subdata(in: infoSpan)
 
-        guard let pieces = infoDict["pieces"] else { throw MetainfoError.missingPieces }
-        guard case .bytes(let piecesData, _) = pieces, piecesData.count % 20 == 0, !piecesData.isEmpty else {
-            throw MetainfoError.invalidPieces
+        let isPrivate: Bool
+        if let privateValue = infoDict["private"] {
+            guard case .integer(let flag, _) = privateValue else { throw MetainfoError.invalidField("private") }
+            isPrivate = flag == 1
+        } else {
+            isPrivate = false
         }
 
         guard let nameValue = infoDict["name.utf-8"] ?? infoDict["name"] else { throw MetainfoError.missingName }
@@ -149,14 +151,6 @@ public enum MetainfoParser {
         guard let pieceLengthValue = infoDict["piece length"] else { throw MetainfoError.invalidPieceLength }
         guard case .integer(let pieceLength, _) = pieceLengthValue, pieceLength > 0 else {
             throw MetainfoError.invalidPieceLength
-        }
-
-        let isPrivate: Bool
-        if let privateValue = infoDict["private"] {
-            guard case .integer(let flag, _) = privateValue else { throw MetainfoError.invalidField("private") }
-            isPrivate = flag == 1
-        } else {
-            isPrivate = false
         }
 
         let trackers = try extractTrackers(top)
@@ -276,7 +270,9 @@ enum SHA1 {
     static func digest(_ data: Data) -> [UInt8] {
         var digest = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
         data.withUnsafeBytes { buffer in
-            _ = CC_SHA1(buffer.baseAddress, CC_LONG(data.count), &digest)
+            if let ptr = buffer.baseAddress {
+                CC_SHA1(ptr, CC_LONG(data.count), &digest)
+            }
         }
         return digest
     }

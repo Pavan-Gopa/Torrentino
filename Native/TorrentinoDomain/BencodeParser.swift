@@ -1,4 +1,4 @@
-// Layer: EngineAgent (Transfer).
+// Layer: Domain
 // Role: strict bencode parser for .torrent metainfo. Untrusted input only —
 // every structural failure is an error, never a partial tree. The parser
 // records each value's byte span so the SHA-1 info hash can be computed over
@@ -124,77 +124,84 @@ public enum BencodeParser {
             throw BencodeError.malformedInteger("<overflow>")
         }
         cursor += 1 // 'e'
-        return .integer(isNegative ? -magnitude : magnitude, span: start..<cursor)
+        let val = isNegative ? -magnitude : magnitude
+        return .integer(val, span: start..<cursor)
     }
 
     private static func parseString(_ data: Data, cursor: inout Int) throws -> BencodeValue {
         let start = cursor
-        // length digits
-        let lengthStart = cursor
+        let lenStart = cursor
+        var lenDigits = 0
         while let b = data.byte(at: cursor), b != 0x3A /* ':' */ {
             guard b >= 0x30, b <= 0x39 else { throw BencodeError.malformedLength("<non-digit>") }
             cursor += 1
-            if cursor - lengthStart > 20 { throw BencodeError.malformedLength("<overlong>") }
+            lenDigits += 1
+            guard lenDigits <= 10 else { throw BencodeError.malformedLength("<overlong>") }
         }
         guard data.byte(at: cursor) == 0x3A else { throw BencodeError.truncated }
-        let digits = data.subdata(in: lengthStart..<cursor)
-        guard let text = String(bytes: digits, encoding: .ascii) else {
-            throw BencodeError.malformedLength("<non-ascii>")
+        guard lenDigits > 0 else { throw BencodeError.malformedLength("") }
+        if lenDigits > 1, data[lenStart] == 0x30 {
+            throw BencodeError.malformedLength("<leading-zero>")
         }
-        guard !text.isEmpty else { throw BencodeError.malformedLength("") }
-        guard text != "0" ? !text.hasPrefix("0") : true else { throw BencodeError.malformedLength(text) }
-        guard let length = Int(text) else { throw BencodeError.malformedLength(text) }
+        guard let lengthInt = Int(String(data: data.subdata(in: lenStart..<cursor), encoding: .ascii) ?? ""),
+              lengthInt >= 0 else {
+            throw BencodeError.malformedLength("<bad-len>")
+        }
         cursor += 1 // ':'
         let payloadStart = cursor
-        let payloadEnd = payloadStart + length
-        guard payloadEnd <= data.count else { throw BencodeError.truncated }
-        cursor = payloadEnd
-        return .bytes(data.subdata(in: payloadStart..<payloadEnd), span: start..<cursor)
+        guard cursor + lengthInt <= data.count else { throw BencodeError.truncated }
+        cursor += lengthInt
+        let strBytes = data.subdata(in: payloadStart..<cursor)
+        return .bytes(strBytes, span: start..<cursor)
     }
 
     private static func parseList(_ data: Data, cursor: inout Int, depth: Int) throws -> BencodeValue {
         let start = cursor
         cursor += 1 // 'l'
         var items: [BencodeValue] = []
-        while let b = data.byte(at: cursor) {
-            if b == 0x65 /* 'e' */ {
-                cursor += 1
-                return .list(items, span: start..<cursor)
-            }
-            items.append(try parseValue(data, cursor: &cursor, depth: depth + 1))
+        while let b = data.byte(at: cursor), b != 0x65 /* 'e' */ {
+            let item = try parseValue(data, cursor: &cursor, depth: depth + 1)
+            items.append(item)
         }
-        throw BencodeError.truncated
+        guard data.byte(at: cursor) == 0x65 else { throw BencodeError.truncated }
+        cursor += 1 // 'e'
+        return .list(items, span: start..<cursor)
     }
 
     private static func parseDictionary(_ data: Data, cursor: inout Int, depth: Int) throws -> BencodeValue {
         let start = cursor
         cursor += 1 // 'd'
-        var entries: [String: BencodeValue] = [:]
-        while let b = data.byte(at: cursor) {
-            if b == 0x65 /* 'e' */ {
-                cursor += 1
-                return .dictionary(entries, span: start..<cursor)
-            }
-            // Keys are bencoded strings; reuse the string parser.
-            let keyValue = try parseString(data, cursor: &cursor)
-            guard case .bytes(let keyBytes, _) = keyValue,
-                  let key = String(data: keyBytes, encoding: .utf8) else {
+        var dict: [String: BencodeValue] = [:]
+        var lastKeyData: Data? = nil
+        while let b = data.byte(at: cursor), b != 0x65 /* 'e' */ {
+            let keyStart = cursor
+            let keyVal = try parseValue(data, cursor: &cursor, depth: depth + 1)
+            guard case .bytes(let keyData, _) = keyVal else {
                 throw BencodeError.invalidDictionaryKey
             }
-            // Duplicate keys are malformed (attacker-controlled ambiguity).
-            guard entries[key] == nil else { throw BencodeError.invalidDictionaryKey }
-            entries[key] = try parseValue(data, cursor: &cursor, depth: depth + 1)
+            // Strict BEP-3: dictionary keys MUST be sorted in lexicographical
+            // byte order and MUST NOT contain duplicates.
+            if let lastKeyData {
+                if keyData == lastKeyData { throw BencodeError.invalidDictionaryKey }
+                if keyData.lexicographicallyPrecedes(lastKeyData) { throw BencodeError.invalidDictionaryKey }
+            }
+            lastKeyData = keyData
+            guard let keyString = String(data: keyData, encoding: .utf8) ?? String(data: keyData, encoding: .isoLatin1) else {
+                throw BencodeError.invalidDictionaryKey
+            }
+            _ = keyStart // suppress unused
+            let val = try parseValue(data, cursor: &cursor, depth: depth + 1)
+            dict[keyString] = val
         }
-        throw BencodeError.truncated
+        guard data.byte(at: cursor) == 0x65 else { throw BencodeError.truncated }
+        cursor += 1 // 'e'
+        return .dictionary(dict, span: start..<cursor)
     }
 }
 
-// MARK: - Small Data helpers
-
-extension Data {
-    /// Returns the byte at `index` or nil when out of bounds.
+private extension Data {
     func byte(at index: Int) -> UInt8? {
-        guard index >= startIndex, index < endIndex else { return nil }
-        return self[index]
+        guard index >= 0, index < count else { return nil }
+        return self[self.startIndex + index]
     }
 }

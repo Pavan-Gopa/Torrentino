@@ -31,6 +31,14 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var fileRevision: UInt64 = 0
     @Published private(set) var connectionGeneration: UInt64 = 0
     @Published var showAddSheet = false
+    @Published var showCreateSheet = false
+    @Published private(set) var creatorProgressFraction: Double = 0.0
+    @Published private(set) var creatorProgressStage: String = ""
+    @Published private(set) var creatorCompletedSummary: CreateSummary?
+    @Published private(set) var creatorError: String?
+    @Published private(set) var activeCreatorToken: CreatorPlanToken?
+    /// Track the in-flight creation Task so cancelCreation() can cancel it.
+    private var creatorTask: Task<Void, Never>?
     @Published var showInspector = false
     @Published var searchText = ""
     @Published var searchFocusRequest = 0
@@ -184,8 +192,19 @@ final class TorrentListViewModel: ObservableObject {
                 // published lets the presentation layer show offline/sleep/
                 // pressure recovery without polling the heavy command lane.
                 systemConditions = payload.conditions
-            case .engineHealthChanged, .engineLifecycleChanged, .operationProgress,
-                 .operationCompleted, .recoverableIssue, .settingsChanged:
+            case .operationProgress(let payload):
+                creatorProgressFraction = payload.fraction
+            case .operationCompleted(let payload):
+                switch payload.outcome {
+                case .succeeded:
+                    creatorProgressFraction = 1.0
+                    creatorProgressStage = "Completed"
+                case .cancelled:
+                    creatorError = "Operation cancelled"
+                case .failed(let fault):
+                    creatorError = fault.redactedContext ?? fault.localizationKey
+                }
+            case .engineHealthChanged, .engineLifecycleChanged, .recoverableIssue, .settingsChanged:
                 break
             }
         }
@@ -552,8 +571,39 @@ final class TorrentListViewModel: ObservableObject {
         }
         return String(localized: String.LocalizationValue(fallback))
     }
-}
 
+    // MARK: - Torrent Creator
+
+    func inspectCreateSource(sourcePath: String, options: CreateOptions? = nil) async throws -> CreateSourceInspection {
+        creatorError = nil
+        creatorProgressFraction = 0.0
+        creatorProgressStage = "Scanning"
+        let inspection = try await client.inspectCreateSource(sourcePath: sourcePath, options: options)
+        activeCreatorToken = inspection.token
+        return inspection
+    }
+
+    func fetchCreatorManifestPage(token: CreatorPlanToken, cursor: PageCursor? = nil, pageSize: Int = 100) async throws -> Page<CreatorManifestEntry> {
+        try await client.fetchCreatorManifestPage(token: token, cursor: cursor, pageSize: pageSize)
+    }
+
+    func commitCreate(token: CreatorPlanToken, idempotencyKey: IdempotencyKey = IdempotencyKey()) async throws {
+        creatorError = nil
+        creatorProgressFraction = 0.0
+        creatorProgressStage = "Creating..."
+        try await client.commitCreate(token: token, idempotencyKey: idempotencyKey)
+        try? await fetchFullSnapshot()
+    }
+
+    /// Cancels an in-flight creation operation by cancelling the tracking
+    /// task. The agent-side CreatorPlanStore checks cancelCheck between stages
+    /// and cleans up the temp file via the defer block.
+    func cancelCreation() {
+        creatorTask?.cancel()
+        creatorTask = nil
+        creatorError = nil
+    }
+}
 // FixtureLibrary is kept in its dependency-free source file so the app tests
 // can exercise the same generator: enum FixtureLibrary { static func snapshot(count: Int = 100) -> [TorrentSnapshot] { return (1...count).map { _ in fatalError() } } }
 

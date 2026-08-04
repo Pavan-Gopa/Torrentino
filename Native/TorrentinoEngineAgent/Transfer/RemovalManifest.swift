@@ -13,6 +13,7 @@
 
 import Foundation
 import TorrentinoIPC
+import TorrentinoDomain
 
 /// One trimmable row of the removal manifest (WP-10 exact manifest/token).
 struct RemovalManifestItem: Codable, Sendable, Equatable {

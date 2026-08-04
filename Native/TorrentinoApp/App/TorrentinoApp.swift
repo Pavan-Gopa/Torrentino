@@ -49,7 +49,14 @@ struct TorrentinoApp: App {
                 Button(String(localized: "menu.file.add_url")) {
                     AppContext.transfers.showAddSheet = true
                 }
-                 .keyboardShortcut("n", modifiers: [.command, .shift])
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(String(localized: "menu.file.create_torrent")) {
+                    AppContext.transfers.showCreateSheet = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
             }
             CommandMenu(String(localized: "menu.edit")) {
                 Button(String(localized: "menu.edit.find")) {

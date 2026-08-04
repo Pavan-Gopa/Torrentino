@@ -644,7 +644,7 @@ public struct RemovalToken: Codable, Sendable, Equatable, CustomStringConvertibl
 }
 
 /// Opaque one-shot token for the two-phase create flow (plan §7.4).
-public struct CreatorPlanToken: Codable, Sendable, Equatable, CustomStringConvertible {
+public struct CreatorPlanToken: Codable, Sendable, Equatable, Hashable, CustomStringConvertible {
     public let rawValue: String
 
     public init(rawValue: String) {
@@ -654,16 +654,66 @@ public struct CreatorPlanToken: Codable, Sendable, Equatable, CustomStringConver
     public var description: String { rawValue }
 }
 
+public enum TorrentFormat: String, Codable, Sendable, Equatable, CaseIterable {
+    case hybrid
+    case v1
+    case v2
+
+    public var displayName: String {
+        switch self {
+        case .hybrid: return "Hybrid (v1 + v2)"
+        case .v1: return "v1 (Legacy)"
+        case .v2: return "v2 (Next-Gen)"
+        }
+    }
+}
+
 /// Create flow options (v1).
 public struct CreateOptions: Codable, Sendable, Equatable {
+    public let outputPath: String?
+    public let format: TorrentFormat
+    public let trackers: [[String]]
+    public let isPrivate: Bool
+    public let pieceSizeKiB: Int64?
+    public let comment: String?
+    public let source: String?
     public let seedWhileDownloading: Bool
     public let includeHiddenFiles: Bool
-    public let pieceSizeKiB: Int64?
 
-    public init(seedWhileDownloading: Bool, includeHiddenFiles: Bool, pieceSizeKiB: Int64? = nil) {
+    public init(
+        outputPath: String? = nil,
+        format: TorrentFormat = .hybrid,
+        trackers: [[String]] = [],
+        isPrivate: Bool = false,
+        pieceSizeKiB: Int64? = nil,
+        comment: String? = nil,
+        source: String? = nil,
+        seedWhileDownloading: Bool = true,
+        includeHiddenFiles: Bool = false
+    ) {
+        self.outputPath = outputPath
+        self.format = format
+        self.trackers = trackers
+        self.isPrivate = isPrivate
+        self.pieceSizeKiB = pieceSizeKiB
+        self.comment = comment
+        self.source = source
         self.seedWhileDownloading = seedWhileDownloading
         self.includeHiddenFiles = includeHiddenFiles
-        self.pieceSizeKiB = pieceSizeKiB
+    }
+
+    public init(seedWhileDownloading: Bool, includeHiddenFiles: Bool, pieceSizeKiB: Int64? = nil) {
+        self.init(
+            outputPath: nil,
+            format: .hybrid,
+            trackers: [],
+            isPrivate: false,
+            pieceSizeKiB: pieceSizeKiB,
+            comment: nil,
+            source: nil,
+            seedWhileDownloading: seedWhileDownloading,
+            includeHiddenFiles: includeHiddenFiles
+        )
     }
 }
 
@@ -672,12 +722,23 @@ public struct CreateSummary: Codable, Sendable, Equatable {
     public let totalBytes: Int64
     public let pieceSizeBytes: Int64
     public let willSeed: Bool
+    public let skippedSymlinksCount: Int
+    public let hardlinkCount: Int
 
-    public init(fileCount: Int, totalBytes: Int64, pieceSizeBytes: Int64, willSeed: Bool) {
+    public init(
+        fileCount: Int,
+        totalBytes: Int64,
+        pieceSizeBytes: Int64,
+        willSeed: Bool,
+        skippedSymlinksCount: Int = 0,
+        hardlinkCount: Int = 0
+    ) {
         self.fileCount = fileCount
         self.totalBytes = totalBytes
         self.pieceSizeBytes = pieceSizeBytes
         self.willSeed = willSeed
+        self.skippedSymlinksCount = skippedSymlinksCount
+        self.hardlinkCount = hardlinkCount
     }
 }
 

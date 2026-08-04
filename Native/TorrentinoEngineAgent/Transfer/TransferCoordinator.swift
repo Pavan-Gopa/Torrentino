@@ -15,7 +15,7 @@
 import Foundation
 import OSLog
 import TorrentinoIPC
-
+import TorrentinoDomain
 public actor TransferCoordinator {
     // MARK: - Configuration
 
@@ -64,6 +64,8 @@ public actor TransferCoordinator {
     private var nextNetworkRecoveryAt = Date.distantPast
     private var readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
     private var restartInFlight = false
+    private let creatorPlanStore = CreatorPlanStore()
+
     private static let reannounceCooldown: TimeInterval = 30
     private static let pendingOperationsLimit = 256
     private static let pendingInspectionBytesLimit: Int64 = 64 * 1024 * 1024
@@ -429,8 +431,8 @@ public actor TransferCoordinator {
             return .success(.activity(activity(request: request)))
         case .fetchRemovalManifestPage(let request):
             return await handleFetchRemovalManifestPage(request)
-        case .fetchCreatorManifestPage:
-            return .failure(unsupported("fetchCreatorManifestPage"))
+        case .fetchCreatorManifestPage(let request):
+            return await handleFetchCreatorManifestPage(request)
         case .inspectAddSource(let request):
             return await handleInspect(request)
         case .commitAdd(let request):
@@ -477,7 +479,11 @@ public actor TransferCoordinator {
             return await handleFetchPendingRemovals(request)
         case .moveStorage(let request):
             return await handleMoveStorage(request)
-        case .inspectCreateSource, .commitCreate, .exportDiagnostics:
+        case .inspectCreateSource(let request):
+            return await handleInspectCreateSource(request)
+        case .commitCreate(let request):
+            return await handleCommitCreate(request)
+        case .exportDiagnostics:
             return .failure(unsupported(command.name))
         }
     }
@@ -2461,5 +2467,96 @@ extension TransferCoordinator {
     private func setActiveSettings(_ settings: EngineSettings, revision: SettingsRevision) {
         activeSettings = settings
         settingsRevision = revision
+    }
+    // MARK: - Creator Flow
+
+    private func handleInspectCreateSource(_ request: InspectCreateSourceRequest) async -> EngineCommandResult {
+        do {
+            let inspection = try await creatorPlanStore.inspectCreateSource(
+                sourcePath: request.sourcePath,
+                options: request.options
+            )
+            return .success(.createSourceInspection(inspection))
+        } catch let fault as EngineFault {
+            return .failure(fault)
+        } catch let err as SourceScannerError {
+            return .failure(.invalidPayload(details: err.description))
+        } catch {
+            return .failure(.storageFailure(details: "Failed to inspect create source: \(error.localizedDescription)"))
+        }
+    }
+
+    private func handleFetchCreatorManifestPage(_ request: FetchCreatorManifestPageRequest) async -> EngineCommandResult {
+        do {
+            let page = try await creatorPlanStore.fetchCreatorManifestPage(
+                token: request.token,
+                cursor: request.cursor,
+                pageSize: request.pageSize
+            )
+            return .success(.creatorManifestPage(page))
+        } catch let fault as EngineFault {
+            return .failure(fault)
+        } catch {
+            return .failure(.storageFailure(details: "Failed to fetch creator manifest page: \(error.localizedDescription)"))
+        }
+    }
+
+    private func handleCommitCreate(_ request: CommitCreateRequest) async -> EngineCommandResult {
+        let operationID = OperationID()
+        await eventBus.publish([.operationProgress(OperationProgressEvent(
+            operationID: operationID,
+            phase: .started,
+            fraction: 0.0,
+            timestamp: Date()
+        ))])
+
+        do {
+            let _ = try await creatorPlanStore.commitCreate(
+                token: request.token,
+                idempotencyKey: request.idempotencyKey,
+                addTorrent: { [engine] metainfoData, savePath, paused in
+                    let spec = AddSpecificationDTO(
+                        torrentFile: metainfoData,
+                        magnetURI: nil,
+                        savePath: savePath,
+                        paused: paused
+                    )
+                    _ = try await engine.add(specification: spec)
+                },
+                onProgress: { [eventBus] fraction, stage in
+                    Task {
+                        await eventBus.publish([.operationProgress(OperationProgressEvent(
+                            operationID: operationID,
+                            phase: .running,
+                            fraction: fraction,
+                            timestamp: Date()
+                        ))])
+                    }
+                }
+            )
+
+            await eventBus.publish([.operationCompleted(OperationCompletedEvent(
+                operationID: operationID,
+                outcome: .succeeded,
+                timestamp: Date()
+            ))])
+
+            return .success(.ack)
+        } catch let fault as EngineFault {
+            await eventBus.publish([.operationCompleted(OperationCompletedEvent(
+                operationID: operationID,
+                outcome: .failed(fault),
+                timestamp: Date()
+            ))])
+            return .failure(fault)
+        } catch {
+            let fault = EngineFault.storageFailure(details: "commitCreate failed: \(error.localizedDescription)")
+            await eventBus.publish([.operationCompleted(OperationCompletedEvent(
+                operationID: operationID,
+                outcome: .failed(fault),
+                timestamp: Date()
+            ))])
+            return .failure(fault)
+        }
     }
 }

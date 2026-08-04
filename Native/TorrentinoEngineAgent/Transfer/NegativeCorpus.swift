@@ -8,7 +8,7 @@
 // Must-not: be used as production data; contains only test fixtures.
 
 import Foundation
-
+import TorrentinoDomain
 public enum NegativeCorpus {
     // MARK: - Bencode negatives
 

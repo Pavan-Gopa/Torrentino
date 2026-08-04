@@ -146,6 +146,40 @@ actor EngineClient {
             throw EngineClientError.protocolMismatch(details: "restartEngineSafely returned an unexpected payload")
         }
     }
+    // MARK: - Creator Flow
+
+    func inspectCreateSource(sourcePath: String, options: CreateOptions? = nil) async throws -> CreateSourceInspection {
+        let command = EngineCommandV1.inspectCreateSource(
+            InspectCreateSourceRequest(requestID: RequestID(), sourcePath: sourcePath, options: options)
+        )
+        let payload = try await sendCommand(command)
+        guard case .createSourceInspection(let inspection) = payload else {
+            throw EngineClientError.protocolMismatch(details: "expected createSourceInspection")
+        }
+        return inspection
+    }
+
+    func fetchCreatorManifestPage(
+        token: CreatorPlanToken,
+        cursor: PageCursor? = nil,
+        pageSize: Int = 100
+    ) async throws -> Page<CreatorManifestEntry> {
+        let command = EngineCommandV1.fetchCreatorManifestPage(
+            FetchCreatorManifestPageRequest(requestID: RequestID(), token: token, cursor: cursor, pageSize: pageSize)
+        )
+        let payload = try await sendCommand(command)
+        guard case .creatorManifestPage(let page) = payload else {
+            throw EngineClientError.protocolMismatch(details: "expected creatorManifestPage")
+        }
+        return page
+    }
+
+    func commitCreate(token: CreatorPlanToken, idempotencyKey: IdempotencyKey = IdempotencyKey()) async throws {
+        let command = EngineCommandV1.commitCreate(
+            CommitCreateRequest(requestID: RequestID(), idempotencyKey: idempotencyKey, token: token)
+        )
+        _ = try await sendCommand(command)
+    }
 
     /// Low-level variant returning the raw result envelope (tests, diagnostics).
     func sendEnvelope(_ envelope: IPCEnvelope) async throws -> IPCEnvelope {

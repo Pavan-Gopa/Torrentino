@@ -9,6 +9,7 @@
 
 import Foundation
 import TorrentinoIPC
+import TorrentinoDomain
 
 public enum PreflightError: Error, Sendable, Equatable, CustomStringConvertible {
     case torrentFileTooLarge(Int)
