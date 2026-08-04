@@ -30,8 +30,8 @@ implementation:
   note: >-
     WP10-BUG-001 fix committed 0ec428f (7 fail-closed spots in
     TransferCoordinator.swift). Orchestrator spot-check:
-    test_wp10_fail_closed_contract.sh PASS. Process note: Coder did not fill
-    FEEDBACK.md handoff this round — Reviewer verifies independently as usual.
+    test_wp10_fail_closed_contract.sh PASS. Coder FEEDBACK.md handoff filled
+    (RESULT: waiting_review). Reviewer verifies independently as usual.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md

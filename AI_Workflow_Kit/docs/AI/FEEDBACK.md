@@ -1,4 +1,70 @@
-# FEEDBACK — WP-10 FIX Review (Native macOS)
+# FEEDBACK — WP-10 FIX round 2: WP10-BUG-001 fail-closed journal contract
+
+Date: 2026-08-04
+Role: Implementation Engineer (coder; fix of QA finding WP10-BUG-001)
+Scope: TransferCoordinator.swift mutation/recovery paths only. All other WP-10
+surface was already APPROVED and is untouched.
+
+### 1. Build & commands
+
+| Check | Result |
+|---|---|
+| `xcodebuild build` (Torrentino, macOS arm64) | ✅ BUILD SUCCEEDED |
+| `xcodebuild test` full suite | ✅ TEST SUCCEEDED |
+| `qa/test_wp10_fail_closed_contract.sh` | ✅ PASS — all 7 fail-closed checks |
+| `qa/run_qa_suite.sh` | 111/112 — sole FAIL is `test_wp03_legacy_untouched.sh`: pre-existing Human research dirt in `Legacy/Tauri` (ADR-013 environmental waiver; per HARD BAN not read, not staged, not touched). All 8 WP-10 gates PASS. |
+
+### 2. WP compliance (7 points from BUG_REPORT.md WP10-BUG-001)
+
+| # | Finding | Fix | Evidence |
+|---|---|---|---|
+| 1 | `removalTokenCount()` failure defaulted to 0 → capacity check failed open | throwing `do/catch` in `handlePrepareRemoval`; error returns typed `persistenceFault` | `try? await persistence.removalTokenCount()` gone |
+| 2 | `trashJournalEntries()` failure fabricated empty journal → zero progress | throwing `do/catch` in `handleFetchPendingRemovals`; error aborts with typed `persistenceFault` (no fabricated summary) | `try? await persistence.trashJournalEntries` gone |
+| 3 | `deleteTrashJournal` / `pruneSettledRemovalTokens` used `try?` after settle → cleanup loss silently discarded | both moved into `settleRemovalEvidenceCleanup(token:)` (throwing); failure surfaces as typed fault, evidence rows kept | no `try?` left in `handleCommitRemoval` |
+| 4 | `moveJournal` lookup failure treated as "no journal" → new move after failed admission | throwing `do/catch` in `handleMoveStorage`; lookup error aborts fail-closed before any mutation | `(try? await persistence.moveJournal` gone |
+| 5 | move-journal deletion + force recheck used `try?` → success with stale journal / no recheck | recheck moved BEFORE the journal drop (both throwing); failures return typed `engineFault`/`persistenceFault`, row survives for convergent recovery | `try? await persistence.deleteMoveJournal` / `(try? await engine.recheck` gone |
+| 6 | interrupted-move recovery ignored journal deletion failures (L284/L289) | `do/catch` in `.resume`/`.rollbackNoop`; failed drop keeps the row for the next recovery pass (convergent, idempotent) | `try? await persistence.deleteMoveJournal` gone from `recoverInterruptedMoves()` |
+
+Convergence: a commit whose settle succeeded but cleanup failed returns a fault;
+re-committing the SAME token replays the identical durable outcome and retries
+the cleanup (`settleRemovalEvidenceCleanup` added to the settled-outcome replay
+branch) — cleanup converges without duplicating any mutation.
+
+### 3. Invariants
+
+- No `try?` / fail-open default remains on the WP-10 mutation/recovery paths
+  (strict static detector PASS: pending-token admission, pending-progress fetch,
+  removal cleanup, move admission, move cleanup/recheck, move recovery).
+- Durable token/move-journal evidence lives until cleanup/recheck is confirmed:
+  failed drops keep the row; recovery or replay retries until confirmed.
+- Recovery stays convergent: resumed/rolled-back/cleaned operations are
+  idempotent; re-running never duplicates payload or record mutations.
+- Existing failpoint machinery (`beforeTrashJournalAppend` / `beforeTrashJournalUpdate`
+  / `beforeRemovalTokenSettle`) and `finishCommittedRemoval` repair untouched.
+- Scope discipline: no edits outside `TransferCoordinator.swift`; no test
+  expectations needed changing (all existing WP-10 XCTest behavior preserved).
+
+### 4. Comments
+
+- Reorder recheck-before-journal-drop in `handleMoveStorage`: the journal row is
+  dropped only after durable record update AND confirmed recheck; a failed
+  recheck leaves the row so recovery resumes the same move instead of
+  interleaving a fresh one over the moved payload.
+- Cleanup failure returns a fault even though the payload/record mutation
+  already completed: the durable committed outcome makes the retry converge
+  via the replay path (same pattern as the pre-existing engine-remove
+  failure-after-settle handling).
+- QA suite: the `test_wp03_legacy_untouched.sh` failure is environmental
+  (Legacy/Tauri human research dirt, ADR-013 waiver) — no product change;
+  `git` history untouched, no commits made.
+
+──────────────────────────────────────────────────────────────────────
+
+## RESULT: waiting_review
+
+──────────────────────────────────────────────────────────────────────
+
+# FEEDBACK — WP-10 FIX Review (Native macOS) — HISTORICAL (prior round, APPROVED)
 
 Reviewer: Verification Engineer (independent review of 7758e4b, prior
 CHANGES_REQUESTED baseline fac8ac5; coder self-PASS disregarded).
@@ -61,4 +127,4 @@ N/A — no changes requested.
 
 ──────────────────────────────────────────────────────────────────────
 
-## RESULT: APPROVED
+## RESULT: APPROVED (historical — superseded by FIX round 2 above)
