@@ -1,17 +1,13 @@
 current_step: WP-09
 step_description: >-
-  Fault recovery fix round under review. Budgets enforced, safe restart,
-  bounds/backoff, volume identity, production-path fault tests.
+  Fault recovery — Review APPROVED. Tester full suite + WP-09 fault matrix
+  coverage.
 target_files:
-- Native/TorrentinoApp/
-- Native/TorrentinoEngineAgent/
-- Native/TorrentinoIPC/
-- Native/TorrentinoDomain/
 - Native/Tests/
-- Native/Torrentino.xcodeproj/
 - Native/TorrentinoEngineBridge/scripts/qa/
-- Native/TorrentinoEngineBridge/bridge/
-- Native/TorrentinoEngineBridge/adapter/
+- AI_Workflow_Kit/docs/AI/COVERAGE.md
+- Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
+- Native/TorrentinoEngineBridge/scripts/qa/BUG_REPORT.md
 completed_steps:
 - WP-00
 - WP-01
@@ -23,23 +19,23 @@ completed_steps:
 - WP-07
 - WP-08
 implementation:
-  status: waiting_review
+  status: done
   attempts: 2
-  note: >-
-    Fix commit 3383abb after CHANGES_REQUESTED. Coder claims §5 closed;
-    build/test/fault_matrix/bridge green; suite 100/101 Legacy env.
+  note: Review APPROVED on 3383abb fix round.
 review:
-  status: pending
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: Re-review prior §5 items only. Independent verdict required.
+  verdict: APPROVED
+  note: All prior §5 items PASS. Legacy env fail waived.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-09
-  bugs_open: open
-  note: Tester after APPROVED. Legacy env fail waived.
-next_actor: reviewer
+  bugs_open: 0
+  note: >-
+    Tester run. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL from
+    Human Legacy dirt — do not fix Legacy. Product GREEN if all other checks pass.
+next_actor: tester
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -54,4 +50,4 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Fix round awaiting independent review.
+  N/A — Tester phase. On PRODUCT GREEN → Orchestrator POST WP-09 + PRE WP-10.
