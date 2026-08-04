@@ -32,6 +32,9 @@ xcodebuild test \
     -destination 'platform=macOS,arch=arm64' \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageUpdatesSaveLocationDurablyAndRechecks \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageEngineFailureLeavesJournalForRecovery \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageAdmissionReadFailureAbortsBeforeMove \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageRecheckFailureLeavesJournalForRecovery \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveStorageJournalDeletionFailureLeavesRowForRecovery \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryResumesInterruptedMove \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryRollsBackNeverStartedMove \
      -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10MoveRecoveryGuidedKeepsJournalWhenEvidenceAmbiguous \

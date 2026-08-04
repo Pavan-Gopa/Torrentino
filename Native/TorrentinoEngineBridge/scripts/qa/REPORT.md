@@ -1,4 +1,113 @@
-# QA Verification Report — WP-09 Fault Recovery and Resource Control (+ security)
+# QA Verification Report — WP-10 Safe File Operations (re-run after 0ec428f)
+
+**Date:** 2026-08-04
+**Role:** Test Engineer (functional QA; test code and defect detection only)
+**Scope:** WP-10 fail-closed journal fix `0ec428f` / approved handoff `ab67920`
+**Verdict:** **PRODUCT GREEN / ENVIRONMENTAL LEGACY FAIL WAIVED**
+
+---
+
+## Executive Summary
+
+WP10-BUG-001 is closed. The mandatory fail-closed contract now passes, and the
+new runtime tests confirm that persistence admission failures, move recheck
+failures, and move-journal cleanup failures do not fail open or lose durable
+recovery evidence. No product code was changed by QA.
+
+The complete XCTest scheme is green at **257/257**. The complete QA suite is
+**111/112 PASS**: the only failure is the known environmental
+`test_wp03_legacy_untouched.sh` result caused by Human research dirt in
+`Legacy/Tauri`; QA did not read, edit, restore, stage, or commit that path.
+
+## Result Matrix
+
+| Layer | Result |
+| --- | --- |
+| WP-10 XCTest | **30/30 PASS** |
+| Full scheme XCTest | **257/257 PASS, 0 FAIL** |
+| WP-10 QA scripts | **8/8 PASS** |
+| Fail-closed contract | **PASS; all required checks** |
+| Full QA suite | **111/112 PASS; 1 environmental Legacy FAIL** |
+| Headless bridge | **PASS** |
+| Swift bridge | **PASS** |
+| Product changes by QA | **none** |
+
+## New Coverage
+
+| Test | Detection |
+| --- | --- |
+| `testWP10PrepareRemovalPersistenceCountFailureFailsClosed` | Closed persistence during `prepareRemoval` returns typed `storeError`; no token or payload mutation is fabricated. |
+| `testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress` | Persistence read failure returns a typed fault instead of an empty pending-progress response. |
+| `testWP10MoveStorageAdmissionReadFailureAbortsBeforeMove` | Unreadable move-journal admission aborts before engine move or destination mutation. |
+| `testWP10MoveStorageRecheckFailureLeavesJournalForRecovery` | Recheck fault returns an engine fault, leaves `engine_moved` evidence, and recovery converges after payload evidence is restored. |
+| `testWP10MoveStorageJournalDeletionFailureLeavesRowForRecovery` | Journal deletion fault returns `storeError`; the row survives restart and recovery removes evidence without a second engine move. |
+
+Existing append/update/settle failpoint tests and committed-outcome replay
+tests remain in the suite. The WP-10 inventory now contains **30** XCTest
+methods and all are represented by QA runners.
+
+## WP-10 Behavior Matrix
+
+| New behavior | Evidence | Status |
+| --- | --- | --- |
+| `prepareRemoval` token-count read failure is typed and fail-closed | New runtime XCTest + mandatory contract | PASS |
+| `fetchPendingRemovals` does not fabricate zero progress on persistence failure | New runtime negative test + mandatory contract | PASS; exact journal-row injection gap noted below |
+| Cleanup failure after settle is surfaced and replay is convergent | Existing settle failpoint, committed replay test, mandatory contract | PASS; exact post-settle injection gap noted below |
+| Move admission journal lookup failure blocks the move | New runtime XCTest + mandatory contract | PASS |
+| Move recheck failure preserves the journal for recovery | New runtime XCTest + move recovery runner | PASS |
+| Move journal deletion failure preserves the row and recovery converges | New runtime XCTest + move recovery runner | PASS |
+| Interrupted-move recovery deletion failure retries idempotently | Static fail-closed contract + successful recovery/replay tests | N/A exact runtime injection; reason below |
+
+## Gate Matrix
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| File outside manifest cannot be removed | `testWP10UnmanifestedSiblingSurvivesDirectoryTrash`, manifest safety contract | PASS |
+| Keep-data does not alter payload | `testWP10KeepDataRemovalLeavesPayloadByteIdentical` | PASS |
+| Failed Trash does not remove record | partial/total failure tests | PASS |
+| Partial Trash is recoverable or guided | journal replay, pending restore, explicit retry tests | PASS |
+| Crash during move recovers | resume, rollback-noop, guided, recheck/delete-fault recovery tests | PASS |
+| No permanent delete API | `test_wp10_delete_free_abi.sh` and bridge runners | PASS |
+| Fail-closed journals / WP10-BUG-001 | `test_wp10_fail_closed_contract.sh` | PASS; CLOSED |
+
+## Gap Hunt / N/A Reasons
+
+1. The exact `trashJournalEntries` failure after a successful
+   `pendingRemovalTokens` enumeration has no existing product failpoint. The
+   runtime test covers the earlier persistence-read failure, while the static
+   contract proves the journal-read `do/catch` path. Adding a product failpoint
+   was outside the Tester role and was not done.
+2. There is no failpoint after durable token settlement and before
+   `deleteTrashJournal`/token pruning. Existing settle-failure and durable
+   outcome replay tests verify the surrounding convergence contract; the
+   exact cleanup fault remains a runtime-injection gap.
+3. Interrupted-move recovery has no product failpoint between record-location
+   persistence and `deleteMoveJournal`. The static contract verifies the
+   explicit retry-preserving catch, and the new move deletion-failure test
+   exercises the same durable-row convergence invariant at command time.
+
+These are testability gaps, not detected product failures. No new product
+failpoints were added.
+
+## Environmental Waiver
+
+`test_wp03_legacy_untouched.sh` failed because of pre-existing Human research
+changes under `Legacy/Tauri`. ADR-013 requires QA to leave that path untouched;
+the result is waived and does not make WP-10 product-red.
+
+## Verification Commands
+
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_fail_closed_contract.sh` -> PASS
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh` -> 111/112; 1 environmental Legacy FAIL
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh` -> PASS
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh` -> PASS
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` -> 257/257 PASS
+
+No product fix, git commit, or git push was performed.
+
+---
+
+# Historical WP-09 Record
 
 **Date:** 2026-08-04
 **Role:** Test Engineer (test code and defect detection only; ADR-014 security pass)

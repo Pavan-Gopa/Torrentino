@@ -83,6 +83,15 @@ if "testWP10SettleFailureFailsClosedAndPendingTokenSurvivesRestart" not in tests
     issues.append("settle failpoint XCTest is missing")
 if "testWP10CommittedOutcomeReplayRepairsRecordAfterSettlementCrash" not in tests:
     issues.append("convergent committed-outcome repair XCTest is missing")
+for needle, description in (
+    ("testWP10PrepareRemovalPersistenceCountFailureFailsClosed", "prepareRemoval count-read fault XCTest"),
+    ("testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress", "fetchPendingRemovals persistence fault XCTest"),
+    ("testWP10MoveStorageAdmissionReadFailureAbortsBeforeMove", "move admission lookup fault XCTest"),
+    ("testWP10MoveStorageRecheckFailureLeavesJournalForRecovery", "move recheck fault XCTest"),
+    ("testWP10MoveStorageJournalDeletionFailureLeavesRowForRecovery", "move journal deletion fault XCTest"),
+):
+    if needle not in tests:
+        issues.append(f"{description} is missing")
 
 if issues:
     for issue in issues:

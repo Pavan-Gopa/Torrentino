@@ -1,4 +1,72 @@
-# Torrentino QA Coverage — WP-08 (Native UX completeness)
+# Torrentino QA Coverage — WP-10 Safe File Operations
+
+Updated: 2026-08-04 (Test Engineer, WP-10 re-run after `0ec428f`)
+Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+**WP-10 result:** **PRODUCT GREEN; WP10-BUG-001 CLOSED**
+**Last full suite:** **111/112 PASS; 1 ENVIRONMENTAL Legacy FAIL (waived)**
+**Full XCTest run:** **257/257 PASS**
+
+## WP-10 Feature Matrix
+
+| # | Feature | Dedicated evidence | Happy | Error / invalid | Recovery / edge | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Manifest-scoped removal | `test_wp10_manifest_safety_contract.sh`; runtime manifest/order tests | exact durable manifest and leaf-first order | unmanifested sibling, symlink, identity, hardlink refusals | shared paths and non-empty directories | covered / PASS |
+| 2 | Keep-data removal | `testWP10KeepDataRemovalLeavesPayloadByteIdentical` | record-only commit | no payload offered to Trash | byte-identical payload after commit | covered / PASS |
+| 3 | Failed / partial Trash | partial and total failure XCTest cases | successful item-by-item journaling | failed provider keeps record and token pending | explicit same-token replay without duplicate mutation | covered / PASS |
+| 4 | Removal journal fail-closed | `test_wp10_fail_closed_contract.sh`; append/update/settle tests | durable journal before mutation | typed persistence fault on failpoint | pending evidence survives restart and replay | covered / PASS; exact cleanup injection gaps recorded |
+| 5 | Prepare admission fault | `testWP10PrepareRemovalPersistenceCountFailureFailsClosed` | durable token path | token-count read failure is typed | no token or payload mutation | covered / PASS |
+| 6 | Pending-removal enumeration | `testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress` | pending summary path | persistence fault is not zero progress | exact post-enumeration journal fault lacks failpoint | covered / PASS; gap noted |
+| 7 | Move admission and recheck | three new move fault XCTest cases | journal, move, record, recheck | admission/recheck/delete faults typed | row survives and recovery converges | covered / PASS |
+| 8 | Interrupted move recovery | resume, rollback-noop, guided, symlink/split evidence tests | full payload evidence resumes | ambiguous/missing evidence stays guided | deletion-failure retry contract is static-only | covered / PASS; gap noted |
+| 9 | Delete-free ABI | `test_wp10_delete_free_abi.sh`; headless + Swift bridge | token-only bridge surface | no permanent delete API | real bridge lifecycle remains green | covered / PASS |
+
+## WP-10 Gate Matrix
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| File outside manifest cannot be removed | unmanifested sibling runtime test + manifest contract | PASS |
+| Keep-data leaves payload unchanged | byte-identical payload XCTest | PASS |
+| Failed Trash keeps record | partial/total failure XCTest | PASS |
+| Partial Trash recovers or stays guided | journal replay + pending restore | PASS |
+| Move crash recovers | move evidence/recheck/delete-fault tests | PASS |
+| No permanent delete API | delete-free ABI contract | PASS |
+| Fail-closed journals | mandatory contract script; WP10-BUG-001 | PASS / CLOSED |
+
+## New XCTest Inventory
+
+WP-10 now has **30** methods, represented by the WP-10 runners:
+
+- `testWP10PrepareRemovalPersistenceCountFailureFailsClosed`
+- `testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress`
+- `testWP10MoveStorageAdmissionReadFailureAbortsBeforeMove`
+- `testWP10MoveStorageRecheckFailureLeavesJournalForRecovery`
+- `testWP10MoveStorageJournalDeletionFailureLeavesRowForRecovery`
+
+The existing 25 WP-10 tests were retained; coverage is monotonic.
+
+## Fault-Path Gaps
+
+| Path | Status / reason |
+| --- | --- |
+| `fetchPendingRemovals` journal-row read failure after token enumeration | N/A exact injection; static contract plus earlier persistence-read runtime negative test |
+| Post-settle `deleteTrashJournal` / token-prune failure | N/A exact injection; no existing post-settle failpoint; replay and static contract retained |
+| Interrupted recovery `deleteMoveJournal` failure | N/A exact injection; explicit catch/static contract and successful retry-equivalent coverage retained |
+
+No product failpoints were added by QA.
+
+## Regression Evidence
+
+| Layer | Result |
+| --- | --- |
+| WP-10 scripts | 8/8 PASS |
+| Full QA suite | 111/112; only environmental Legacy failure |
+| Full scheme XCTest | 257/257 PASS |
+| Headless bridge | PASS |
+| Swift bridge | PASS |
+
+---
+
+# Historical WP-08 Record
 
 Updated: 2026-08-04 (Test Engineer, WP-08 QA cycle)
 Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`

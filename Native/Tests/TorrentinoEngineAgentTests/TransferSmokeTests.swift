@@ -2446,6 +2446,8 @@ actor StubTransferEngine: TransferEngine {
     private var movedStorage: [(torrentID: String, destinationPath: String)] = []
     private var removedIDs: [String] = []
     private var failMoveStorage = false
+    private var failRecheck = false
+    private var recheckHook: (@Sendable () async -> Void)?
     private var failSettingsApply = false
     private var failNextSettingsApply = false
     private var failTorrentMutation = false
@@ -2578,7 +2580,13 @@ actor StubTransferEngine: TransferEngine {
     func resume(torrentID: String) async throws {}
 
     func recheck(torrentID: String) async throws {
+        if failRecheck {
+            throw EngineStubError.torrentMutationFailed
+        }
         recheckedIDs.append(torrentID)
+        if let recheckHook {
+            await recheckHook()
+        }
     }
 
     func remove(torrentID: String) async throws {
@@ -2606,6 +2614,14 @@ actor StubTransferEngine: TransferEngine {
 
     func setFailMoveStorage(_ value: Bool) {
         failMoveStorage = value
+    }
+
+    func setFailRecheck(_ value: Bool) {
+        failRecheck = value
+    }
+
+    func setRecheckHook(_ hook: (@Sendable () async -> Void)?) {
+        recheckHook = hook
     }
 
     func statusUpdate() async throws -> [TransferTorrentStatus] {

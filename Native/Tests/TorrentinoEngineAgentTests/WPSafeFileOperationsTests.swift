@@ -154,6 +154,17 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         }
     }
 
+    private func resultFault(from reply: Data) throws -> EngineFault {
+        let envelope = decode(IPCEnvelope.self, from: reply)
+        guard let result = envelope.result else {
+            throw NSError(domain: "test", code: 38, userInfo: [NSLocalizedDescriptionKey: "no result in \(envelope)"])
+        }
+        guard case .failure(let fault) = result else {
+            throw NSError(domain: "test", code: 39, userInfo: [NSLocalizedDescriptionKey: "expected fault, got \(result)"])
+        }
+        return fault
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) -> T {
         do {
             return try JSONDecoder().decode(type, from: data)
@@ -258,6 +269,65 @@ final class WPSafeFileOperationsTests: TestProfileCase {
 
         let settled = try await store.removalToken(by: token.rawValue)
         XCTAssertEqual(settled?.status, "committed")
+    }
+
+    func testWP10PrepareRemovalPersistenceCountFailureFailsClosed() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let saveLocation = try profile.subdirectory("sl-prepare-count-fault")
+        let payload = saveLocation.appendingPathComponent("payload.bin")
+        try Data(repeating: 0x6D, count: 64).write(to: payload)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 64, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+
+        // Closing the isolated store makes removalTokenCount throw while the
+        // coordinator still has the record in memory. Admission must not treat
+        // that read failure as an empty token table.
+        try await store.close(clean: false)
+        let reply = await coordinator.processCommand(encode(.prepareRemoval(
+            PrepareRemovalRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                deleteFiles: true
+            )
+        )))
+        let fault = try resultFault(from: reply)
+        XCTAssertEqual(fault.code, .storeError)
+        XCTAssertEqual(fault.affectedRecord, recordID)
+
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: payload.path))
+        let removed = await engineRef.removedCount(for: "stub-1")
+        XCTAssertEqual(removed, 0)
+        await store.rawClose()
+    }
+
+    func testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let saveLocation = try profile.subdirectory("sl-pending-read-fault")
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 1, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: saveLocation)
+        _ = try await prepareRemoval(coordinator, recordID: recordID, deleteFiles: true)
+
+        // A closed store makes the pending-removal read fail. The command must
+        // return a typed persistence fault, never an empty pending list with
+        // fabricated zero progress.
+        try await store.close(clean: false)
+        let reply = await coordinator.processCommand(encode(.fetchPendingRemovals(
+            FetchPendingRemovalsRequest(requestID: RequestID())
+        )))
+        let fault = try resultFault(from: reply)
+        XCTAssertEqual(fault.code, .storeError)
+        XCTAssertNil(fault.affectedRecord, "the pending-token read failed before a record could be identified")
+        let snap = try await snapshot(coordinator)
+        XCTAssertNotNil(snap.torrents.first { $0.id == recordID })
+        await store.rawClose()
     }
 
     // MARK: - WP-10: commit — full success path
@@ -570,6 +640,154 @@ final class WPSafeFileOperationsTests: TestProfileCase {
         let snap = try await snapshot(coordinator)
         XCTAssertEqual(snap.torrents.first { $0.id == recordID }?.saveLocation.path,
                        URL(fileURLWithPath: from.path).standardizedFileURL.path)
+    }
+
+    func testWP10MoveStorageAdmissionReadFailureAbortsBeforeMove() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let from = try profile.subdirectory("sl-move-admission-fault-from")
+        let to = try profile.subdirectory("sl-move-admission-fault-to")
+        try Data(repeating: 0x34, count: 128).write(to: from.appendingPathComponent("payload.bin"))
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 128, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
+
+        // The journal admission lookup is unreadable, so the coordinator must
+        // fail closed instead of treating the missing result as no in-flight move.
+        try await store.close(clean: false)
+        let reply = await coordinator.processCommand(encode(.moveStorage(MoveStorageRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            destination: PersistedLocation(path: to.path)
+        ))))
+        let fault = try resultFault(from: reply)
+        XCTAssertEqual(fault.code, .storeError)
+        XCTAssertEqual(fault.affectedRecord, recordID)
+        let admissionMoveCalls = await engineRef.moveCalls()
+        XCTAssertTrue(admissionMoveCalls.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: to.appendingPathComponent("payload.bin").path))
+        let snap = try await snapshot(coordinator)
+        XCTAssertEqual(snap.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: from.path).standardizedFileURL.path)
+        await store.rawClose()
+    }
+
+    func testWP10MoveStorageRecheckFailureLeavesJournalForRecovery() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let from = try profile.subdirectory("sl-move-recheck-fault-from")
+        let to = try profile.subdirectory("sl-move-recheck-fault-to")
+        let payload = from.appendingPathComponent("payload.bin")
+        try Data(repeating: 0x35, count: 128).write(to: payload)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 128, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
+        await engineRef.setFailRecheck(true)
+
+        let reply = await coordinator.processCommand(encode(.moveStorage(MoveStorageRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            destination: PersistedLocation(path: to.path)
+        ))))
+        let fault = try resultFault(from: reply)
+        XCTAssertEqual(fault.code, .engineBusy)
+
+        let row = try await store.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertEqual(row?.stage, MoveJournalEntry.Stage.engineMoved.rawValue)
+        XCTAssertEqual(row?.status, MoveJournalEntry.Status.pending.rawValue)
+        let snapBeforeRecovery = try await snapshot(coordinator)
+        XCTAssertEqual(snapBeforeRecovery.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: to.path).standardizedFileURL.path)
+        let recheckCount = await engineRef.recheckCount(for: "stub-1")
+        XCTAssertEqual(recheckCount, 0)
+
+        // The stub failed before moving bytes; supply the evidence that a real
+        // engine could have left behind, then verify recovery converges.
+        try FileManager.default.createDirectory(at: to, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: payload, to: to.appendingPathComponent("payload.bin"))
+        try await store.close(clean: false)
+        await store.rawClose()
+
+        let reopened = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await reopened.open()
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: reopened,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+        let journalAfterRecovery = try await reopened.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertNil(journalAfterRecovery)
+        let recovered = try await snapshot(restarted)
+        XCTAssertEqual(recovered.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: to.path).standardizedFileURL.path)
+    }
+
+    func testWP10MoveStorageJournalDeletionFailureLeavesRowForRecovery() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let from = try profile.subdirectory("sl-move-delete-fault-from")
+        let to = try profile.subdirectory("sl-move-delete-fault-to")
+        let payload = from.appendingPathComponent("payload.bin")
+        try Data(repeating: 0x36, count: 128).write(to: payload)
+
+        let metainfo = MetainfoBuilder.singleFile(name: "payload.bin", size: 128, pieceLength: 256, piecesCount: 1)
+        let recordID = try await addTorrentFile(coordinator, metainfo: metainfo, saveLocation: from)
+        await engineRef.setRecheckHook { [store, from, to] in
+            // Make the test stub's successful engine move observable at the
+            // exact boundary before coordinator journal cleanup.
+            try? FileManager.default.moveItem(
+                at: from.appendingPathComponent("payload.bin"),
+                to: to.appendingPathComponent("payload.bin")
+            )
+            try? await store.close(clean: false)
+        }
+
+        let reply = await coordinator.processCommand(encode(.moveStorage(MoveStorageRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            destination: PersistedLocation(path: to.path)
+        ))))
+        let fault = try resultFault(from: reply)
+        XCTAssertEqual(fault.code, .storeError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: to.appendingPathComponent("payload.bin").path))
+        let moveCalls = await engineRef.moveCalls()
+        XCTAssertEqual(moveCalls.count, 1)
+        let recheckCount = await engineRef.recheckCount(for: "stub-1")
+        XCTAssertEqual(recheckCount, 1)
+
+        // The closed store is reopened like a new agent process. The journal
+        // row must survive the failed drop and the next recovery pass must
+        // remove only that durable evidence, without another engine move.
+        await store.rawClose()
+        let reopened = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await reopened.open()
+        let journalBeforeRecovery = try await reopened.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertNotNil(journalBeforeRecovery)
+        let restartedEngine = StubTransferEngine()
+        let restarted = TransferCoordinator(
+            engine: restartedEngine,
+            persistence: reopened,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+        let journalAfterRecovery = try await reopened.moveJournal(recordID: recordID.rawValue.uuidString)
+        XCTAssertNil(journalAfterRecovery)
+        let restartedMoveCalls = await restartedEngine.moveCalls()
+        XCTAssertTrue(restartedMoveCalls.isEmpty)
+        let recovered = try await snapshot(restarted)
+        XCTAssertEqual(recovered.torrents.first { $0.id == recordID }?.saveLocation.path,
+                       URL(fileURLWithPath: to.path).standardizedFileURL.path)
     }
 
     // MARK: - WP-10: move crash recovery (evidence-based, no silent auto-resume)

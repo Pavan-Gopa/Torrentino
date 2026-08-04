@@ -1,9 +1,21 @@
-# BUG REPORT - WP-10 Safe File Operations (FIX round, attempt 2)
+# BUG REPORT - WP-10 Safe File Operations (WP10-BUG-001 closed)
 
 Date: 2026-08-04
 Role: Test Engineer (functional QA; test code and defect detection only)
-Scope: fix 7758e4b / safe file operations and recovery
-Verdict: FAIL - functional fail-closed journal contract is still violated
+Scope: fix 0ec428f / safe file operations and recovery
+Verdict: CLOSED - WP10-BUG-001 not reproduced after fix
+
+## Closure Addendum
+
+The mandatory `test_wp10_fail_closed_contract.sh` now passes. Full scheme
+XCTest is **257/257 PASS**, all **8/8** WP-10 QA scripts pass, and the new
+runtime tests confirm fail-closed admission, move recheck, and move-journal
+cleanup behavior. No current product bug was found in this re-run.
+
+The original FAIL record below is retained as historical evidence from before
+commit `0ec428f`; its seven ignored-error findings are superseded by the fix.
+
+## Historical FAIL Record
 
 ## Executive Summary
 

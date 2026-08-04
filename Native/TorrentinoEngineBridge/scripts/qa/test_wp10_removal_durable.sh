@@ -43,6 +43,8 @@ xcodebuild test \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10CommitRemovalTotalFailureKeepsRecordAndJournal \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SharedPathRemovalSkipsFilesSharedWithAnotherTorrent \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SafetyValidatorRefusesSymlinksMissingItemsAndSizeChanges \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10PrepareRemovalPersistenceCountFailureFailsClosed \
+    -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10FetchPendingRemovalsPersistenceFailureDoesNotFabricateProgress \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10UnmanifestedSiblingSurvivesDirectoryTrash \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10AncestorSymlinkSwapRefusedBeforeAnyMutation \
     -only-testing:TorrentinoEngineAgentTests/WPSafeFileOperationsTests/testWP10SameSizeReplacementRefusedByIdentity \
