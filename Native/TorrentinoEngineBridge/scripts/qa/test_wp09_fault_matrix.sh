@@ -5,6 +5,7 @@
 #       storage faults, volume identity, crash-loop recovery and path identity.
 # Must-not: touch Legacy or claim a fault is recovered without running the
 #           coordinator/IPC tests.
+# 24 tests total (17 original + 7 gap-filling).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -30,6 +31,13 @@ xcodebuild test \
    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09CrashLoopSafeModeRestartClearsAndReconciles \
    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09MonitorGenerationIncludesRouteIdentity \
    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09CrashLoopGuardCanBeExplicitlyCleared \
-   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09BridgeStatusCacheEnforcesByteBudget
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09BridgeStatusCacheEnforcesByteBudget \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09SleepGatesWorkAndWakeRecovers \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09LowPowerAloneBlocksHeavyWork \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09PumpOnceNoOpDuringSafeRecovery \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09DiskFullHealthSurfacesAtCoordinatorLevel \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09FaultRecoveryActionsContractForUISurfacing \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09OneBadEngineAddDoesNotBlockOtherRecords \
+   -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testWP09BudgetConstrainedVsBalancedLimitsApplied
 
 echo "WP-09 fault matrix: PASS"

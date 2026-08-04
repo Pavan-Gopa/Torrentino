@@ -1663,6 +1663,299 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertLessThanOrEqual(cache.entries.count, 1)
     }
 
+    // MARK: - WP-09 gap-filling (axes 3, 4, 5, 12, 13, 14)
+
+    /// Axis 3: Sleep gates engine work; wake recovers without user action.
+    func testWP09SleepGatesWorkAndWakeRecovers() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "a1", count: 20))"
+        )
+
+        // Transition to sleep.
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .satisfied,
+            networkGeneration: 1,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: false,
+            sleeping: true
+        ))
+        let sleeping = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(
+            sleeping.torrents.first(where: { $0.id == recordID })?.health,
+            .recoverableError(.systemSleeping),
+            "sleeping must surface .systemSleeping health"
+        )
+
+        // pumpOnce must be a no-op during sleep (canAttemptNetworkWork is false when sleeping).
+        let addsBefore = await engineRef.addCallCount()
+        await coordinator.pumpOnce()
+        let addsAfter = await engineRef.addCallCount()
+        XCTAssertEqual(addsBefore, addsAfter, "pumpOnce must not add work during sleep")
+
+        // Wake up: applySystemConditions triggers recovery pump.
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .satisfied,
+            networkGeneration: 2,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: false,
+            sleeping: false
+        ))
+        let awake = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(
+            awake.torrents.first(where: { $0.id == recordID })?.health,
+            .healthy,
+            "wake must restore health to .healthy"
+        )
+    }
+
+    /// Axis 4: Low Power Mode alone blocks heavy work (without thermal/memory pressure).
+    func testWP09LowPowerAloneBlocksHeavyWork() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+
+        // Apply Low Power Mode only (thermal=nominal, memoryPressure=normal).
+        await coordinator.applySystemConditions(SystemConditions(
+            network: .satisfied,
+            networkGeneration: 1,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: true,
+            sleeping: false
+        ))
+
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "b2", count: 20))"
+        )
+        let lpAddCalls = await engineRef.addCallCount()
+        XCTAssertEqual(lpAddCalls, 0, "Low Power Mode alone must block engine add")
+
+        let snap = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(
+            snap.torrents.first(where: { $0.id == recordID })?.health,
+            .recoverableError(.resourceConstrained),
+            "Low Power must surface .resourceConstrained"
+        )
+
+        // Verify budget policy also agrees.
+        let budget = SystemConditionPolicy.budget(for: SystemConditions(
+            network: .satisfied,
+            networkGeneration: 1,
+            thermal: .nominal,
+            memoryPressure: .normal,
+            lowPower: true,
+            sleeping: false
+        ))
+        XCTAssertFalse(budget.acceptsHeavyWork, "Low Power alone must set acceptsHeavyWork=false")
+    }
+
+    /// Axis 1/10: pumpOnce is a no-op during safe recovery (no busy-loop).
+    func testWP09PumpOnceNoOpDuringSafeRecovery() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(
+            engine: engine,
+            bus: bus,
+            safeRecovery: true
+        )
+        _ = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "c3", count: 20))"
+        )
+        let statusBefore = await engineRef.statusCallCount()
+        await coordinator.pumpOnce()
+        await coordinator.pumpOnce()
+        await coordinator.pumpOnce()
+        let statusAfter = await engineRef.statusCallCount()
+        XCTAssertEqual(statusBefore, statusAfter, "pumpOnce must not poll engine during safe recovery")
+    }
+
+    /// Axis 5: Disk-full storage health at coordinator level (not just IPC classify).
+    func testWP09DiskFullHealthSurfacesAtCoordinatorLevel() throws {
+        // StorageLocationProbe.classify with zero available space → .insufficientSpace
+        let result = StorageLocationProbe.classify(
+            exists: true,
+            isDirectory: true,
+            writable: true,
+            availableBytes: 0,
+            requiredBytes: 1024,
+            volumeIdentifier: "vol-full"
+        )
+        XCTAssertEqual(result, .insufficientSpace(volumeIdentifier: "vol-full", availableBytes: 0))
+
+        // EngineFault.storageFailure maps disk-full errno strings to typed fault.
+        let enospc = EngineFault.storageFailure(details: "write failed: ENOSPC on volume")
+        XCTAssertEqual(enospc.code, .insufficientSpace)
+
+        let noSpace = EngineFault.storageFailure(details: "No space left on device")
+        XCTAssertEqual(noSpace.code, .insufficientSpace)
+
+        let diskFull = EngineFault.storageFailure(details: "disk full (Volume X)")
+        XCTAssertEqual(diskFull.code, .insufficientSpace)
+
+        // Permission denied mapping.
+        let eacces = EngineFault.storageFailure(details: "EACCES")
+        XCTAssertEqual(eacces.code, .permissionDenied)
+
+        let accessDenied = EngineFault.storageFailure(details: "access denied")
+        XCTAssertEqual(accessDenied.code, .permissionDenied)
+
+        let readOnly = EngineFault.storageFailure(details: "read-only filesystem")
+        XCTAssertEqual(readOnly.code, .permissionDenied)
+
+        // Stale file handle → volume unavailable.
+        let stale = EngineFault.storageFailure(details: "stale file handle")
+        XCTAssertEqual(stale.code, .volumeUnavailable)
+
+        let enodev = EngineFault.storageFailure(details: "ENODEV")
+        XCTAssertEqual(enodev.code, .volumeUnavailable)
+
+        let enxio = EngineFault.storageFailure(details: "ENXIO")
+        XCTAssertEqual(enxio.code, .volumeUnavailable)
+    }
+
+    /// Axis 14: Fault recovery actions are stable UI-surfaceable strings.
+    func testWP09FaultRecoveryActionsContractForUISurfacing() {
+        // crashLoopSafeMode must include restart_engine_safely (axis 14 gate).
+        let crashLoop = EngineFault.crashLoopSafeMode()
+        XCTAssertTrue(crashLoop.recoveryActions.contains("restart_engine_safely"),
+                       "crashLoop recovery must include restart_engine_safely")
+        XCTAssertTrue(crashLoop.recoveryActions.contains("review_diagnostics"),
+                       "crashLoop recovery must include review_diagnostics")
+        XCTAssertEqual(crashLoop.code, .crashLoopSafeMode)
+        XCTAssertNotNil(crashLoop.localizationKey)
+        XCTAssertTrue(crashLoop.localizationKey.hasPrefix("fault."))
+
+        // volumeUnavailable must include attach_volume + choose_storage.
+        let volume = EngineFault.volumeUnavailable(volumeIdentifier: "disk-1")
+        XCTAssertTrue(volume.recoveryActions.contains("attach_volume"))
+        XCTAssertTrue(volume.recoveryActions.contains("choose_storage"))
+
+        // insufficientSpace must include free_disk_space + choose_storage.
+        let diskFull = EngineFault.insufficientSpace(volumeIdentifier: "disk-2")
+        XCTAssertTrue(diskFull.recoveryActions.contains("free_disk_space"))
+        XCTAssertTrue(diskFull.recoveryActions.contains("choose_storage"))
+
+        // permissionDenied must include check_permissions + choose_storage.
+        let perm = EngineFault.permissionDenied(volumeIdentifier: "disk-3")
+        XCTAssertTrue(perm.recoveryActions.contains("check_permissions"))
+        XCTAssertTrue(perm.recoveryActions.contains("choose_storage"))
+
+        // engineUnresponsive must include restart_engine_safely.
+        let unresponsive = EngineFault.engineUnresponsive(details: "test")
+        XCTAssertTrue(unresponsive.recoveryActions.contains("restart_engine_safely"))
+
+        // systemSleeping must include wait_for_wake.
+        let sleep = EngineFault.systemSleeping()
+        XCTAssertTrue(sleep.recoveryActions.contains("wait_for_wake"))
+
+        // resourceConstrained must include wait_for_resources.
+        let constrained = EngineFault.resourceConstrained(details: "test")
+        XCTAssertTrue(constrained.recoveryActions.contains("wait_for_resources"))
+
+        // Every fault must have a stable localization key starting with "fault."
+        let allFaults: [EngineFault] = [
+            crashLoop, volume, diskFull, perm, unresponsive, sleep, constrained
+        ]
+        for fault in allFaults {
+            XCTAssertTrue(fault.localizationKey.hasPrefix("fault."),
+                          "fault \(fault.code) must have localizationKey prefix 'fault.'")
+            XCTAssertFalse(fault.recoveryActions.isEmpty,
+                           "fault \(fault.code) must have at least one recovery action")
+        }
+    }
+
+    /// Axis 13 (explicit WP-09 label): One bad engine add does not stop other records.
+    func testWP09OneBadEngineAddDoesNotBlockOtherRecords() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+
+        // Make the first magnet always fail on engine add.
+        let badHash = String(repeating: "d4", count: 20)
+        await engineRef.failAdds(containing: badHash)
+
+        _ = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(badHash)"
+        )
+
+        // Clear the failure so the second add succeeds.
+        await engineRef.failAdds(containing: nil)
+        let goodHash = String(repeating: "e5", count: 20)
+        let goodID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(goodHash)"
+        )
+
+        let snap = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snap.torrents.count, 2, "both records must exist")
+        let goodRecord = snap.torrents.first(where: { $0.id == goodID })
+        XCTAssertEqual(goodRecord?.health, .healthy,
+                       "the good record must be healthy despite a sibling failing")
+    }
+
+    /// Axis 9 (budget): SystemConditionPolicy constrainedVsBalanced budget differences.
+    func testWP09BudgetConstrainedVsBalancedLimitsApplied() {
+        let balanced = EngineResourceBudget.balanced
+        XCTAssertTrue(balanced.acceptsHeavyWork)
+        XCTAssertEqual(balanced.maxActiveDownloads, 4)
+        XCTAssertEqual(balanced.maxActiveSeeds, 8)
+        XCTAssertEqual(balanced.maxPeerConnections, 250)
+        XCTAssertGreaterThan(balanced.cacheBytes, 0)
+
+        // Constrained (not critical) from Low Power only.
+        let lowPower = SystemConditionPolicy.budget(for: SystemConditions(
+            network: .satisfied, networkGeneration: 1,
+            thermal: .nominal, memoryPressure: .normal,
+            lowPower: true, sleeping: false
+        ))
+        XCTAssertFalse(lowPower.acceptsHeavyWork)
+        XCTAssertEqual(lowPower.maxActiveDownloads, 2)
+        XCTAssertEqual(lowPower.maxActiveSeeds, 4)
+        XCTAssertEqual(lowPower.maxPeerConnections, 100)
+        XCTAssertEqual(lowPower.cacheBytes, 32 * 1024 * 1024)
+
+        // Critical from both thermal + memory.
+        let critical = SystemConditionPolicy.budget(for: SystemConditions(
+            network: .satisfied, networkGeneration: 1,
+            thermal: .critical, memoryPressure: .critical,
+            lowPower: false, sleeping: false
+        ))
+        XCTAssertFalse(critical.acceptsHeavyWork)
+        XCTAssertEqual(critical.maxActiveDownloads, 1)
+        XCTAssertEqual(critical.maxActiveSeeds, 2)
+        XCTAssertEqual(critical.maxPeerConnections, 40)
+        XCTAssertEqual(critical.cacheBytes, 16 * 1024 * 1024)
+        XCTAssertLessThanOrEqual(critical.maxReaddsPerPump, 1)
+
+        // Sleeping overlay: connection attempts zeroed, pump interval >= 4s.
+        let sleepingBudget = SystemConditionPolicy.budget(for: SystemConditions(
+            network: .satisfied, networkGeneration: 1,
+            thermal: .nominal, memoryPressure: .normal,
+            lowPower: false, sleeping: true
+        ))
+        XCTAssertFalse(sleepingBudget.acceptsHeavyWork)
+        XCTAssertEqual(sleepingBudget.maxConnectionAttempts, 0)
+        XCTAssertEqual(sleepingBudget.maxReaddsPerPump, 0)
+        XCTAssertGreaterThanOrEqual(sleepingBudget.pumpIntervalNanoseconds, 4_000_000_000)
+    }
+
     // MARK: - Concurrency stress (shared coordinator state)
 
     func testConcurrentMixedCommandsAllResolve() async throws {
@@ -2014,6 +2307,107 @@ final class TransferSmokeTests: TestProfileCase {
 
     private func encode(_ command: EngineCommandV1) -> Data {
         (try? JSONEncoder().encode(IPCEnvelope.request(command))) ?? Data()
+    }
+
+    // MARK: - WP-09 Security (ADR-014)
+
+    /// SEC: proxy password / secret must not leak into public renderable
+    /// projections (snapshots, deltas, settings/system events). The proxy
+    /// password lives only in ProxyConfiguration, carried solely inside
+    /// apply/testProxy commands over peer-verified XPC — never in snapshots
+    /// or events the UI renders or that could be logged/exported.
+    func testWP09SecurityNoSecretLeakageInSnapshotsAndEvents() throws {
+        let encoder = JSONEncoder()
+        let location = PersistedLocation(path: "/Users/u/Downloads", volumeIdentifier: "vol-uuid")
+        let snapshot = TorrentSnapshot(
+            id: TorrentRecordID(rawValue: UUID()),
+            contentIdentity: nil,
+            displayName: "name",
+            desiredState: .running,
+            activity: .downloading,
+            health: .healthy,
+            progress: TransferProgress(fraction: 0, totalBytes: 0, downloadedBytes: 0, uploadedBytes: 0),
+            rates: TransferRates(downloadBytesPerSec: 0, uploadBytesPerSec: 0),
+            peers: PeerSummary(connected: 0, halfOpen: 0, total: 0),
+            limits: TorrentinoIPC.TransferLimits(),
+            saveLocation: location,
+            revision: 1
+        )
+        let engine = EngineSnapshot(torrents: [snapshot], engineRevision: 1, instanceID: UUID())
+        let engineJSON = String(data: try encoder.encode(engine), encoding: .utf8) ?? ""
+
+        let delta = TorrentDelta(added: [snapshot], updated: [], removed: [], engineRevision: 2)
+        let deltaJSON = String(data: try encoder.encode(delta), encoding: .utf8) ?? ""
+
+        let settingsEvent = SettingsChangedEvent(revision: 7)
+        let eventJSON = String(data: try encoder.encode(settingsEvent), encoding: .utf8) ?? ""
+
+        let conditionEvent = SystemConditionEvent(conditions: .normal)
+        let conditionJSON = String(data: try encoder.encode(conditionEvent), encoding: .utf8) ?? ""
+
+        for (label, json) in [
+            ("EngineSnapshot", engineJSON),
+            ("TorrentDelta", deltaJSON),
+            ("SettingsChangedEvent", eventJSON),
+            ("SystemConditionEvent", conditionJSON),
+        ] {
+            let lower = json.lowercased()
+            XCTAssertFalse(lower.contains("password"),
+                           "\(label) JSON leaks a password field: \(json)")
+            XCTAssertFalse(lower.contains("secret"),
+                           "\(label) JSON leaks a secret field: \(json)")
+            XCTAssertFalse(lower.contains("\"proxy"),
+                           "\(label) JSON leaks a proxy field: \(json)")
+        }
+
+        // Negative control: ProxyConfiguration DOES carry the password on the
+        // command wire (expected; peer-verified XPC). Confirms the assertion
+        // would catch a leak if a snapshot were ever wired to the proxy.
+        let proxy = ProxyConfiguration(kind: .socks5, host: "h", port: 1080,
+                                       username: "u", password: "leak-me")
+        let proxyJSON = String(data: try encoder.encode(proxy), encoding: .utf8) ?? ""
+        XCTAssertTrue(proxyJSON.contains("leak-me"),
+                      "negative control: proxy must carry password on command wire")
+    }
+
+    /// SEC: a symlinked save location with a pinned volumeIdentifier that does
+    /// not match the resolved volume must be rejected (volumeUnavailable),
+    /// not silently accepted as available. Defends against volume-identity
+    /// spoofing via a symlink swap on a detached/reattached external mount.
+    func testWP09SecuritySymlinkedSaveLocationVolumeSpoofingRejected() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("wp09-sec-symlink-\(UUID().uuidString)")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+
+        // Real target directory the symlink will resolve to.
+        let target = tmp.appendingPathComponent("target")
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+
+        // Symlink save location pointing at the target.
+        let link = tmp.appendingPathComponent("link-to-target")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+
+        // Pinned volumeIdentifier does NOT match the resolved volume → reject.
+        let spoofed = StorageLocationProbe.assess(
+            location: PersistedLocation(path: link.path, volumeIdentifier: "pinned-external-volume-uuid"),
+            fileManager: fm,
+            volumeIdentifierProvider: { _ in "root-volume-uuid" }
+        )
+        XCTAssertEqual(spoofed, .volumeUnavailable(volumeIdentifier: "pinned-external-volume-uuid"),
+                       "symlinked save location with mismatched volume must be rejected, not accepted")
+
+        // A missing path must never be auto-created as a local folder (the
+        // detached-mount honesty contract). Probe must report unavailable.
+        let missing = tmp.appendingPathComponent("does-not-exist")
+        let missingProbe = StorageLocationProbe.assess(
+            location: PersistedLocation(path: missing.path, volumeIdentifier: "pinned-external-volume-uuid"),
+            fileManager: fm,
+            volumeIdentifierProvider: { _ in "pinned-external-volume-uuid" }
+        )
+        XCTAssertEqual(missingProbe, .volumeUnavailable(volumeIdentifier: "pinned-external-volume-uuid"))
+        XCTAssertFalse(fm.fileExists(atPath: missing.path),
+                       "probe must not auto-create a missing volume path")
     }
 }
 

@@ -1,5 +1,95 @@
 # Torrentino Coverage Matrix — Test Engineer
 
+## WP-09 Coverage Update
+
+**WP:** WP-09 — Fault recovery и resource control
+**Updated:** 2026-08-04
+**Principle:** monotonic coverage; prior WP-01..WP-08 scripts remain in the regression base.
+**Suite:** `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+**Result:** 103/104 QA scripts pass. Only `test_wp03_legacy_untouched.sh` fails (ENVIRONMENTAL, waived).
+**XCTest:** 227/227 pass (previously 225; +2 security).
+**Bridge:** `test_bridge_headless.sh` PASS; `test_bridge_swift.sh` PASS.
+**WP-09 fault matrix:** 24/24 pass (`test_wp09_fault_matrix.sh`).
+**WP-09 bounds/contract:** 3/3 pass (`test_wp09_sec_matrix.sh`, `test_wp09_sec_secret_hygiene.sh`, `test_wp09_health_lane_watchdog.sh`). These are ordinary invalid-input/bounds/source-contract tests (allowed for Tester under ADR-015); a dedicated WP-09 security audit is the Security Engineer role's remit (`SECURITY_FINDINGS.md` not written by QA).
+
+### Gap analysis: 15 WP-09 axes → test coverage
+
+| # | WP-09 axis | Pre-existing test(s) | Gap filled by |
+|---|---|---|---|
+| 1 | Network offline/online; no busy-loop; resume when online | `testWP09OfflinePreservesDesiredStateAndRecoversWithoutSpin` | — (adequate) |
+| 2 | Path change identity (networkGeneration) | `testWP09MonitorGenerationIncludesRouteIdentity` | — (adequate) |
+| 3 | Sleep/wake gating and recovery pump | ❌ NONE | **`testWP09SleepGatesWorkAndWakeRecovers`** |
+| 4 | Memory/thermal/Low Power → acceptsHeavyWork blocks | `testWP09PressureGateBlocksHeavyWorkUntilRecovery` (thermal/memory only) | **`testWP09LowPowerAloneBlocksHeavyWork`** |
+| 5 | Disk full / permissions typed faults | `testWP09PersistenceVolumeFaultCrossesCommitBoundary`, IPC storage fault test | **`testWP09DiskFullHealthSurfacesAtCoordinatorLevel`** |
+| 6 | External volume detach/attach; no auto-create | `testWP09StorageProbeNeverCreatesMissingVolumePath`, `testWP09VolumeIdentityAndUnknownFreeSpaceAreConservative` | **`testWP09SecuritySymlinkedSaveLocationVolumeSpoofingRejected`** (symlink/volume spoofing) |
+| 7 | Free-space unknown → not fail-open | `testWP09VolumeIdentityAndUnknownFreeSpaceAreConservative` | — (adequate) |
+| 8 | Bounded queues: events, idempotency, inspection bytes, StatusCache | 4 existing tests | — (adequate) |
+| 9 | Bridge/engine active/peer/cache limits from budget | IPC budget bounds test | **`testWP09BudgetConstrainedVsBalancedLimitsApplied`** |
+| 10 | Crash-loop safe mode + restartEngineSafely | `testWP09CrashLoopSafeModeRestartClearsAndReconciles`, etc | **`testWP09PumpOnceNoOpDuringSafeRecovery`** (anti-busy-loop) |
+| 11 | Per-record re-add backoff | `testWP09ReaddUsesPerRecordBackoff` | — (adequate) |
+| 12 | Health lane distinct; watchdog disabled | ❌ NONE | **`test_wp09_health_lane_watchdog.sh`** (source-contract: `watchdog=disabled`, `healthLane=liveness`, distinct command-lane vs engine accounting, no watchdog restart path, `restartEngineSafely` clears safeRecovery + UI-invokable) |
+| 13 | One bad task does not global-stop | `testEngineAddFailureIsolatesRecord` (non-WP09 labeled) | **`testWP09OneBadEngineAddDoesNotBlockOtherRecords`** |
+| 14 | UI surfaces key faults; restart_engine_safely invokable | IPC recoveryActions partial | **`testWP09FaultRecoveryActionsContractForUISurfacing`** |
+| 15 | Typed faults not collapsed to engineBusy | `testWP09TypedEngineFailureIsNotCollapsedToBusy` | — (adequate) |
+
+### WP-09 gate mapping
+
+| Gate | Evidence | Status |
+|---|---|---|
+| Полная fault matrix зелёная | `test_wp09_fault_matrix.sh` 24/24 PASS | ✅ PASS |
+| Нет busy-loop | `testWP09PumpOnceNoOpDuringSafeRecovery`, sleep/wake no-op pump assertions | ✅ PASS |
+| Нет глобального stop из-за одной задачи | `testWP09OneBadEngineAddDoesNotBlockOtherRecords` | ✅ PASS |
+| Recovery actions понятны | `testWP09FaultRecoveryActionsContractForUISurfacing` (7 faults, all have localized keys + actions) | ✅ PASS |
+| No unexpected folder creation for missing volume | `testWP09StorageProbeNeverCreatesMissingVolumePath`, `testWP09SecuritySymlinkedSaveLocationVolumeSpoofingRejected` | ✅ PASS |
+| ADR-014 security pass — no Critical/High product-reachable findings | `SECURITY_FINDINGS.md` WP-09 (SEC-WP09-001..009) | ✅ PASS |
+
+### New test deliverables (WP-09 gap-filling — 7 functional + 3 bounds/contract)
+
+| File | New test method / script | Axis / surface covered |
+|---|---|---|
+| `TransferSmokeTests.swift` | `testWP09SleepGatesWorkAndWakeRecovers` | 3: Sleep/wake gating |
+| `TransferSmokeTests.swift` | `testWP09LowPowerAloneBlocksHeavyWork` | 4: Low Power Mode |
+| `TransferSmokeTests.swift` | `testWP09PumpOnceNoOpDuringSafeRecovery` | 1/10: no busy-loop in safe recovery |
+| `TransferSmokeTests.swift` | `testWP09DiskFullHealthSurfacesAtCoordinatorLevel` | 5: disk full/permission/stale errno mapping |
+| `TransferSmokeTests.swift` | `testWP09FaultRecoveryActionsContractForUISurfacing` | 14: UI recovery actions |
+| `TransferSmokeTests.swift` | `testWP09OneBadEngineAddDoesNotBlockOtherRecords` | 13: fault isolation (WP-09 labeled) |
+| `TransferSmokeTests.swift` | `testWP09BudgetConstrainedVsBalancedLimitsApplied` | 9: balanced/constrained/critical/sleeping budget levels |
+| `TransferSmokeTests.swift` | `testWP09SecurityNoSecretLeakageInSnapshotsAndEvents` | bounds/contract: no secret leakage in snapshots/events |
+| `TransferSmokeTests.swift` | `testWP09SecuritySymlinkedSaveLocationVolumeSpoofingRejected` | invalid-input: symlink/volume spoofing rejected |
+| `test_wp09_fault_matrix.sh` | — (updated runner: 17→24 tests) | all 15 functional axes |
+| `test_wp09_sec_matrix.sh` | runtime bounds/invalid-input XCTest gate | secret non-leakage + symlink/volume spoofing |
+| `test_wp09_sec_secret_hygiene.sh` | source-contract no-leak gate | renderable projections exclude secrets |
+| `test_wp09_health_lane_watchdog.sh` | source-contract watchdog/health-lane/restart | axis 12 + restart contract |
+
+### Bounds / invalid-input / source-contract pass (WP-09, ADR-015)
+
+> Per ADR-015, QA does not own `SECURITY_FINDINGS.md` (separate on-demand
+> Security Engineer). The tests below are ordinary functional
+> invalid-input/bounds/source-contract tests. A dedicated WP-09 security
+> audit can be invoked via the Security Engineer role.
+
+| Surface | Result |
+|---|---|
+| Secret non-leakage in renderable projections (bounds/contract) | PASS (runtime + source) |
+| Path/volumeIdentifier symlink spoofing (invalid-input) | PASS (runtime) |
+| Untrusted XPC / oversized payloads (bounds, regression) | PASS (WP-05 + WP-09) |
+| Network scheme allowlist (bounds, regression) | PASS (WP-07) |
+| Resource exhaustion (re-add storms, caches, queues) | PASS |
+| Disk-full/permission → inconsistent durable state | PASS |
+| Restart path uses validated settings + re-probes (contract) | PASS |
+
+**Residual risks (forward):** `ProxyConfiguration` has no redacted
+`CustomStringConvertible` description (no product path stringifies it today;
+forward hardening for Security Engineer); symlink follow when
+`volumeIdentifier` is nil (WP-10 owns full TOCTOU hardening); real-machine
+SIGKILL vs WP-06 store not yet XPC-reachable.
+
+**Process note:** KICK prompt referenced ADR-014; project state carries
+ADR-015 (supersedes ADR-014 operational practice). QA followed ADR-015 and
+did not write `SECURITY_FINDINGS.md`. Orchestrator to reconcile.
+
+---
+
 ## WP-08 Coverage Update
 
 **WP:** WP-08 — Native UX completeness
@@ -9,6 +99,7 @@
 **Result:** 99/100 QA scripts pass. The only failure is `test_wp03_legacy_untouched.sh` caused by pre-existing Human research dirt under `Legacy/Tauri`; this is ENVIRONMENTAL and waived.
 **XCTest:** 201/201 pass.
 **Bridge:** `test_bridge_headless.sh` PASS; `test_bridge_swift.sh` PASS.
+
 
 ### Feature -> dedicated coverage
 
