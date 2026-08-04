@@ -142,3 +142,23 @@
 - All kick templates restate the ban.
 - Product commits must show empty `git diff -- Legacy/` for agent work.
 - Human Legacy research dirt is ignored by agents and reported to Orchestrator if it confuses gates.
+
+---
+
+## ADR-014 — Tester security pass on every WP
+
+**Date:** 2026-08-04
+**Status:** Accepted (Human directive)
+**Context:** Torrentino is network- and filesystem-facing. Functional regression alone is insufficient; security issues must be hunted continuously and fixed only via Orchestrator→Coder.
+
+**Decision:**
+- Every Tester turn includes a WP-scoped **security pass** (threat model new surfaces + negative/abuse tests where practical).
+- Findings go to `Native/TorrentinoEngineBridge/scripts/qa/SECURITY_FINDINGS.md`.
+- Tester never patches product code for security or functional bugs.
+- Orchestrator merges High/Critical findings into Coder fix kicks; Low/Info may residual-forward.
+- Critical/High product-reachable findings block WP close even if functional suite is green.
+- Engagement limited to local TestProfile/mktemp fixtures — no external offensive testing.
+
+**Consequences:**
+- `KICK_TESTER.md`, `TEAM_CONTRACT.md`, `ORCHESTRATOR.md` updated.
+- COVERAGE.md should track security scripts alongside functional ones.

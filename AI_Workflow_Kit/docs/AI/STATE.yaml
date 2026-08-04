@@ -33,8 +33,11 @@ qa:
   suite: WP-09
   bugs_open: 0
   note: >-
-    Tester run. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched may FAIL from
-    Human Legacy dirt — do not fix Legacy. Product GREEN if all other checks pass.
+    Tester run WITH security pass (ADR-014). Write SECURITY_FINDINGS.md.
+    Critical/High findings → FAIL. ENVIRONMENTAL WAIVER: test_wp03_legacy_untouched
+    may FAIL from Human Legacy dirt — do not fix Legacy. Product GREEN if all other
+    checks pass and no open Critical/High security.
+
 next_actor: tester
 track: PRODUCT
 prior_track: PRODUCT

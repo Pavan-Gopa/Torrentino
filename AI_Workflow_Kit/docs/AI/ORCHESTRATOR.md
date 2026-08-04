@@ -61,13 +61,14 @@ Workers **не** планируют pipeline и **не** выдают промп
 ### A) `review.status == approved` and implementation done
 - After review **approved** and tests not yet green → `next_actor: tester` → **kick Tester**.
 - After tests **green** → POST checkpoint → **`/graphify . --update`** → advance / PRE next → `next_actor: coder` → **kick Coder**.
-- After tests **bugs** → do **not** advance:
-  1. Read `BUG_REPORT.md`
-  2. Open fix/retry for **Coder only**
+- After tests **bugs** and/or **High/Critical security findings** → do **not** advance:
+  1. Read `BUG_REPORT.md` + `SECURITY_FINDINGS.md`
+  2. Open fix/retry for **Coder only** (merge functional + security items into one kick)
   3. **Kick Coder** (fix)
   4. After Coder done → **kick Reviewer** (re-review)
-  5. After approve → **kick Tester** (re-run)
-  6. Green → next WP
+  5. After approve → **kick Tester** (re-run + security regression)
+  6. Green (and no open High/Critical security) → next WP
+- After tests **PRODUCT GREEN** with only Low/Info security notes → may advance, but copy residual risks into `coder_brief` / DECISIONS if needed; do not drop findings on the floor.
 
 ### B) `changes_requested`
 - `attempts += 1`, same WP, `next_actor: coder`

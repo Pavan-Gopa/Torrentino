@@ -16,7 +16,7 @@
 | **Orchestrator** | Jcode (this session) | no product code | STATE, DECISIONS, checkpoints, kick prompts |
 | **Implementation Engineer** | Coder (fresh terminal) | **yes** product | `target_files` only |
 | **Verification Engineer** | Reviewer (fresh terminal) | no | `FEEDBACK.md`, code review |
-| **Test Engineer** | Tester (fresh terminal) | **test code only** | test targets, QA scripts, `BUG_REPORT.md`, `REPORT.md` |
+| **Test Engineer** | Tester (fresh terminal) | **test code only** (+ security tests) | test targets, QA scripts, `BUG_REPORT.md`, `REPORT.md`, `SECURITY_FINDINGS.md` |
 | **Architect** *(on demand)* | Orchestrator or dedicated | no product features | ADR → DECISIONS |
 | **Human** | Pavel | — | switch models, paste kickoffs, approve decisions |
 
@@ -41,13 +41,27 @@ Human ↔ Orchestrator only (control plane)
   → Orchestrator: green → POST + PRE next + kick Coder; red → fix + kick Coder
 ```
 
-### Who does what when Tester finds a bug
+### Who does what when Tester finds a bug or security issue
 
 | Actor | Action |
 |-------|--------|
-| **Tester** | Detects failure, writes `BUG_REPORT.md`, tells Human: «вернись к оркестратору» |
-| **Orchestrator** | Reads bugs, opens fix/retry, **issues full Coder kick** |
+| **Tester** | Detects functional **and security** issues; writes `BUG_REPORT.md` and/or `SECURITY_FINDINGS.md`; tells Human: «вернись к оркестратору». **Never** patches product code. |
+| **Orchestrator** | Reads reports, prioritizes, opens fix/retry, **issues full Coder kick** (functional + security fixes). |
 | **Coder** | **Only one who fixes product code** |
+| **Reviewer** | Re-reviews after Orchestrator issues Reviewer kick |
+| **Tester** | Re-runs suite + security regression after Orchestrator issues Tester kick |
+
+### Tester security mandate (every WP)
+
+Torrentino is network-facing (BitTorrent, magnet/HTTP sources, XPC, filesystem paths, Keychain). On **every** Tester turn the agent must:
+
+1. Run functional regression + new feature tests (as always).
+2. Perform a **WP-scoped security pass**: threat model the *new/changed* surfaces; add **negative/abuse tests** where practical; record residual risks.
+3. Write findings to `Native/TorrentinoEngineBridge/scripts/qa/SECURITY_FINDINGS.md` (append or rewrite section for current WP).
+4. **Never** exploit production systems outside the local TestProfile harness; **never** write real malware/exploits against external hosts; use local disposable fixtures only.
+5. Security findings do **not** auto-block PRODUCT GREEN alone if severity is Low/Informational — but **High/Critical** product-reachable issues → treat as FAIL for the WP until Orchestrator routes a Coder fix (or Human accepts residual risk in DECISIONS).
+
+Security themes (pick those relevant to the WP): path traversal / symlink / TOCTOU; XPC authz & untrusted payloads; SSRF/unsafe URL fetch; injection in bencode/magnet/HTTP; IPC deserialization; secret leakage (logs, diagnostics, Keychain misuse); sandbox-adjacent assumptions; DoS via unbounded queues/payloads; permission / volume spoofing.
 | **Reviewer** | Re-reviews after Orchestrator issues Reviewer kick |
 | **Tester** | Re-runs suite after Orchestrator issues Tester kick |
 
