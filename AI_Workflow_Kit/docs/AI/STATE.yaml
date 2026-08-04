@@ -1,7 +1,8 @@
 current_step: WP-09
 step_description: >-
-  Fault recovery and resource control under review. System conditions, bounded
-  resources, health lane, crash-loop guard, volume-safe preflight, fault matrix.
+  Fault recovery fix round after CHANGES_REQUESTED. Wire resource budgets and
+  acceptsHeavyWork, restartEngineSafely, bounds/backoff, volume identity,
+  real fault-matrix tests.
 target_files:
 - Native/TorrentinoApp/
 - Native/TorrentinoEngineAgent/
@@ -23,26 +24,23 @@ completed_steps:
 - WP-07
 - WP-08
 implementation:
-  status: waiting_review
-  attempts: 1
+  status: in_progress
+  attempts: 2
   note: >-
-    feat 0918a3d. Coder handoff claims full matrix + build/test green; FEEDBACK
-    file was written in review-shaped prose with RESULT waiting_review — real
-    independent Reviewer must overwrite with APPROVED/CHANGES_REQUESTED.
+    Independent review CHANGES_REQUESTED. Health lane + watchdog PASS; budgets,
+    crash-loop restart, bounds, volume identity, and matrix tests FAIL/PARTIAL.
 review:
-  status: pending
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: Independent re-review required (do not trust self-shaped PASS tables).
+  verdict: CHANGES_REQUESTED
+  note: See FEEDBACK §5 concrete file list (13 items).
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-09
   bugs_open: open
-  note: >-
-    Coder claims test_wp09_fault_matrix 6/6, 100/101 suite (Legacy env fail).
-    Tester after APPROVED.
-next_actor: reviewer
+  note: Tester after APPROVED. Legacy env fail waived.
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -57,4 +55,5 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 coder_brief: |
-  Awaiting independent review of WP-09 fault recovery.
+  Fix FEEDBACK.md §5 only. Wire budgets for real; executable recovery; tests
+  that exercise production paths. No WP-10+. No Legacy.
