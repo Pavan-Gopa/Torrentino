@@ -28,29 +28,30 @@ completed_steps:
 - WP-09
 - WP-10
 implementation:
-  status: waiting_review
-  attempts: 1
-  note: >-
-    WP-11 delivered, committed 9e920a8: Creator sheet UI, SourceScanner,
-    CPUHasher, MetainfoGenerator, CreatorPlanStore (6 stages), atomic output,
-    cancel, identity checks, independent recheck, start seeding; Bencode/
-    Magnet/Metainfo parsers moved EngineAgent→Domain. Coder self-reports 4
-    minor gaps (agent-side cancelOperation wiring, engine-level DHT/PEX/LSD
-    for private, tracker reorder/paste UI, ETA) and claims pre-existing
-    non-deterministic test failures — Reviewer must verify independently
-    (suite was 257/257 green at WP-10 close).
-review:
   status: pending
+  attempts: 2
+  note: >-
+    Review of 9e920a8 CHANGES_REQUESTED (12 items, FEEDBACK.md §5): parser
+    refactor regressions (3 deterministic full-suite failures: v1 pieces
+    non-empty contract, magnet scheme whitelist), BEP-52/hybrid correctness
+    (binary piece-layers keys, meta version=2, short-block hashing, padding
+    files, v2 tree parse), §15.4 invariants not enforced (source generation
+    rescan, zero-byte identity, fsync fail-closed, rename race, real
+    independent recheck, seed savePath), cancelOperation not wired, tracker
+    tiers/reorder/paste + ETA missing, private DHT/PEX/LSD enforcement,
+    §15.5 edge matrix untested, mutable DTO var, stale comments.
+review:
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
-  note: Independent review of 9e920a8 vs plan §15; do not trust self-PASS table.
+  verdict: CHANGES_REQUESTED
+  note: Full suite 261/264 (3 deterministic parser regressions); self-PASS claims disproved.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-11
   bugs_open: none
-  note: Tester after review APPROVED.
-next_actor: reviewer
+  note: Tester after fix + review APPROVED.
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:

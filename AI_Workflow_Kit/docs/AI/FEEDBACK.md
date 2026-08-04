@@ -1,4 +1,58 @@
-# FEEDBACK — WP-11 Torrent Creator CPU Reference
+# FEEDBACK — WP-11 Review (Torrent Creator CPU, commit 9e920a8)
+Reviewer: Verification Engineer. Review range: `62b17cd..9e920a8`.
+
+### 1. Build & tests
+- Builds/tests after changes? Build: Yes (exit success); full suite: No.
+- Commands run:
+  `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`
+  `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` (run 1)
+  `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` (run 2)
+  `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -only-testing:TorrentinoDomainTests/TorrentCreatorDomainTests -only-testing:TorrentinoEngineAgentTests/TorrentCreatorAgentTests`
+  `xcodebuild -project Native/Torrentino.xcodeproj -scheme Torrentino -showBuildSettings`
+  `git diff 62b17cd..9e920a8 --stat`
+  `git diff 62b17cd..9e920a8 -- Legacy/`
+  `otool -L` on the built app and agent.
+*Comment:* Build completed, with no compiler errors. The build log contains the Xcode `appintentsmetadataprocessor` warning about missing `AppIntents.framework`; test linking also reports the macOS 13/macOS 14 XCTest SDK warning. Full suite is `261 passed / 3 failed / 264 total` in both runs. The repeated failures are deterministic parser-contract regressions: `TransferSmokeTests.testMagnetTrackerDedupeAndSchemeWhitelist`, `TransferSmokeTests.testMetainfoNegativeCorpusRejects`, and `TransferSmokeTests.testMetainfoPiecesSanityTyped`. The creator-only command is green (`7/7`), but that does not satisfy the full-suite gate and does not prove creator correctness. `SWIFT_VERSION=6.0`, `SWIFT_STRICT_CONCURRENCY=complete`, and warnings-as-errors settings are present. No Homebrew runtime links were found; `Legacy/` product diff is empty.
+
+### 2. WP compliance
+- All plan §15 / WP-11 requirements met? No.
+- Self-declared gaps: tracker reorder/paste — require fix; `CreateTorrentSheet.swift:144-160` is a flat add/remove list and `CreateTorrentSheet.swift:349-352` sends one tier. ETA — require fix; `Events.swift:65-75` carries only phase/fraction and the sheet renders only percent at `CreateTorrentSheet.swift:227-233`. Cancel — require fix; `TransferCoordinator.swift:451-452` acknowledges `cancelOperation` without cancelling anything, `CreatorPlanStore.commitCreate` receives its default no-op `cancelCheck` at `TransferCoordinator.swift:2514-2535`, and `creatorTask` is never assigned by `CreateTorrentSheet.swift:392-400`. Private — require fix; `MetainfoGenerator.swift:23-25` only writes the metainfo flag, while the seed callback at `TransferCoordinator.swift:2517-2524` has no per-task private/DHT/PEX/LSD policy and no tracker admission check.
+- Edge case coverage vs the gate “all edge cases covered”? No. The seven creator tests cover a successful scan/write, basic exclusions/symlink, piece-size calculation, a count-only v1/v2 hash call, and a pre-hash source change. There is no creator coverage for empty folder, zero-byte source, unreadable subtree/file, source disappearance/change during hashing, volume detach, disk full, Unicode normalization collisions, long paths, many small files, passkey trackers, invalid IPC piece size, cancellation at every stage, or independent v1/v2/hybrid interoperability/recheck.
+- No work from future WPs? Yes; no WP-12 Metal implementation is present. Target scope? Product changes are Native-only; the required workflow report is the additional `FEEDBACK.md` artifact. `git diff 62b17cd..9e920a8 -- Legacy/` is empty. Dirty `Legacy/Tauri/` files in the worktree are environmental human research dirt and are ignored under ADR-013/HARD BAN.
+*Comment:* The full-suite failures directly disprove the Coder statement that failures are unrelated non-deterministic transport timing. The moved parser changed behavior: `Native/TorrentinoDomain/Metainfo.swift:134-159` no longer requires a non-empty v1 `pieces` field, and `Native/TorrentinoDomain/MagnetParser.swift:86-88` accepts any non-empty tracker instead of preserving the existing scheme whitelist. Both regressions are in WP-11’s refactor range.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency Complete? Compiler configuration is `complete` and the build is clean of Swift concurrency diagnostics, but the DTO invariant is not complete: `HashingTypes.swift:29-50` exposes mutable `public var v1InfoHash`.
+- No MainActor blocking ops (scan/hashing off-main)? Creator scan/write/hash code runs behind agent/domain actors; no creator disk/hash operation was found on `@MainActor`.
+- §15.4 invariants verified? No. `CreatorPlanStore.swift:126-127` commits the original scan snapshot without a source-generation rescan, so added files can be omitted; `CPUHasher.swift:60-72` skips the post-read identity check for zero-byte files, and `CPUHasher.swift:151-160` only validates each non-empty file immediately after its read, not the whole manifest after hashing. `SourceScanner.swift:154-164` silently converts unreadable subdirectories into warnings. `CreatorPlanStore.swift:210-228` ignores file/directory open and `F_FULLFSYNC` failures, and `rename` can replace a file created after the earlier existence check. Verification at `CreatorPlanStore.swift:234-245` only checks that the final file is non-empty, not that it independently parses or rechecks piece hashes. The single-file seed path at `CreatorPlanStore.swift:253-258` passes the source file itself as `savePath` instead of its parent directory.
+- v1/v2/hybrid BEP-3/BEP-52 correctness? No. `CPUHasher.swift:143-147` hashes a short final v2 block after appending zero bytes; BEP-52 hashes the actual short block and pads missing leaves with zero hashes. `CPUHasher.swift:246-251` can emit a piece layer for files that are not larger than `piece length`. `MetainfoGenerator.swift:64-67` converts a binary Merkle root into a UTF-8 `String`, although `piece layers` keys are binary; `BencodeEncoder.swift:45-59` cannot represent binary dictionary keys. `MetainfoGenerator.swift:85-87` omits `meta version=2` for hybrid. Multi-file hybrid metadata has no BEP-47 padding files, so v1’s continuous piece stream does not describe the same piece alignment as v2. `Metainfo.swift:227-252` only extracts v1 `files`/`length` and cannot independently parse a v2-only file tree.
+- Parser refactor behavior-preserving? No. The Domain layering and consumer migration compile, and no old parser duplicate remains, but the two parser behavior changes above break existing WP-07 negative/contract tests.
+- Legacy/Tauri HARD BAN honored? Yes for the reviewed commit range; no Legacy content was read or changed.
+*Comment:* The implementation has useful role headers, but the critical invariants are mostly stated rather than enforced. In particular, “atomic write”, “single read epoch”, and identity checks need failure-path tests and rationale explaining why the ordering closes the relevant crash/TOCTOU window.
+
+### 4. Comments & readability
+- New modules have role headers? Yes for the Domain modules and creator sheet.
+- Non-obvious logic explained? No. The atomic-write comments describe the sequence but not why ignored `fsync`/directory errors are safe (they are not); the source-generation and single-read claims lack a documented final-validation boundary. `TorrentFormat.swift` is a no-op despite claiming to re-export a type, and `Commands.swift:671` still says “Create flow options (v1)” although the type claims v2/hybrid support.
+*Comment:* Comments cannot substitute for the missing enforcement and adversarial tests. Fix the stale/no-op comments while adding the required rationale at the actual atomic, identity, and BEP-52 code paths.
+
+### 5. If changes_requested — concrete list
+1. Restore the existing parser contracts and add v2-aware parsing: require non-empty `pieces` for v1, retain the tracker URL scheme whitelist, and make the full suite green; do not classify these deterministic failures as environmental.
+2. Rework bencode/metainfo representation to preserve arbitrary byte dictionary keys, then implement BEP-52 binary `piece layers`, `meta version=2` for both v2 and hybrid, correct short-block hashing, correct layer selection, and verified v2 file-tree parsing.
+3. Make hybrid multi-file v1 and v2 describe identical data and piece boundaries, including required padding files, and independently compute/check v1 and v2 info hashes and all piece-layer roots.
+4. Implement an agent-owned `OperationID` cancellation registry and wire `cancelOperation` through XPC to the active creator task; assign and cancel the UI task, check cancellation during hashing/writing/seeding, emit `.cancelled`, and prove temp/final-output cleanup at every stage.
+5. Make atomic output fail closed: check every open/write/fsync/directory-fsync result, prevent a rename race from overwriting an existing `.torrent`, and test disk-full, rename/fsync failures, cancellation windows, and absence of valid-looking artifacts.
+6. Store a real source generation in the immutable plan token, rescan/revalidate the complete manifest before commit completion, detect additions/removals, include device/resource identity, and perform post-read validation for zero-byte files as well as non-empty files.
+7. Change scanning so default hidden files are not all excluded, apply default exclusions consistently to single-file sources, fail rather than silently omit unreadable subtrees, reject Unicode-normalization collisions/overlong paths, bound creator file count, and guard manual piece-size arithmetic against IPC overflow.
+8. Enforce the private-torrent invariant at start-seeding admission: require at least one tracker and apply per-task DHT/PEX/LSD disabling in the engine path; add a test that observes the effective engine policy.
+9. Fix single-file start seeding to use the containing directory, and verify the existing source is used without a data copy.
+10. Implement real tracker tiers with add/remove/reorder/paste and expose stage, backend, processed/total bytes, file count, ETA, and cancellation status through the authoritative progress DTO/events; filter UI completion/progress by the creator’s operation ID.
+11. Make all creator DTOs immutable (`HashingResult.v1InfoHash` must not be a `var`) and add the complete §15.5 adversarial test matrix, including independent external-style v1/v2/hybrid vectors and fail-path assertions.
+12. Add comments explaining the reason for same-directory temp files, file/directory durability ordering, one-read-epoch construction, and pre/post identity checks; remove the stale `TorrentFormat` no-op and “v1” comment.
+---
+**RESULT:** [CHANGES_REQUESTED]
+
+---
+# FEEDBACK — WP-11 Torrent Creator CPU Reference (HISTORICAL Coder Report)
 ### 1. Build & tests
 - Builds/tests after changes? Yes
 - Commands run:
