@@ -28,30 +28,31 @@ completed_steps:
 - WP-09
 - WP-10
 implementation:
-  status: done
-  attempts: 0
+  status: in_progress
+  attempts: 1
   note: >-
-    ADR-017 clean retry implemented: ordered [[String]] topology is
-    authoritative across Creator admission, schema-v3 persistence,
-    restore/fetch/edit, and nested bridge payloads; standalone Domain
-    Creator-fault mirror parity restored. Coder reports waiting_review.
-    9 red XCTests are classified by Coder as stale test contracts
-    (Tester-owned); classification awaits independent Reviewer confirmation.
+    Reviewer CHANGES_REQUESTED on the ADR-017 retry. Both ADR-017 product
+    contracts APPROVED (structured [[String]] topology lifecycle; standalone
+    Domain Creator-fault mirror parity). All 9 red XCTests independently
+    classified Tester-owned (stale expectations), none block APPROVED.
+    Remaining fix scope is harness-level only: bridge_smoke.cpp
+    editTrackers initializer-list ambiguity and test_bridge_swift.sh stale
+    source paths (FEEDBACK §5 items 1-2).
 review:
-  status: waiting_review
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: pending
+  verdict: changes_requested
   note: >-
-    Reviewer verifies the ADR-017 retry against plan §15, ADR-017, and the
-    ARCHITECT_HANDOFF.md addendum; independently classifies the 9 red
-    XCTests and runs the four WP-04 standalone helper gates.
+    Re-review after the two harness fixes. Product contracts already passed;
+    green evidence required: test_bridge_headless.sh, the four WP-04 helper
+    gates, and run_qa_suite.sh classification.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-11
   bugs_open: none
   note: Blocked until the ADR-017 retry receives Reviewer APPROVED.
-next_actor: reviewer
+next_actor: coder
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -68,8 +69,9 @@ reviewer_brief: |
   Review the architecture-narrowed ADR-017 retry against plan §15,
   ARCHITECT_HANDOFF.md, and exact structured topology/fault-parity contracts.
 coder_brief: |
-  Implement ADR-017 exactly: immutable `[[String]]` topology is authoritative
-  across Creator admission, v3 persistence, restore/fetch/edit and nested
-  bridge payloads; complete standalone Domain Creator-fault mirror parity.
+  Fix only the two Reviewer-listed harness defects (FEEDBACK §5 items 1-2):
+  bridge_smoke.cpp editTrackers TrackerTiers initializer ambiguity and
+  test_bridge_swift.sh stale TorrentinoDomain source paths. Do not touch
+  approved ADR-017 product contracts, test sources, or Legacy.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

@@ -1,3 +1,69 @@
+# FEEDBACK — WP-11 ADR-017 Retry Review
+
+### 1. Build & tests
+- `graphify query` executed: `graphify query "WP-11 ADR-017 review: structured tracker topology [[String]] lifecycle, schema-v3 torrent_tracker_topology persistence, nested tracker-tiers bridge edit payload, standalone Domain EngineFault Creator factory parity"`. Returned 1,106 nodes.
+- `git rev-parse torrentino/pre-WP-11` => `04c38b84e26cf6cffeca4eb3686f26788cfccaf9`.
+- `git diff torrentino/pre-WP-11 --stat -- Native/`: 42 files (+7795, -674).
+- `git diff --check -- Native/`: clean (no whitespace/line-ending issues).
+- `git diff torrentino/pre-WP-11 --name-only -- Legacy/`: 8 files detected in `Legacy/Tauri/` (pre-existing, Human-owned dirt, waived as env defect in WP-10). `Legacy/` directory was NOT edited or inspected.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: 270 PASSED / 9 FAILED.
+  Independent classification of all 9 failing XCTests:
+  1. `TransferSmokeTests.testCreatorSeedUsesDurableAddPathAndContainingDirectory`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`, which intentionally fails closed with `creatorAssertionMissing` per ADR-016 §194). Does not block APPROVED.
+  2. `TransferSmokeTests.testEditTrackers`: **Tester-owned** (stale test expectation: sends deprecated scalar delta fields `addedURLs`/`removedURLs` without `trackerTiers`, which are rejected per ADR-017). Does not block APPROVED.
+  3. `TorrentCreatorAgentTests.testCancelBeforeHashingFailsClosed`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`). Does not block APPROVED.
+  4. `TorrentCreatorAgentTests.testCreatorPlanStoreTwoPhaseFlowAndAtomicWrite`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`). Does not block APPROVED.
+  5. `TorrentinoEngineAgentPersistenceTests.testOpenCreatesSchemaWithWAL`: **Tester-owned** (stale test expectation: asserts hardcoded `schemaVersion == 2`, while ADR-017 requires schema v3). Does not block APPROVED.
+  6. `TransferSmokeTests.testMetainfoTrackerLimitCappedAt512`: **Tester-owned** (stale test expectation: expects silent truncation to 512, while ADR-017 requires fail-closed rejection via `validateTrackerTiers`). Does not block APPROVED.
+  7. `TorrentCreatorAgentTests.testMissingOutputDirectoryFailsClosed`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`). Does not block APPROVED.
+  8. `TorrentCreatorAgentTests.testReadOnlyOutputDirectoryFailsClosed`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`). Does not block APPROVED.
+  9. `TorrentCreatorAgentTests.testSingleFileCommitUsesParentDirectorySavePath`: **Tester-owned** (stale test expectation: calls options-less `commitCreate`). Does not block APPROVED.
+- QA Helper Scripts Execution:
+  - `test_wp03_strict_concurrency.sh` — **PASS**
+  - `test_wp04_pimpl_isolation.sh` — **PASS**
+  - `test_wp04_xcode_integration.sh` — **PASS**
+  - `test_wp04_bridge_swift.sh`, `test_wp04_dto_codable.sh`, `test_wp04_peer_id_config.sh`, `test_wp04_torrent_id_payload.sh` — **FAILED** (Product defect / Retry defect).
+  - `run_qa_suite.sh` — **FAILED** due to bridge harness C++ compilation error (`bridge_smoke.cpp`) and Swift bridge test harness file path drift (`test_bridge_swift.sh`).
+
+### 2. WP compliance
+- ADR-017 Contract 1 (Structured `[[String]]` tracker topology):
+  - `CreateOptions.trackers` carries complete `[[String]]`.
+  - `Metainfo.trackerTiers` carries `[[String]]` with derived read-only `Metainfo.trackers` `flatMap` projection.
+  - `CreatorPlanStore` validates topology during inspection and commit.
+  - Schema v3 persistence table `torrent_tracker_topology` stores `{"version":1,"tiers":[...]}` envelope with SHA-256 checksum and atomic generation counter.
+  - Bridge edit API accepts nested `tracker-tiers` JSON, ObjC++ adapter passes `TrackerTiers` (`std::vector<std::vector<std::string>>`) to C++ `EngineBridge`. Scalar edit API is reject-only.
+- ADR-017 Contract 2 (Standalone Domain `EngineFault` Creator factory parity):
+  - `Native/TorrentinoDomain/HashingTypes.swift` contains all 9 Creator fault factories (`creatorPrivateTrackerMissing`, `creatorStalePlan`, `creatorAssertionMissing`, `creatorAssertionMismatch`, `creatorOperationConflict`, `creatorInvalidOptions`, `creatorCancelled`, `creatorStorageFailure`, `creatorUnavailable`) matching production `Native/TorrentinoIPC/ErrorContract.swift`.
+- Product / Retry Defect:
+  - C++ harness `bridge_smoke.cpp` fails to compile due to C++ initializer list ambiguity on `editTrackers` and scalar test calls.
+  - Swift harness script `test_bridge_swift.sh` fails to compile because source paths for `BencodeParser.swift`, `MagnetParser.swift`, and `Metainfo.swift` were moved to `TorrentinoDomain/` but were not updated in `test_bridge_swift.sh`.
+  - As a result, the four required WP-04 QA helper scripts fail.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency complete: **PASS** (`test_wp03_strict_concurrency.sh`).
+- C++ PIMPL isolation: **PASS** (`test_wp04_pimpl_isolation.sh`).
+- Xcode integration: **PASS** (`test_wp04_xcode_integration.sh`).
+- CPU-only / No Metal imports in Creator: **PASS**.
+- No Homebrew runtime links: **PASS** (pinned libtorrent 2.1.0 static archive).
+- Legacy hard ban: **PASS** (Legacy/ untouched).
+
+### 4. Comments & readability
+- Code changes in `Native/` are well-structured, typed, and follow Swift 6 strict concurrency conventions.
+- Bridge test harness code and scripting were left out of sync with domain refactoring.
+
+### 5. If changes_requested — concrete list (файл:строки, дефект, требуемое исправление, acceptance evidence)
+1. `Native/TorrentinoEngineBridge/bridge/bridge_smoke.cpp:308,311,332,337`
+   - Defect: C++ compilation failure in `bridge_smoke.cpp` due to ambiguous function call `bridge.editTrackers(add_result.torrent_id, {})` and scalar overload calls passing `{ "url" }` instead of structured `TrackerTiers` (`{ { "url" } }`). Both `TrackerTiers` (`std::vector<std::vector<std::string>>`) and `std::vector<std::string>` overloads match empty initializer list `{}` causing C++ compiler ambiguity.
+   - Required Fix: Update `bridge_smoke.cpp` to explicitly pass `TrackerTiers` (e.g. `TrackerTiers{{"udp://127.0.0.1:1/announce"}}` or `TrackerTiers{}`) and avoid initializer list ambiguity on `editTrackers`.
+   - Acceptance Evidence: `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh` compiles and passes with exit code 0.
+2. `Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh:104,107,108`
+   - Defect: `test_bridge_swift.sh` attempts to compile `BencodeParser.swift`, `MagnetParser.swift`, and `Metainfo.swift` from `"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/"`, but these files were moved to `"${NATIVE_DIR}/TorrentinoDomain/"`.
+   - Required Fix: Remove the stale file paths from `AGENT_SOURCES` in `test_bridge_swift.sh` (or update them to reference `TorrentinoDomain/`), as `TorrentinoDomain` is already compiled into `libTorrentinoDomain.dylib` on lines 75-79.
+   - Acceptance Evidence: `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_bridge_swift.sh`, `test_wp04_dto_codable.sh`, `test_wp04_peer_id_config.sh`, and `test_wp04_torrent_id_payload.sh` all execute and pass with exit code 0.
+
+---
+**RESULT:** [CHANGES_REQUESTED]
+
 # FEEDBACK — WP-11 ADR-017 Retry Verification (Coder)
 
 Role: Implementation Engineer (continuation verification).
