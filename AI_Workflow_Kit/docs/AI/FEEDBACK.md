@@ -1,3 +1,51 @@
+# FEEDBACK — WP-11 ADR-017 Fix Round 1 Re-Review
+
+### 1. Build & tests
+- Graphify query: `graphify query "WP-11 fix round 1 re-review: bridge_smoke.cpp TrackerTiers editTrackers, test_bridge_swift.sh AGENT_SOURCES module order, bridge_swift_test.swift structured tracker contract"` (78 nodes retrieved).
+- `git diff torrentino/pre-WP-11 --stat -- Native/`: 45 files (+7876, -707).
+- `git diff --check -- Native/`: clean (no trailing whitespace/formatting issues).
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS** (exit 0).
+- WP-04 QA helper scripts (executed sequentially):
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_bridge_swift.sh`: **PASS** (exit 0).
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_dto_codable.sh`: **PASS** (exit 0).
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_peer_id_config.sh`: **PASS** (exit 0).
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_torrent_id_payload.sh`: **PASS** (exit 0).
+- QA validation & static analysis:
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp03_strict_concurrency.sh`: **PASS** (exit 0).
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp04_pimpl_isolation.sh`: **PASS** (exit 0).
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp08_bridge_integration.sh`: **PASS** (exit 0).
+- Red test classification & verification:
+  - 9 failing XCTests in `TransferSmokeTests`, `TorrentCreatorAgentTests`, `TorrentinoEngineAgentPersistenceTests`: **Tester-owned** stale expectations (hardcoded options-less `commitCreate` assertion, schema v2 expectation vs ADR-017 schema v3, silent 512 tracker truncation expectation vs fail-closed rejection). Non-blocking for APPROVED.
+  - `test_wp03_legacy_untouched.sh`: **Human-owned env dirt** (8 pre-existing files in `Legacy/Tauri/`, waived in WP-10).
+  - `test_wp06_schema_migration.sh` & `test_wp06_sqlite_wal.sh`: **Tester-owned** wrappers around stale `testOpenCreatesSchemaWithWAL` XCTest.
+  - `test_wp07_metainfo_parser.sh`: **Tester-owned** (wraps stale `testMetainfoTrackerLimitCappedAt512` XCTest).
+  - `test_wp08_trackers_reannounce.sh`: **Tester-owned** (stale static check for scalar `record.trackers.count`).
+- `git diff torrentino/pre-WP-11 --name-only -- Legacy/`: 8 files detected in `Legacy/Tauri/` (pre-existing, Human-owned dirt, no modifications made in Fix Round 1).
+
+### 2. WP compliance (включая атрибуцию scope extension)
+- FEEDBACK §5.1 (`bridge_smoke.cpp`): Cleanly resolved. Lines 311, 314, 335, 341 explicitly pass `TrackerTiers` (`TrackerTiers{{"..."}}`, `TrackerTiers{}`). Ambiguity of `{}` eliminated. Scalar `editTrackers` overload is not used as a success path.
+- FEEDBACK §5.2 (`test_bridge_swift.sh`): Cleanly resolved. Obsolete paths `TorrentinoEngineAgent/Transfer/{BencodeParser,MagnetParser,Metainfo}.swift` removed from `AGENT_SOURCES`. Compilation order `TorrentinoIPC` → `TorrentinoDomain` (`libTorrentinoDomain.dylib`) → Agent sources maintained.
+- Attribution of Scope Extension:
+  - (a) Edits in Fix Round 1 are strictly harness-only: only `Native/TorrentinoEngineBridge/bridge/bridge_smoke.cpp`, `Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`, and `Native/TorrentinoEngineBridge/harness/bridge_swift_test.swift` were modified in Fix Round 1. No product code, `Native/Tests/`, QA scripts (except `test_bridge_swift.sh`), or Xcode project files were touched.
+  - (b) Harness expectations in `bridge_swift_test.swift` strictly conform to ADR-017: structured `trackerTiers` replacement success (`[["udp://..."]]`), explicit empty list success (`trackerTiers: []`), scalar edit rejection (`trackers: [...]` throwing `malformedPayload`), JSON adapter level rejection of non-array/scalar payloads, and IPC level fail-closed rejection (`invalidPayload`) for metainfo-less magnet records.
+  - (c) Justification confirmed: `test_bridge_swift.sh` directly compiles and executes `bridge_swift_test.swift` as its harness test payload. The four mandated WP-04 QA helper scripts (`test_wp04_bridge_swift.sh`, `test_wp04_dto_codable.sh`, `test_wp04_peer_id_config.sh`, `test_wp04_torrent_id_payload.sh`) depend on `test_bridge_swift.sh` passing, which was impossible while `bridge_swift_test.swift` held stale pre-ADR-017 scalar expectations.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency complete: **PASS** (`test_wp03_strict_concurrency.sh`).
+- C++ PIMPL isolation: **PASS** (`test_wp04_pimpl_isolation.sh`).
+- ADR-017 Product Contracts: Spot-check confirmed product code did not degrade in Fix Round 1; structured tracker topology `[[String]]` lifecycle, schema v3 persistence, and standalone Domain Creator fault parity remain fully intact.
+- Legacy hard ban: **PASS** (`Legacy/` untouched, no edits made or staged).
+
+### 4. Comments & readability
+- Fixes in `bridge_smoke.cpp`, `test_bridge_swift.sh`, and `bridge_swift_test.swift` are concise, precise, well-commented, and accurately document the ADR-017 structured tracker topology contract and IPC boundary behaviors.
+
+### 5. If changes_requested — concrete list
+None.
+
+---
+**RESULT:** APPROVED
+
 # FEEDBACK — WP-11 ADR-017 Retry, Fix Round 1 (harness-only)
 
 Role: Implementation Engineer (Coder).
