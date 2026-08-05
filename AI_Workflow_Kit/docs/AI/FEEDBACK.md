@@ -1,3 +1,48 @@
+# FEEDBACK — WP-11 ADR-017 Retry, Fix Round 1 (harness-only)
+
+Role: Implementation Engineer (Coder).
+Scope: exactly the two FEEDBACK §5 harness defects, plus the three masked
+harness defects they exposed (documented in §4). No product ADR-017 code,
+Native/Tests/, Xcode project, Legacy/, STATE.yaml, or DECISIONS.md were touched.
+
+### 1. Build & tests
+- GraphiFy: mandatory query executed first: `graphify query "WP-11 harness fix: bridge_smoke.cpp editTrackers TrackerTiers overloads, test_bridge_swift.sh AGENT_SOURCES TorrentinoDomain"` (348 nodes).
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'` — **BUILD SUCCEEDED** (twice: before and after the harness changes).
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh` — **exit 0** (bridge smoke: PASS; also re-run after the final edits).
+- `test_wp04_bridge_swift.sh` — **PASS**; `test_wp04_dto_codable.sh` — **PASS**; `test_wp04_peer_id_config.sh` — **PASS**; `test_wp04_torrent_id_payload.sh` — **PASS** (each re-verified sequentially after the final harness edits).
+- `test_wp03_strict_concurrency.sh` — **PASS**; `test_wp04_pimpl_isolation.sh` — **PASS**.
+- `run_qa_suite.sh` — 112 scripts: **107 PASS / 5 FAIL**. Classified:
+  1. `test_wp03_legacy_untouched.sh` — **Human-owned env dirt** (pre-existing `Legacy/Tauri/` worktree changes; Legacy untouched, not inspected, not git-added).
+  2. `test_wp06_schema_migration.sh` — **Tester-owned**: wraps the known-red stale XCTest `testOpenCreatesSchemaWithWAL` (hardcoded `schemaVersion == 2` vs ADR-017 v3).
+  3. `test_wp06_sqlite_wal.sh` — **Tester-owned**: same stale `testOpenCreatesSchemaWithWAL` wrapper.
+  4. `test_wp07_metainfo_parser.sh` — **Tester-owned** (stale 600-tracker silent-truncation cap; ADR-017 requires fail-closed rejection).
+  5. `test_wp08_trackers_reannounce.sh` — **Tester-owned** (stale `record.trackers.count` static check; product pages `record.trackerTiers`).
+  `test_wp08_bridge_integration.sh` (static harness contract checker) — **PASS** after the harness was aligned to the structured contract (its needles for the old scalar expectations were not satisfiable without violating ADR-017).
+- `git diff --check -- Native/` — clean.
+- Note: the four WP-04 scripts must run **sequentially** — they share `${BRIDGE_DIR}/.build` and the harness's fixed `NSTemporaryDirectory` DB path; parallel invocation produces a transient `sqlite disk I/O error` (observed, not a product defect).
+
+### 2. WP compliance
+- Defect 1 (FEEDBACK §5.1): `bridge_smoke.cpp:308,311,332,337` — all `editTrackers` calls now pass explicit `TrackerTiers` (`TrackerTiers{{...}}` / `TrackerTiers{}`); the empty initializer-list ambiguity and the scalar `{ "url" }` calls are gone. The C++ harness now reflects the structured `[[String]]` contract; the scalar overload is exercised nowhere as a success path.
+- Defect 2 (FEEDBACK §5.2): `test_bridge_swift.sh` — the stale `Transfer/BencodeParser.swift`, `Transfer/MagnetParser.swift`, `Transfer/Metainfo.swift` paths were removed from `AGENT_SOURCES` (they compile into `libTorrentinoDomain.dylib`); the dylib build and the agent → IPC → Domain module order are preserved (Domain now built after IPC, which its `#if canImport(TorrentinoIPC)` guard already assumed as the production dependency order).
+- Masked defect 3: `TorrentinoDomain/HashingTypes.swift` declares standalone fallbacks (`EngineFault`, `FileKind`, `PageCursor`/`Page`, etc.) inside `#if canImport(TorrentinoIPC) ... #else` — so a Domain dylib built without the IPC module exports `FileKind`, which collides with `TorrentinoIPC.FileKind` in the harness compile unit (agent sources import both). Fixed in `test_bridge_swift.sh` by building TorrentinoIPC first and compiling the Domain dylib with `-I "${BUILD_DIR}"` (production variant). This mirrors the Xcode agent-tool configuration exactly.
+- Masked defect 4: `bridge_swift_test.swift` still exercised the pre-ADR-017 scalar tracker surface (coordinator-level `trackers: [...]` success, IPC `addedURLs`/`removedURLs` success, adapter `"trackers"` JSON). Moved to the structured contract: `trackerTiers:` success + empty-list success at the coordinator level, scalar reject-only checks (including `trackers: []`), adapter-level `tracker-tiers` malformed/empty/non-array rejection, and IPC-level fail-closed admission (metainfo-less magnet fixture cannot carry metainfo, so structured IPC edits correctly fail with `invalidPayload: "structured tracker edit requires metainfo"`; scalar delta fields rejected with `invalidPayload`). Reannounce IPC success retained. See §4 for the scope note.
+- The 9 red XCTests remain classified exactly as the Reviewer did (Tester-owned stale expectations); no test source was touched.
+- WP-12 / Metal / extra product work: none added.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency: **PASS** (`test_wp03_strict_concurrency.sh`); harness compiles with `-strict-concurrency=complete`.
+- C++ PIMPL isolation: **PASS** (`test_wp04_pimpl_isolation.sh`); bridge smoke builds with `-Wall -Wextra -Wpedantic -Werror`.
+- No product contract changes: ADR-017 structured topology lifecycle, schema-v3 persistence, and Domain Creator-fault parity are untouched; the harness now verifies them rather than the deprecated scalar surface.
+- Legacy hard ban: **PASS** — `Legacy/` not read for implementation, not changed, not staged.
+
+### 4. Comments
+- Scope note: the mandate listed two target files. Removing the stale `AGENT_SOURCES` paths (as FEEDBACK §5.2 required) exposed two further harness-only defects — the `FileKind` shim collision (fixable inside `test_bridge_swift.sh` alone) and the Swift harness's stale scalar-tracker expectations (fixable only in `bridge_swift_test.swift`, which is a harness input file of `test_bridge_swift.sh`, not product code, not a QA script, not Tests/). The four mandated WP-04 QA scripts and the WP-08 bridge-integration contract checker cannot pass without the `bridge_swift_test.swift` change, so it was made minimally and strictly ADR-017-conforming. Flagged here for the Reviewer's attribution.
+- `test_wp06_schema_migration.sh` / `test_wp06_sqlite_wal.sh` regressed only because they shell out to the Tester-owned stale `testOpenCreatesSchemaWithWAL` XCTest; they passed in the previous round only because the schema-v2 expectation was still true then.
+- Comments in changed code use role/why style; no fake data introduced (magnet fixtures, loopback-only URLs, real persistence paths).
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK — WP-11 ADR-017 Retry Review
 
 ### 1. Build & tests

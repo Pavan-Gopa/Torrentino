@@ -28,31 +28,33 @@ completed_steps:
 - WP-09
 - WP-10
 implementation:
-  status: in_progress
+  status: done
   attempts: 1
   note: >-
-    Reviewer CHANGES_REQUESTED on the ADR-017 retry. Both ADR-017 product
-    contracts APPROVED (structured [[String]] topology lifecycle; standalone
-    Domain Creator-fault mirror parity). All 9 red XCTests independently
-    classified Tester-owned (stale expectations), none block APPROVED.
-    Remaining fix scope is harness-level only: bridge_smoke.cpp
-    editTrackers initializer-list ambiguity and test_bridge_swift.sh stale
-    source paths (FEEDBACK §5 items 1-2).
+    Fix round 1 complete: both FEEDBACK §5 harness defects fixed
+    (bridge_smoke.cpp explicit TrackerTiers; test_bridge_swift.sh source
+    paths/module order). Two masked harness defects also fixed and flagged
+    for attribution: FileKind shim collision (test_bridge_swift.sh) and
+    stale scalar-tracker expectations in bridge_swift_test.swift (harness
+    input file, outside the two-file mandate). Evidence: build green,
+    test_bridge_headless.sh exit 0, four WP-04 helpers PASS, QA 107/112
+    with remainder classified (1 Human env dirt, 4 Tester-owned).
 review:
-  status: changes_requested
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: changes_requested
+  verdict: pending
   note: >-
-    Re-review after the two harness fixes. Product contracts already passed;
-    green evidence required: test_bridge_headless.sh, the four WP-04 helper
-    gates, and run_qa_suite.sh classification.
+    Re-review of fix round 1. Confirm the scope extension to
+    bridge_swift_test.swift is harness-only and ADR-017-conforming;
+    independently re-run the green evidence; product contracts already
+    approved in the prior round.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-11
   bugs_open: none
   note: Blocked until the ADR-017 retry receives Reviewer APPROVED.
-next_actor: coder
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
@@ -66,8 +68,9 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Review the architecture-narrowed ADR-017 retry against plan §15,
-  ARCHITECT_HANDOFF.md, and exact structured topology/fault-parity contracts.
+  Re-review fix round 1 (harness-only): verify the two FEEDBACK §5 fixes and
+  the flagged scope extension to bridge_swift_test.swift; independently re-run
+  build, test_bridge_headless.sh, the four WP-04 helpers, and run_qa_suite.sh.
 coder_brief: |
   Fix only the two Reviewer-listed harness defects (FEEDBACK §5 items 1-2):
   bridge_smoke.cpp editTrackers TrackerTiers initializer ambiguity and
