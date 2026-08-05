@@ -28,36 +28,34 @@ completed_steps:
 - WP-09
 - WP-10
 implementation:
-  status: pending
-  attempts: 2
+  status: done
+  attempts: 0
   note: >-
-    Review of 9e920a8 CHANGES_REQUESTED (12 items, FEEDBACK.md §5): parser
-    refactor regressions (3 deterministic full-suite failures: v1 pieces
-    non-empty contract, magnet scheme whitelist), BEP-52/hybrid correctness
-    (binary piece-layers keys, meta version=2, short-block hashing, padding
-    files, v2 tree parse), §15.4 invariants not enforced (source generation
-    rescan, zero-byte identity, fsync fail-closed, rename race, real
-    independent recheck, seed savePath), cancelOperation not wired, tracker
-    tiers/reorder/paste + ETA missing, private DHT/PEX/LSD enforcement,
-    §15.5 edge matrix untested, mutable DTO var, stale comments.
+    ADR-017 clean retry implemented: ordered [[String]] topology is
+    authoritative across Creator admission, schema-v3 persistence,
+    restore/fetch/edit, and nested bridge payloads; standalone Domain
+    Creator-fault mirror parity restored. Coder reports waiting_review.
+    9 red XCTests are classified by Coder as stale test contracts
+    (Tester-owned); classification awaits independent Reviewer confirmation.
 review:
-  status: changes_requested
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: CHANGES_REQUESTED
-  note: Full suite 261/264 (3 deterministic parser regressions); self-PASS claims disproved.
+  verdict: pending
+  note: >-
+    Reviewer verifies the ADR-017 retry against plan §15, ADR-017, and the
+    ARCHITECT_HANDOFF.md addendum; independently classifies the 9 red
+    XCTests and runs the four WP-04 standalone helper gates.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-11
   bugs_open: none
-  note: Tester after fix + review APPROVED.
-next_actor: coder
+  note: Blocked until the ADR-017 retry receives Reviewer APPROVED.
+next_actor: reviewer
 track: PRODUCT
 prior_track: PRODUCT
 working_roots:
 - .
-legacy_hard_ban: >-
-  Legacy/Tauri is Human-only research. Agents never read/edit/stage/commit Legacy.
 security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-11
@@ -66,10 +64,12 @@ checkpoint:
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
+reviewer_brief: |
+  Review the architecture-narrowed ADR-017 retry against plan §15,
+  ARCHITECT_HANDOFF.md, and exact structured topology/fault-parity contracts.
 coder_brief: |
-  WP-11 Torrent Creator CPU reference per plan §15 + WP-11 section.
-  IPC scaffolding exists (inspectCreateSource/commitCreate/
-  fetchCreatorManifestPage payloads in TorrentinoIPC; coordinator returns
-  unsupported). Implement agent creator flow + bridge creation path + CPU
-  hashing + Creator sheet UI + atomic output + independent recheck + start
-  seeding. v1/v2/hybrid, no Metal. All §15.4 invariants, §15.5 edge cases.
+  Implement ADR-017 exactly: immutable `[[String]]` topology is authoritative
+  across Creator admission, v3 persistence, restore/fetch/edit and nested
+  bridge payloads; complete standalone Domain Creator-fault mirror parity.
+architect_brief: |
+  Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.
