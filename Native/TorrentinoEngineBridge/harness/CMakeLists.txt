@@ -29,6 +29,7 @@ add_executable(torrentino-harness
 	src/scenarios_core.cpp
 	src/scenarios_persistence.cpp
 	src/soak.cpp
+	src/hash_bench.cpp
 )
 
 target_include_directories(torrentino-harness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

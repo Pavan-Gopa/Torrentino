@@ -1,15 +1,16 @@
-current_step: WP-12
+current_step: WP-13
 step_description: >-
-  Metal research per plan §12: CPU/libtorrent baselines, experimental Metal
-  backend, known/randomized/stress correctness, benchmark corpus,
-  failure/cancel/fallback tests, energy/thermal/memory analysis, recheck
-  supported-hook verification. Outcome: measured ADOPT_METAL or REJECT_METAL
-  with a formal ADR. REJECT is a normal successful outcome.
+  Diagnostics, security, dependencies per plan §WP-13: OSLog/signposts,
+  rotating redacted logs, diagnostic export, XPC peer verification, re-audit
+  of input-limit/parser/path, re-audit of Keychain/redaction,
+  SBOM/licenses/CVE review, release entitlements audit.
 target_files:
-- Native/TorrentinoHashing/
+- Native/TorrentinoApp/
+- Native/TorrentinoEngineAgent/
+- Native/TorrentinoIPC/
+- Native/Config/
 - Native/Tests/
-- Native/TorrentinoEngineBridge/scripts/
-- AI_Workflow_Kit/docs/DECISIONS.md
+- Native/TorrentinoEngineBridge/scripts/qa/
 completed_steps:
 - WP-00
 - WP-01
@@ -23,52 +24,46 @@ completed_steps:
 - WP-09
 - WP-10
 - WP-11
+- WP-12
 implementation:
-  status: done
+  status: pending
   attempts: 0
   note: >-
-    WP-12 research complete: measured REJECT_METAL per plan §12.7 (ADR-018).
-    Correctness gates G1-G5, G10, G11 PASS (bit-for-bit vs CPU, 100+100
-    randomized, 1000 stress, libtorrent 2.0.13 18-cell validator, thermal,
-    fallbacks=0); performance gates G6-G9 FAIL on the eligible >=4 GiB line
-    (Metal 0.26x-0.48x wall-clock, p95 0.26-0.49, RSS 22-38x, ~2x
-    CPU-seconds/MiB). Evidence in Measurements/wp12/. Production hashing
-    untouched; Metal research-only behind TORRENTINO_METAL_EXPERIMENTAL=1.
+    WP-12 closed RESEARCH GREEN: review APPROVED, REJECT_METAL (ADR-018),
+    zero production diff, research prototype isolated from release targets,
+    QA scripts test_wp12_01..04 green and wired into run_qa_suite.sh.
 review:
-  status: waiting_review
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
-  note: >-
-    Reviewer verifies REJECT_METAL evidence against plan §12, ADR-018
-    completeness, release-target isolation of the research prototype, and
-    absence of production-path changes.
+  note: Awaiting WP-13 implementation.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-12
+  suite: WP-13
   bugs_open: none
-  note: Blocked until WP-12 implementation receives Reviewer APPROVED.
-next_actor: reviewer
-track: RESEARCH
-prior_track: PRODUCT
+  note: Blocked until WP-13 implementation receives Reviewer APPROVED.
+next_actor: coder
+track: RELEASE
+prior_track: RESEARCH
 working_roots:
 - .
 security_engineer: on_demand_only
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-12
-  last_post_tag: torrentino/WP-11-done
-  last_commit: 426aade
+  last_pre_tag: torrentino/pre-WP-13
+  last_post_tag: torrentino/WP-12-done
+  last_commit: PENDING_POST_COMMIT
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Review WP-12 REJECT_METAL: verify §12.7 gate evidence in Measurements/wp12/,
-  ADR-018 completeness, research prototype isolation from release targets,
-  and that production hashing paths remain untouched.
+  Pending WP-13 implementation; will review diagnostics, redaction, XPC peer
+  verification, audit re-checks, SBOM/CVE, and entitlements against the gate.
 coder_brief: |
-  WP-12 Metal research: execute plan §12 work items (baselines, experimental
-  Metal backend, correctness, benchmark corpus, failure/cancel/fallback,
-  energy/thermal/memory, recheck hook), then record measured ADOPT_METAL or
-  REJECT_METAL as a formal ADR in DECISIONS.md. REJECT is a normal outcome.
+  WP-13 Diagnostics, security, dependencies: OSLog/signposts, rotating redacted
+  logs, diagnostic export, XPC peer verification, re-audit input-limit/parser/
+  path and Keychain/redaction, SBOM/licenses/CVE review, minimal release
+  entitlements. Diagnostic bundle must not leak private data; release build
+  self-contained.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

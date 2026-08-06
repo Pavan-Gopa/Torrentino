@@ -1,3 +1,66 @@
+# FEEDBACK — WP-12 Metal research review (REJECT_METAL)
+
+### 1. Build & tests
+- Graphify query executed (384 nodes, WP-12 Metal research context).
+- `git rev-parse torrentino/pre-WP-12`: `ec8f498c`.
+- `git diff torrentino/pre-WP-12 --stat`: 15 files, +1399/−190.
+- `git diff --check`: clean.
+- `xcodebuild build` (Torrentino scheme, macOS arm64): **BUILD SUCCEEDED**.
+- `xcodebuild test` (Torrentino scheme, macOS arm64): **TEST SUCCEEDED** (all XCTest targets green).
+- `swift test --package-path Native/TorrentinoHashing`: **20/20 PASS** (KnownAnswer 5, Correctness 4, Stress 1, Failure 7, Cancellation 3; 85s).
+- `test_wp12_01_correctness.sh`: **PASS**.
+- `test_wp12_02_benchmarks.sh`: **PASS** (3-rep smoke matrix; full 10-rep matrix archived in Measurements/wp12/bench-20260806-112438.csv, 300 rows).
+- `test_wp12_03_fallback.sh`: **PASS**.
+- `test_wp12_04_verifier.sh`: **PASS** (18/18 cells).
+- `run_qa_suite.sh`: WP-12 scripts discovered and executed (wp12 counter present in summary).
+- `git diff torrentino/pre-WP-12 --name-only -- Legacy/`: 8 files detected (pre-existing Human-owned dirt, waived per ADR-013; not blocking).
+
+### 2. WP compliance (§12.7 gates G1–G11, REJECT-gate prototype removal)
+**Correctness gates (G1–G5):** All PASS with verifiable evidence.
+- G1: KnownAnswerTests 5/5 (SHA-1 + SHA-256 published vectors, GPU piece KATs).
+- G2: CorrectnessTests v1/v2/hybrid vs CPU reference, including `testLargePieceAnd16MiB`.
+- G3: 100 randomized single-file + 100 randomized two-file cases (`testRandomizedCases`, `testHundredRandomizedTwoFileStreams`).
+- G4: 1000 stress iterations, zero mismatches (`testThousandIterationsNoMismatch`, 44.8s).
+- G5: Independent libtorrent 2.0.13 validator, 18/18 cells byte-equal (v1 pieces, v2 roots, piece-layer content).
+
+**Performance gates (G6–G9):** All FAIL on the eligible ≥4 GiB line with measured (not N/A) evidence.
+- G6: Metal 0.26x–0.48x of CPU wall-clock (4g cells: 18.6s/34.4s/21.7s vs 9.0s/8.9s/9.0s). Required ≥1.20x.
+- G7: p95 ratio CPU/Metal = 0.26–0.49. Required ≥0.95.
+- G8: Metal/CPU peak RSS ratio 22–38x on 4g cells. Required <10x.
+- G9: Metal cpu-s/MiB ≈ 16.3–16.7 vs CPU ≈ 8.4–8.6 (~2x worse). Required ≤1.05x.
+- Methodology honest: 10 reps, randomized backend order per rep, rotated order across cells, 95% CI (t₉), warm-up pass, no system purge, 4 GiB eligibility line measured. N/A rows (10 GiB, 50–100 GiB, external SSD, M1, LPM) documented with reasons (storage/hardware).
+
+**No-harm gates (G10–G11):** PASS. Thermal evidence ok on all 300 rows; fallbacks=0 on all rows.
+
+**REJECT-gate — prototype removal from release targets:**
+- (a) `grep -r TorrentinoHashing Native/Torrentino.xcodeproj/`: **no references**. The Swift package is not a target dependency of Torrentino or TorrentinoEngineAgent.
+- (b) Metal path reachable ONLY via `TORRENTINO_METAL_EXPERIMENTAL=1` env var (checked in `HashingTypes.swift:flagName`); `support-check` without the flag reports `supported=false`. No automatic selection path exists.
+- (c) `otool -L` on production binaries (Torrentino.app, TorrentinoEngineAgent): no TorrentinoHashing or Metal experiment linkage. EngineAgent links `libswiftMetal.dylib` weakly (system framework, not the research package).
+- (d) Creator (WP-11) remains CPU-only on libtorrent: `git diff torrentino/pre-WP-12 -- Native/TorrentinoDomain/CPUHasher.swift` is empty; no changes to TorrentinoEngineAgent, TorrentinoDomain, TorrentinoApp, or TorrentinoIPC.
+
+**Conclusion:** REJECT_METAL is fully justified per §12.7. The prototype is isolated from release targets.
+
+### 3. Architecture invariants (production paths untouched, isolation)
+- `git diff torrentino/pre-WP-12 -- Native/TorrentinoEngineAgent/ Native/TorrentinoDomain/ Native/TorrentinoApp/ Native/TorrentinoIPC/`: **empty** — zero production code changes.
+- WP-11 contracts (ADR-016/017) not degraded: all existing XCTest and QA scripts pass unchanged.
+- Harness changes (CMakeLists.txt +1 line, harness_api.cpp +76 lines, new hash_bench.cpp/hpp) are additive research bench infrastructure: new CLI commands (`bench-hash`, `verify-torrent`, `gen-corpus`) appended to the existing dispatch; no existing commands or scenarios modified. Existing harness gates verified green via QA suite (bridge smoke, sanitizers, swift integration all PASS).
+- `Measurements/wp12/` contains raw CSVs, environment snapshots, gate-verdict, and report — all consistent with ADR-018 numbers.
+
+### 4. Comments & readability
+- ADR-018 is complete: date, status, context, measured figures, decision, rationale, consequences. Numbers match `gate-verdict-20260806.md` exactly.
+- `report.md` is well-structured with root-cause analysis (bandwidth-bound GPU, hybrid double-pay, superlinear piece-size scaling, libtorrent baseline 2.5x faster than Swift CPU reference).
+- QA scripts are deterministic (seeded corpora, fixed piece sizes), self-contained, and properly documented with §12.7 references.
+- `analyze_wp12.py` correctly implements the §12.7 eligibility line (≥4 GiB) and gate thresholds.
+- Minor observation (non-blocking): the root `FEEDBACK.md` was also updated with the WP-12 block. Per project convention the canonical file is `AI_Workflow_Kit/docs/AI/FEEDBACK.md`; the root copy is a stale duplicate. Not blocking since both are consistent.
+
+### 5. If changes_requested — concrete list
+N/A — no changes requested.
+
+---
+**RESULT:** [APPROVED]
+
+---
+
 # WP-12 Research Feedback (Metal hashing experiment)
 
 ## RESULT: waiting_review

@@ -6,4 +6,6 @@ node_modules/
 graphify-out/
 Native/test-results/
 Native/build/
+Native/.build/
+Native/TorrentinoHashing/.build/
 default.profraw

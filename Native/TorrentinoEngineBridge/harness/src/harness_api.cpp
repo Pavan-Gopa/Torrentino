@@ -8,6 +8,7 @@
 //           reach the caller.
 #include "torrentino/harness/harness_api.h"
 
+#include "torrentino/harness/hash_bench.hpp"
 #include "torrentino/harness/scenario.hpp"
 #include "torrentino/harness/soak.hpp"
 #include "torrentino/harness/support.hpp"
@@ -32,6 +33,17 @@ struct CliOptions {
 	std::chrono::seconds soak_duration{std::chrono::hours{24}};
 	std::chrono::seconds soak_report_interval{std::chrono::minutes{5}};
 	bool keep_workspace = false;
+
+	// WP-12 hashing benchmark / verifier options.
+	fs::path payload_parent;
+	std::string corpus_name;
+	fs::path torrent_file;
+	int piece_kib = 1024;
+	std::string protocol = "hybrid";
+	int hash_reps = 10;
+	fs::path gen_path;
+	std::int64_t gen_size = 0;
+	std::uint64_t gen_seed = 0x7071;
 };
 
 void print_usage()
@@ -50,6 +62,11 @@ Commands:
   internal-crash-child <dir>
                           internal: used by the crash_restore scenario
 
+WP-12 research:
+  bench-hash              time lt::set_piece_hashes over a corpus (CSV rows)
+  verify-torrent          cross-check a Swift-produced .torrent with libtorrent
+  gen-corpus              write a deterministic payload file
+
 Options:
   --workspace <dir>       parent directory for scratch data (default: $TMPDIR)
   --keep-workspace        keep scratch data for post-mortem
@@ -57,6 +74,16 @@ Options:
   --duration <seconds>    soak duration (default: 86400)
   --report-interval <s>   soak progress interval (default: 300)
   --report <file>         soak JSON report path
+  --dir <dir>             corpus parent (torrent root) for bench-hash/verify-torrent
+  --name <name>           corpus dir/file inside --dir
+  --torrent <file>        .torrent to verify
+  --piece <256|1024|4096|16384>
+                          piece size in KiB (default: 1024)
+  --format <v1|v2|hybrid> hash protocol (default: hybrid)
+  --reps <N>              benchmark repetitions (default: 10)
+  --path <file>           output path for gen-corpus
+  --size <bytes>          file size for gen-corpus
+  --seed <n>              deterministic payload seed (default: 0x7071)
 )";
 }
 
@@ -103,6 +130,32 @@ CliOptions parse_arguments(const std::vector<std::string>& args)
 			options.soak_report_interval = std::chrono::seconds{std::stoll(value())};
 		} else if (flag == "--report") {
 			options.report_path = value();
+		} else if (flag == "--dir") {
+			options.payload_parent = value();
+		} else if (flag == "--name") {
+			options.corpus_name = value();
+		} else if (flag == "--torrent") {
+			options.torrent_file = value();
+		} else if (flag == "--piece") {
+			const int kib = std::stoi(value());
+			if (kib != 256 && kib != 1024 && kib != 4096 && kib != 16384) {
+				throw AssertionFailure(cat("--piece must be one of 256|1024|4096|16384 KiB"));
+			}
+			options.piece_kib = kib;
+		} else if (flag == "--format") {
+			options.protocol = value();
+		} else if (flag == "--reps") {
+			const int reps = std::stoi(value());
+			if (reps <= 0 || reps > 1000) {
+				throw AssertionFailure(cat("--reps must be in 1..1000"));
+			}
+			options.hash_reps = reps;
+		} else if (flag == "--path") {
+			options.gen_path = value();
+		} else if (flag == "--size") {
+			options.gen_size = std::stoll(value());
+		} else if (flag == "--seed") {
+			options.gen_seed = static_cast<std::uint64_t>(std::stoull(value()));
 		} else if (flag == "--help" || flag == "-h") {
 			options.command = "help";
 		} else {
@@ -213,6 +266,29 @@ Status dispatch(const CliOptions& options)
 	}
 	if (options.command == "internal-crash-child") {
 		run_crash_child(options.argument); // never returns
+	}
+	if (options.command == "bench-hash") {
+		HashBenchOptions bench;
+		bench.payload_parent = options.payload_parent;
+		bench.corpus_name = options.corpus_name;
+		bench.piece_kib = options.piece_kib;
+		bench.protocol = options.protocol;
+		bench.reps = options.hash_reps;
+		return static_cast<Status>(run_hash_bench(bench));
+	}
+	if (options.command == "verify-torrent") {
+		VerifyTorrentOptions verify;
+		verify.torrent_file = options.torrent_file;
+		verify.payload_parent = options.payload_parent;
+		verify.corpus_name = options.corpus_name;
+		return static_cast<Status>(run_verify_torrent(verify));
+	}
+	if (options.command == "gen-corpus") {
+		GenCorpusOptions gen;
+		gen.path = options.gen_path;
+		gen.size = options.gen_size;
+		gen.seed = options.gen_seed;
+		return static_cast<Status>(run_gen_corpus(gen));
 	}
 	log_error(cat("unknown command: ", options.command));
 	print_usage();
