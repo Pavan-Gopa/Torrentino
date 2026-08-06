@@ -1,3 +1,112 @@
+# BUG REPORT — WP13-BUG-003 Inspector "No files"; per-file selection missing end-to-end
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run)
+Scope: Native/TorrentinoApp (Inspector Files tab), Native/TorrentinoEngineAgent
+(fetchFiles/setFileSelection chain), Native/TorrentinoIPC
+Verdict: **OPEN — assigned to Coder**
+
+## Reproduction
+
+1. Add a multi-file torrent (Human added "Шугар (Sugar) Сезон 2", 25.38 GB).
+2. Select the row, open Inspector (Cmd+I), Files tab.
+3. Observed: "No files" empty state; no outline tree, no checkboxes.
+
+## Contract (plan, authoritative)
+
+- §7.4 XPC v1: `fetchFiles(recordID:cursor:pageSize:expectedRevision:)`;
+  `setFileSelection` — only `skip | normal` in 1.0.
+- Inspector UI: "Files: outline tree, tri-state selection, progress, Reveal".
+- Acceptance: "Add magnet/file/URL + preflight/file selection работают".
+- Persistence: selected/skipped file selection is durable; checkpoint after
+  file selection change (§9.4).
+
+## Observed vs expected
+
+- IPC types exist (`FetchFilesRequest`, `SetFileSelectionRequest`, command
+  cases in Commands.swift); engine/agent chain and UI wiring are incomplete
+  or broken — Coder must trace end-to-end (agent file source from metainfo,
+  paging, revision checks, UI outline tree with tri-state checkboxes for
+  folder aggregation mapped to skip|normal on leaves, progress per file,
+  Reveal, localization EN/RU) and complete it.
+- Expected: files listed from metainfo regardless of download state; user can
+  uncheck individual episodes; selection persists and is honored by the
+  engine (skip|normal); Reveal works.
+
+---
+
+# BUG REPORT — WP13-BUG-002 added torrent stays Idle with fault warning; never starts
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run)
+Scope: Native/TorrentinoEngineAgent (desired-state enforcement, add flow),
+Native/TorrentinoApp (state/fault projection)
+Verdict: **OPEN — assigned to Coder**
+
+## Reproduction
+
+1. With engine operational, add a torrent (Human: magnet/file add of a
+   25.38 GB multi-file torrent).
+2. Row shows State "Idle", warning icon, Down/Up Zero KB/s indefinitely;
+   download never starts.
+
+## Observed vs expected
+
+- Observed: record admitted but desired_state=running not enforced, or a
+  fault latched without user-visible localized reason (warning icon with no
+  actionable message).
+- Expected: added torrent with start intent transitions to Downloading (or
+  shows a localized, actionable fault with recovery per ErrorContract;
+  offline/partial states preserve desired state per plan §fault recovery).
+- Coder must diagnose with real evidence: agent OSLog
+  (subsystem com.torrentino.app.engine-agent), persisted `last error code`,
+  libtorrent alert path for the Human's stuck record; then fix root cause.
+  Do not corrupt or delete the Human's existing record/data.
+
+---
+
+# BUG REPORT — WP13-BUG-001 stale engine-service status; no live re-poll/reconnect
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run)
+Scope: Native/TorrentinoApp lifecycle/status projection (EngineViewModel,
+ContentView, TorrentListViewModel start, EngineClient reconnect)
+Verdict: **OPEN — assigned to Coder**
+
+## Reproduction
+
+1. `Torrentino --cli unregister` (agent not registered).
+2. `open Torrentino.app` → banner "Engine service is unavailable ·
+   notRegistered", empty transfer list.
+3. Externally: `Torrentino --cli register` → launchd spawns the agent;
+   `Torrentino --cli status` => `STATE operational`.
+4. The already-running app keeps the `notRegistered` banner and the empty
+   list indefinitely; only a full app restart recovers it.
+
+## Observed vs expected
+
+- Observed root cause (verify): SMAppService status is sampled once via
+  `ContentView.swift` `.task { viewModel.refreshServiceStatus() }`; there is
+  no re-poll on app activation and no bounded periodic refresh while
+  degraded; `transfers.start()` failure at launch is not retried once the
+  engine becomes reachable, so the event subscription/list never recovers
+  without restart.
+- Expected: a running app detects engine availability without restart —
+  refresh on `NSApplication.didBecomeActiveNotification` + bounded polling
+  while degraded (a few seconds) + retry of `start()`/event subscription when
+  the engine becomes reachable; the degraded banner clears and the list
+  populates. Degraded state must never be silent (existing contract).
+
+## Required product-side follow-up
+
+Implement live status recovery in the UI layer without auto-registering the
+agent (ServiceRegistration must-not stands: no registration without explicit
+user intent). No launchd/XPC IO on the main actor. Add regression coverage
+(XCTest via an injectable status/connection seam and/or QA script). QA does
+not apply the fix; Tester will verify closure after Coder + Reviewer.
+
+---
+
 # BUG REPORT — WP-11 Torrent Creator CPU Reference & Structured Tracker Topology
 
 Date: 2026-08-06

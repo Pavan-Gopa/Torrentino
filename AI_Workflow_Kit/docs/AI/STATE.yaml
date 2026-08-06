@@ -26,36 +26,30 @@ completed_steps:
 - WP-11
 - WP-12
 implementation:
-  status: done
+  status: in_progress
   attempts: 0
   note: >-
-    WP-13 implemented: OSLog/signposts facade (TorrentinoLog/
-    TorrentinoSignposts), RedactedLogFileManager rotation, diagnostic export
-    with scrubbing (proxy passwords, home paths, tokens), XPC peer
-    verification (effectiveUserIdentifier + code signing requirement,
-    fail-closed), SBOM.md (libtorrent 2.1.0 / OpenSSL 3.5.7 / Boost 1.91.0,
-    0 Critical/High CVE claimed), ENTITLEMENTS_AUDIT.md (minimal dicts, no
-    sandbox). New XCTest WP13DiagnosticsSecurityTests + QA script
-    test_wp13_diagnostics_security.sh reported green. Handoff lacked RESULT
-    line and was in root FEEDBACK.md; normalized by Orchestrator.
+    WP-13 review APPROVED, but Human manual run opened three product bugs
+    (BUG_REPORT.md top blocks): WP13-BUG-001 stale engine-service status /
+    no live re-poll/reconnect; WP13-BUG-002 added torrent stays Idle with
+    fault warning, never starts; WP13-BUG-003 Inspector "No files", per-file
+    selection (fetchFiles/setFileSelection/outline tri-state tree) missing
+    end-to-end despite plan §7.4/§UI/acceptance. Fix round open for Coder
+    before the Tester QA phase.
 review:
-  status: approved
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: approved
-  note: >-
-    WP-13 APPROVED: all gates independently verified (redaction, export
-    scrubbing, XPC peer verification fail-closed, SBOM vs versions.lock,
-    minimal entitlements, otool self-contained check, re-audit QA green).
+  verdict: pending
+  note: Re-review after the WP13-BUG-001/002/003 fix round.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
-  bugs_open: none
+  bugs_open: WP13-BUG-001, WP13-BUG-002, WP13-BUG-003
   note: >-
-    Tester QA phase: functional gap-hunt for diagnostics export, redacted
-    logging/rotation, XPC peer verification; full regression XCTest +
-    run_qa_suite.sh.
-next_actor: tester
+    Tester QA phase deferred until the fix round is Reviewer-approved; then
+    QA covers WP-13 features plus regression and closure of the three bugs.
+next_actor: coder
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -74,10 +68,11 @@ reviewer_brief: |
   self-contained release build, and attribution of TransferCoordinator/
   State/test_bridge_swift.sh changes.
 coder_brief: |
-  WP-13 Diagnostics, security, dependencies: OSLog/signposts, rotating redacted
-  logs, diagnostic export, XPC peer verification, re-audit input-limit/parser/
-  path and Keychain/redaction, SBOM/licenses/CVE review, minimal release
-  entitlements. Diagnostic bundle must not leak private data; release build
-  self-contained.
+  Fix round for three Human-found bugs (BUG_REPORT.md top blocks): BUG-001
+  live engine-status recovery without restart; BUG-002 diagnose+fix added
+  torrent stuck Idle (desired-state enforcement / localized fault surfacing);
+  BUG-003 complete fetchFiles/setFileSelection chain end-to-end with Inspector
+  Files outline tree, tri-state checkboxes (skip|normal), progress, Reveal,
+  durable selection, EN/RU.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.
