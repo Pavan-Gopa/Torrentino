@@ -1,3 +1,75 @@
+# WP-12 Research Feedback (Metal hashing experiment)
+
+## RESULT: waiting_review
+
+## Final WP-12 Status
+
+WP-12 (RESEARCH: ADOPT_METAL / REJECT_METAL for Creator piece hashing) is
+complete. The experiment produced a measured decision: **REJECT_METAL** per
+plan §12.7 gate criteria (documented in ADR-018). This is the plan's defined
+normal successful outcome for a failed gate: all correctness gates pass, all
+performance gates fail with measured (not N/A) evidence on the eligible >= 4 GiB
+line.
+
+## Verification
+
+- `xcodebuild build`: **BUILD SUCCEEDED**; `xcodebuild test` (Torrentino scheme,
+  macOS arm64): **TEST SUCCEEDED**.
+- `swift test` (Native/TorrentinoHashing): **20/20 PASS** — KnownAnswer 5,
+  Correctness 4 (100 + 100 randomized cases), Stress 1 (1000 iterations),
+  Failure 7 (all §12.8 fallback paths), Cancellation 3.
+- Independent validator (libtorrent 2.0.13): **18/18 cells PASS** — v1 piece
+  lists, v2 file-tree roots and piece-layer content byte-equal for tiny/64m x
+  piece 256K/1M/4M x v1/v2/hybrid.
+- Benchmark matrix (64 MiB/1 GiB/4 GiB x 256K–16M pieces x cpu/metal/libtorrent,
+  10 reps, randomized order, 95% CI, no purge): **300/300 rows** valid,
+  fallbacks=0, thermal evidence OK. Raw CSV + gate verdicts:
+  `Measurements/wp12/`.
+- QA: `test_wp12_01_correctness.sh`, `test_wp12_02_benchmarks.sh`,
+  `test_wp12_03_fallback.sh`, `test_wp12_04_verifier.sh` — all PASS; wired into
+  `run_qa_suite.sh` (`test_wp12_*` find + summary counters).
+
+## Compliance with plan §12 criteria
+
+| Criterion (§12.7) | Result |
+| --- | --- |
+| G1 bit-for-bit known vectors | PASS (KnownAnswerTests 5/5) |
+| G2 v1/v2/hybrid vs CPU reference | PASS (CorrectnessTests) |
+| G3 >= 100 randomized cases | PASS (100 + 100 two-file) |
+| G4 >= 1000 stress iterations | PASS (1000, zero mismatches) |
+| G5 independent BEP validator | PASS (libtorrent 2.0.13 cross-check 18/18) |
+| G6 >= 20% median gain on >= 4 GiB | **FAIL — Metal 0.26x–0.48x of CPU** |
+| G7 p95 regression <= 5% | **FAIL — 0.26–0.49** |
+| G8 memory budget | **FAIL — RSS 22–38x CPU** |
+| G9 throughput-per-joule | **FAIL — ~2x CPU-seconds/MiB** |
+| G10 no new thermal events | PASS |
+| G11 fallbacks == 0 healthy | PASS (300/300 rows) |
+
+## Invariants
+
+- Production hashing paths are untouched: Creator (WP-11) remains CPU-only on
+  libtorrent; `Legacy/Tauri/` untouched; no Homebrew; no sudo used.
+- Metal is research-only, gated by `TORRENTINO_METAL_EXPERIMENTAL=1`, with the
+  §12.8 fallback chain (device/compile/commit/buffer/selftest/thermal) — never
+  selected automatically.
+- Corpus/benchmark tooling and analysis are deterministic and reproducible
+  (seeded corpora, shared CSV schema, scripts committed).
+
+## Comments
+
+- Findings documented for upstream/reporting: libtorrent 2.0.13
+  `create_torrent` must not be moved by value (EXC_BAD_ACCESS);
+  `info_hashes().v2` is the info-dict hash, not the merkle root; libtorrent
+  parse re-derives a v2 root differing from the stored one; two-level piece-root
+  v2 tree coincides with strict BEP-52 for piece-aligned/sub-piece single files.
+- Corpus rows N/A with reasons: 10 GiB, 10 GiB/10k files, 50–100 GiB (storage),
+  external SSD, M1, LPM (hardware/admin). 4 GiB (the eligibility line) measured.
+- Detail: `Measurements/wp12/report.md`, `Measurements/wp12/gate-verdict-20260806.md`,
+  ADR-018 (`AI_Workflow_Kit/docs/DECISIONS.md`).
+
+---
+---
+
 # WP-08 Implementation Feedback
 
 ## RESULT: waiting_review

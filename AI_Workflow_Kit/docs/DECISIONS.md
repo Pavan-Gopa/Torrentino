@@ -261,3 +261,49 @@ than inventing tier boundaries that were not present in a legacy flat value.
   ADR is needed for the standalone Domain fault fallback because production IPC
   remains the sole wire fault authority and the fallback is only a compile-time
   API mirror.
+
+---
+
+## ADR-018 — WP-12 Metal hashing experiment: REJECT_METAL
+
+**Date:** 2026-08-06
+**Status:** Accepted (research outcome)
+
+**Context:** WP-12 ran a controlled experiment (plan §12.1–§12.8) to decide
+`ADOPT_METAL` vs `REJECT_METAL` for Creator piece hashing, with a research-only
+Metal backend in `Native/TorrentinoHashing`, a CPU reference, and an independent
+libtorrent 2.0.13 baseline + validator. Correctness and benchmarks were run per
+§12.7 on an M4/32 GiB machine (4 GiB corpus measured, which is the eligibility
+line; 10 GiB/50–100 GiB/external-SSD/M1/LPM rows are N/A — storage/hardware).
+
+**Decision:**
+- **REJECT_METAL.** The Metal backend is correct (bit-for-bit vs CPU reference
+  on known vectors, 100+100 randomized cases, 1000 stress iterations; v1 pieces,
+  v2 roots and piece-layer content byte-equal to libtorrent 2.0.13 on an 18-cell
+  cross-format battery) but loses every §12.7 performance gate on eligible
+  >= 4 GiB workloads: 0.26x–0.48x of CPU wall-clock (G6 FAIL), p95 regression
+  0.26–0.49 (G7 FAIL), peak RSS 22–38x CPU (G8 FAIL), ~2x CPU-seconds per MiB
+  (G9 FAIL). Only the no-harm gates pass (G10 thermal, G11 fallbacks=0).
+- Metal remains research-only behind `TORRENTINO_METAL_EXPERIMENTAL=1` with the
+  §12.8 fallback chain; it is never selected automatically and never touches
+  production hashing (Creator stays CPU-only on libtorrent, WP-11 unchanged).
+- Evidence is archived under `Measurements/wp12/` (CSV, gate verdicts, report);
+  QA coverage lives in `Native/TorrentinoEngineBridge/scripts/qa/test_wp12_*.sh`
+  wired into `run_qa_suite.sh`.
+
+**Rationale:** §12.7 requires >= 20% median wall-clock gain on >= 4 GiB
+workloads to ADOPT; the measured direction is opposite (Metal 2–4x slower), the
+memory cost is an order of magnitude over budget, and the hybrid path still
+hashes v2 SHA-256 blocks on CPU. `REJECT_METAL` is the plan's defined normal
+outcome for a failed gate, not a dead end.
+
+**Consequences:**
+- No production code path changes; Creator hashing remains libtorrent CPU.
+- Documented upstream findings: libtorrent 2.0.13 `create_torrent` must not be
+  moved by value; `info_hashes().v2` is the info-dict hash, not the merkle root;
+  libtorrent's parse re-derives a v2 root that differs from the stored one, and
+  its file root uses a two-level piece-root scheme that coincides with strict
+  BEP-52 for piece-aligned and sub-piece single files.
+- The experimental Swift Metal/CORPUS bench tooling stays in the repo as the
+  measurement harness for any future re-evaluation (e.g. M-series with larger
+  GPUs), with the same gate criteria.
