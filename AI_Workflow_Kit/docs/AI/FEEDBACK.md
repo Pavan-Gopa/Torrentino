@@ -1,3 +1,52 @@
+# FEEDBACK — WP-13 Fix round (BUG-001, BUG-002, BUG-003)
+
+### 1. Build & tests
+- Graphify query executed: `graphify query "WP-13 fix round: EngineViewModel refreshServiceStatus, TorrentListViewModel start reconnect, fetchFiles setFileSelection InspectorView Files tab, TransferCoordinator desired state add flow last error"` (958 nodes traversed).
+- `xcodebuild build` (Torrentino scheme, macOS arm64): **BUILD SUCCEEDED** (0 warnings, 0 errors, Swift 6 strict concurrency Complete).
+- `xcodebuild test` (Torrentino scheme, macOS arm64): **TEST SUCCEEDED** (all 289/289 XCTest cases green).
+- Dedicated QA scripts executed:
+  - `test_wp07_file_selection.sh`: **PASS**
+  - `test_wp07_paginated_files.sh`: **PASS**
+  - `test_wp07_restart_flow.sh`: **PASS**
+  - `test_wp07_pause_resume.sh`: **PASS**
+  - `test_wp07_error_isolation.sh`: **PASS**
+  - `test_wp10_fail_closed_contract.sh`: **PASS**
+  - `test_wp13_diagnostics_security.sh`: **PASS**
+- Headless CLI verification for BUG-001:
+  - Executed `Torrentino --cli unregister` -> status `notRegistered`, degraded state reported.
+  - Executed `Torrentino --cli register` -> status `enabled`, agent spawned without app restart, status banner clears, transfers start.
+
+### 2. WP compliance & bug fixes
+1. **BUG-001 — Live engine status refresh & reconnect without app restart:**
+   - `EngineViewModel.swift`: Added `statusProvider` seam, observed `NSApplication.didBecomeActiveNotification`, and implemented bounded polling (2s interval) while degraded. When SMAppService status becomes `enabled`, `degraded` flips to `false`, polling stops, and `onStatusRestored` callback triggers `transfers.start()`.
+   - `AppDelegate.swift`: Wired `AppContext.shared.onStatusRestored` to call `AppContext.transfers.start()`.
+   - `TorrentListViewModel.swift`: Added `isStarting` concurrency protection to `start()` so live reconnection safely replaces fixture data with authoritative engine snapshot without app restart.
+   - Enforced: no auto-registration without explicit user action; nonisolated async launchd/XPC querying (no MainActor IO); degraded state is never silent. Verified via `testEngineViewModelStatusRefreshAndReconnect`.
+
+2. **BUG-002 — Added torrent transitioning to Downloading / actionable error recovery:**
+   - `TransferCoordinator.swift`: Diagnosed stuck `activity: .idle` state. Fixed `restore()`, `commitAdd()`, and `pumpOnce()` so records with `desiredState == .running` and `health == .healthy` set `activity` to `.queued` / `.fetchingMetadata` / `.downloading` instead of leaving `activity` stuck as `.idle`.
+   - Preserved offline recovery semantics: offline state (`systemConditions.canAttemptNetworkWork == false`) sets `health = .waitingForNetwork` and `activity = .idle`, but preserves `desiredState = .running`.
+   - `TorrentHealth` & UI: Added `userFacingMessage` and `recoverySuggestion` extensions to `TorrentHealth`. `TorrentListView.swift` displays localized health status and adds tooltip (`.help`) to the warning icon. `InspectorView.swift` displays actionable health error banner in General tab with recovery steps.
+   - Verified via `testCommitAddImmediateStartRunningNotIdle` and `testTorrentHealthLocalizedMessages`.
+
+3. **BUG-003 — Inspector Files tab end-to-end (outline tree, tri-state selection, progress, Reveal, durable selection):**
+   - `PersistenceStore.swift`: Implemented `setTorrentFileSelection(torrentID:selection:)` and `torrentFileSelection(torrentID:)` persisting selections in `session_state` table (`torrent_file_selection.<id>`).
+   - `TransferCoordinator.swift`: Updated `restore()`, `commitAdd()`, and `handleSetFileSelection()` to load and store file selections durably with operation journal checkpoints (`journalAppend("setFileSelection")`, `journalMarkCommitted`).
+   - `TorrentListViewModel.swift`: Added `setFileSelections(_ items:)` for batch selection updates.
+   - `InspectorView.swift`: Rebuilt Files tab with hierarchical `FileTreeNode` outline tree (`OutlineGroup`), folder tri-state checkboxes (`.on`, `.off`, `.mixed`), per-file progress indicator, Reveal button (`NSWorkspace.shared.activateFileViewerSelecting`), and Select All / Deselect All controls.
+   - `Localizable.xcstrings`: Added localized EN and RU strings for file selection actions and health error states.
+   - Verified via `testSetFileSelectionDurableAcrossRestart` and `test_wp07_file_selection.sh`.
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency Complete (`SWIFT_TREAT_WARNINGS_AS_ERRORS = YES`).
+- No disk/network/DB/hash IO on MainActor; Sendable DTO boundaries maintained.
+- HARD BAN `Legacy/Tauri/` respected: zero files touched or staged in `Legacy/Tauri/`.
+- Developer ID + Hardened Runtime compliance preserved.
+
+---
+
+RESULT: waiting_review
+
 # FEEDBACK — WP-13 Diagnostics/security/deps review
 
 ### 1. Build & tests

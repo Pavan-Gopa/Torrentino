@@ -26,21 +26,27 @@ completed_steps:
 - WP-11
 - WP-12
 implementation:
-  status: in_progress
+  status: done
   attempts: 0
   note: >-
-    WP-13 review APPROVED, but Human manual run opened three product bugs
-    (BUG_REPORT.md top blocks): WP13-BUG-001 stale engine-service status /
-    no live re-poll/reconnect; WP13-BUG-002 added torrent stays Idle with
-    fault warning, never starts; WP13-BUG-003 Inspector "No files", per-file
-    selection (fetchFiles/setFileSelection/outline tri-state tree) missing
-    end-to-end despite plan §7.4/§UI/acceptance. Fix round open for Coder
-    before the Tester QA phase.
+    Fix round complete: BUG-001 live status recovery (statusProvider seam,
+    didBecomeActive, bounded 2s polling while degraded, onStatusRestored ->
+    transfers.start); BUG-002 desired-state enforcement in restore/commitAdd/
+    pumpOnce (running -> queued/fetchingMetadata/downloading; offline keeps
+    desiredState with waitingForNetwork) + localized userFacingMessage/
+    recoverySuggestion surfaced in list tooltip and Inspector banner; BUG-003
+    durable file selection (session_state + journal checkpoints), Files tab
+    outline tree with tri-state checkboxes, per-file progress, Reveal,
+    Select/Deselect All, EN/RU. XCTest 289/289; QA scripts green; headless
+    CLI proof for BUG-001.
 review:
-  status: pending
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
-  note: Re-review after the WP13-BUG-001/002/003 fix round.
+  note: >-
+    Re-review of the three-bug fix round: verify each fix against its
+    BUG_REPORT block with independent evidence, plus regression of WP-13
+    gates and invariants.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
@@ -49,7 +55,7 @@ qa:
   note: >-
     Tester QA phase deferred until the fix round is Reviewer-approved; then
     QA covers WP-13 features plus regression and closure of the three bugs.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -63,10 +69,11 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Review WP-13: independently verify redaction/scrubbing completeness, XPC
-  peer verification fail-closed, SBOM/CVE evidence, entitlements minimality,
-  self-contained release build, and attribution of TransferCoordinator/
-  State/test_bridge_swift.sh changes.
+  Re-review the WP13-BUG-001/002/003 fix round against the BUG_REPORT blocks:
+  live status recovery without restart, desired-state start enforcement with
+  localized actionable faults, and the end-to-end fetchFiles/setFileSelection
+  chain (durable selection, tri-state outline, Reveal); regression of WP-13
+  gates and invariants.
 coder_brief: |
   Fix round for three Human-found bugs (BUG_REPORT.md top blocks): BUG-001
   live engine-status recovery without restart; BUG-002 diagnose+fix added
