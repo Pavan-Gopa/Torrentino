@@ -1,3 +1,33 @@
+# FEEDBACK — WP-13 Diagnostics, security, dependencies (RELEASE track)
+
+### 1. Build & tests
+- Graphify query executed: `graphify query "WP-13 diagnostics..."` (426 nodes traversed; graph refreshed via `graphify update .`).
+- Backup tag created & pushed: `backup/pre-wp13-20260806-0000`.
+- `xcodebuild build` (Torrentino scheme, macOS arm64): **BUILD SUCCEEDED** (0 warnings, 0 errors, Swift 6 strict concurrency Complete).
+- `xcodebuild test` (Torrentino scheme, macOS arm64): **TEST SUCCEEDED** (all XCTest targets green, including WP13DiagnosticsSecurityTests).
+- Dedicated QA script: `test_wp13_diagnostics_security.sh`: **PASS**.
+- Legacy tree (`Legacy/Tauri/`): Dirty tree ignored per prompt rules (HARD BAN `Legacy/Tauri/` applied).
+
+### 2. WP compliance (WP-13 gates)
+- [x] **Diagnostic bundle does not reveal private data:** Verified. `ExportDiagnosticsRequest` / `handleExportDiagnostics` scrub proxy passwords (`password: "<redacted>"`), home paths (`/Users/<username>` -> `~`), and auth tokens before writing diagnostic bundle. Verified via `WP13DiagnosticsSecurityTests.testDiagnosticExportCreatesBundleWithoutSecrets`.
+- [x] **No secrets (в логах, бандле, репо):** Verified. `RedactedLogFileManager` redacts user home paths, proxy passwords, auth bearer tokens, and magnet passkeys from all log entries. `ProxyConfiguration` conforms to `CustomStringConvertible` / `CustomDebugStringConvertible` with redacted password representation. Verified via `test_wp09_sec_secret_hygiene.sh` source contract test.
+- [x] **No Critical/High relevant CVE (задокументированный review):** Verified & documented in `Native/ThirdParty/SBOM.md`. Pinned libtorrent 2.1.0 (`v2.1.0`), OpenSSL 3.5.7 (`openssl-3.5.7`), Boost 1.91.0 audited; 0 Critical/High relevant CVEs found.
+- [x] **Entitlements минимальны:** Verified & documented in `Native/Config/ENTITLEMENTS_AUDIT.md`. Both `Torrentino.entitlements` and `TorrentinoEngineAgent.entitlements` are minimal `<dict></dict>` declarations (no sandbox in v1, no `get-task-allow`, Hardened Runtime enabled via `ENABLE_HARDENED_RUNTIME = YES`).
+- [x] **Release build self-contained (без Homebrew runtime deps):** Verified. All native C++ / ObjC++ libraries (`libtorrent-rasterbar.a`, `libssl.a`, `libcrypto.a`) are statically linked into the agent binary. Verified zero dynamic Homebrew dependencies.
+
+### 3. Invariants
+- Swift 6 strict concurrency: Complete; warnings as errors (`SWIFT_TREAT_WARNINGS_AS_ERRORS = YES`).
+- No disk/network/DB/hash operations on MainActor.
+- Sendable DTO boundaries enforced.
+- XPC Peer Verification: `AgentRuntime` listener enforces fail-closed `connection.effectiveUserIdentifier == getuid()` check alongside code signing requirement set (`setCodeSigningRequirement`).
+- Redacted logging facade: `TorrentinoLog` and `TorrentinoSignposts` (using `OSSignposter`) wired on critical paths (lifecycle, XPC, persistence, hashing, transfer).
+
+### 4. Comments
+- All WP-13 target files touched adhere strictly to role boundaries and Swift 6 concurrency invariants.
+- Pre-existing untracked/modified files in `Legacy/Tauri/` were left untouched per prompt instructions.
+
+---
+
 # WP-12 Research Feedback (Metal hashing experiment)
 
 ## RESULT: waiting_review

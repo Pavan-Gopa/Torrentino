@@ -26,24 +26,34 @@ completed_steps:
 - WP-11
 - WP-12
 implementation:
-  status: pending
+  status: done
   attempts: 0
   note: >-
-    WP-12 closed RESEARCH GREEN: review APPROVED, REJECT_METAL (ADR-018),
-    zero production diff, research prototype isolated from release targets,
-    QA scripts test_wp12_01..04 green and wired into run_qa_suite.sh.
+    WP-13 implemented: OSLog/signposts facade (TorrentinoLog/
+    TorrentinoSignposts), RedactedLogFileManager rotation, diagnostic export
+    with scrubbing (proxy passwords, home paths, tokens), XPC peer
+    verification (effectiveUserIdentifier + code signing requirement,
+    fail-closed), SBOM.md (libtorrent 2.1.0 / OpenSSL 3.5.7 / Boost 1.91.0,
+    0 Critical/High CVE claimed), ENTITLEMENTS_AUDIT.md (minimal dicts, no
+    sandbox). New XCTest WP13DiagnosticsSecurityTests + QA script
+    test_wp13_diagnostics_security.sh reported green. Handoff lacked RESULT
+    line and was in root FEEDBACK.md; normalized by Orchestrator.
 review:
-  status: pending
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
-  note: Awaiting WP-13 implementation.
+  note: >-
+    Reviewer verifies WP-13 gates independently: redaction completeness,
+    diagnostic-export scrubbing, XPC peer verification fail-closed behavior,
+    SBOM/CVE evidence, entitlements minimality, self-contained release build,
+    and scope of TransferCoordinator/State/test_bridge_swift.sh changes.
 qa:
   status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
   bugs_open: none
   note: Blocked until WP-13 implementation receives Reviewer APPROVED.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -57,8 +67,10 @@ plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Pending WP-13 implementation; will review diagnostics, redaction, XPC peer
-  verification, audit re-checks, SBOM/CVE, and entitlements against the gate.
+  Review WP-13: independently verify redaction/scrubbing completeness, XPC
+  peer verification fail-closed, SBOM/CVE evidence, entitlements minimality,
+  self-contained release build, and attribution of TransferCoordinator/
+  State/test_bridge_swift.sh changes.
 coder_brief: |
   WP-13 Diagnostics, security, dependencies: OSLog/signposts, rotating redacted
   logs, diagnostic export, XPC peer verification, re-audit input-limit/parser/
