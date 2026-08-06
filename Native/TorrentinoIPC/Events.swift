@@ -61,18 +61,58 @@ public enum OperationPhase: String, Codable, Sendable, Equatable, CaseIterable {
     case completing
 }
 
+/// Authoritative creator progress (WP-11): stage, backend, processed/total
+/// bytes, file counts, ETA, and cancellation state. All fields optional so
+/// consumers keep working against ops that publish less.
+public struct OperationProgressDetail: Codable, Sendable, Equatable {
+    /// Human stage ("Scanning", "Hashing", "Building Metadata", "Writing",
+    /// "Verification", "Seeding", "Completed").
+    public let stage: String?
+    /// Hashing backend ("cpu"; Metal in a future WP).
+    public let backend: String?
+    public let processedBytes: Int64?
+    public let totalBytes: Int64?
+    public let fileCount: Int?
+    public let totalFileCount: Int?
+    public let etaSeconds: Int64?
+    /// True once cancellation was requested for this operation.
+    public let isCancelled: Bool
+
+    public init(
+        stage: String? = nil,
+        backend: String? = nil,
+        processedBytes: Int64? = nil,
+        totalBytes: Int64? = nil,
+        fileCount: Int? = nil,
+        totalFileCount: Int? = nil,
+        etaSeconds: Int64? = nil,
+        isCancelled: Bool = false
+    ) {
+        self.stage = stage
+        self.backend = backend
+        self.processedBytes = processedBytes
+        self.totalBytes = totalBytes
+        self.fileCount = fileCount
+        self.totalFileCount = totalFileCount
+        self.etaSeconds = etaSeconds
+        self.isCancelled = isCancelled
+    }
+}
+
 /// Long-running operation progress (recheck, move, removal, create, …).
 public struct OperationProgressEvent: Codable, Sendable, Equatable {
     public let operationID: OperationID
     public let phase: OperationPhase
     public let fraction: Double
     public let timestamp: Date
+    public let detail: OperationProgressDetail?
 
-    public init(operationID: OperationID, phase: OperationPhase, fraction: Double, timestamp: Date) {
+    public init(operationID: OperationID, phase: OperationPhase, fraction: Double, timestamp: Date, detail: OperationProgressDetail? = nil) {
         self.operationID = operationID
         self.phase = phase
         self.fraction = fraction
         self.timestamp = timestamp
+        self.detail = detail
     }
 }
 

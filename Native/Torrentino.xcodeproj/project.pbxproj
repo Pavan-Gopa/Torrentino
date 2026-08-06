@@ -145,7 +145,6 @@
 		4A00000000000000000005FC /* TorrentinoDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000210 /* TorrentinoDomain.framework */; };
 		4A00000000000000000005FD /* TorrentinoIPC.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000211 /* TorrentinoIPC.framework */; };
 		4A0000000000000000000911 /* CreateTorrentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000901 /* CreateTorrentSheet.swift */; };
-		4A0000000000000000000912 /* TorrentFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000902 /* TorrentFormat.swift */; };
 		4A0000000000000000000913 /* SourceScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000903 /* SourceScanner.swift */; };
 		4A0000000000000000000914 /* BencodeEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000904 /* BencodeEncoder.swift */; };
 		4A0000000000000000000915 /* MetainfoBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000905 /* MetainfoBuilder.swift */; };
@@ -360,7 +359,6 @@
 		4A0000000000000000000813 /* InspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorView.swift; sourceTree = "<group>"; };
 		4A0000000000000000000215 /* TorrentinoEngineAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TorrentinoEngineAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A0000000000000000000901 /* CreateTorrentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateTorrentSheet.swift; sourceTree = "<group>"; };
-		4A0000000000000000000902 /* TorrentFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentFormat.swift; sourceTree = "<group>"; };
 		4A0000000000000000000903 /* SourceScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceScanner.swift; sourceTree = "<group>"; };
 		4A0000000000000000000905 /* MetainfoGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetainfoGenerator.swift; sourceTree = "<group>"; };
 		4A0000000000000000000904 /* BencodeEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BencodeEncoder.swift; sourceTree = "<group>"; };
@@ -666,7 +664,6 @@
 				4A00000000000000000001B1 /* BencodeParser.swift */,
 				4A00000000000000000001B2 /* MagnetParser.swift */,
 				4A00000000000000000001B3 /* Metainfo.swift */,
-				4A0000000000000000000902 /* TorrentFormat.swift */,
 				4A0000000000000000000903 /* SourceScanner.swift */,
 				4A0000000000000000000904 /* BencodeEncoder.swift */,
 				4A0000000000000000000905 /* MetainfoBuilder.swift */,
@@ -1074,7 +1071,6 @@
 				4A00000000000000000005D1 /* BencodeParser.swift in Sources */,
 				4A00000000000000000005D2 /* MagnetParser.swift in Sources */,
 				4A00000000000000000005D3 /* Metainfo.swift in Sources */,
-				4A0000000000000000000912 /* TorrentFormat.swift in Sources */,
 				4A0000000000000000000913 /* SourceScanner.swift in Sources */,
 				4A0000000000000000000914 /* BencodeEncoder.swift in Sources */,
 				4A0000000000000000000915 /* MetainfoBuilder.swift in Sources */,

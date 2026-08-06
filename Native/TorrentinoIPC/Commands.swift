@@ -301,13 +301,35 @@ public struct EditTrackersRequest: EngineCommandPayload {
     public let recordID: TorrentRecordID
     public let addedURLs: [String]
     public let removedURLs: [String]
+    /// Complete asserted topology for structured edits. When present, the
+    /// agent preserves every tier boundary, URL position, and repetition.
+    /// A missing value is retained only so older payloads can be decoded and
+    /// rejected; it is never reconstructed from the legacy delta fields.
+    public let trackerTiers: [[String]]?
 
-    public init(requestID: RequestID, idempotencyKey: IdempotencyKey, recordID: TorrentRecordID, addedURLs: [String], removedURLs: [String]) {
+    public init(
+        requestID: RequestID,
+        idempotencyKey: IdempotencyKey,
+        recordID: TorrentRecordID,
+        addedURLs: [String],
+        removedURLs: [String],
+        trackerTiers: [[String]]? = nil
+    ) {
         self.requestID = requestID
         self.idempotencyKey = idempotencyKey
         self.recordID = recordID
         self.addedURLs = addedURLs
         self.removedURLs = removedURLs
+        self.trackerTiers = trackerTiers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestID
+        case idempotencyKey
+        case recordID
+        case addedURLs
+        case removedURLs
+        case trackerTiers = "tracker-tiers"
     }
 }
 
@@ -418,11 +440,66 @@ public struct CommitCreateRequest: EngineCommandPayload {
     public let requestID: RequestID
     public let idempotencyKey: IdempotencyKey
     public let token: CreatorPlanToken
-
-    public init(requestID: RequestID, idempotencyKey: IdempotencyKey, token: CreatorPlanToken) {
+    /// The complete immutable form snapshot asserted by the caller. The agent
+    /// compares its canonical value with the snapshot bound to `token` before
+    /// it scans, hashes, writes, or admits a seed.
+    public let options: CreateOptions
+    /// A wire-visible marker retained so a former encoded shape cannot be
+    /// mistaken for an assertion. The agent rejects false before any creator
+    /// work; complete callers must use the options initializer below.
+    public let optionsWereAsserted: Bool
+    /// Compatibility initializer for the former caller-proposed operation
+    /// identity. The argument is deliberately not serialized or consulted;
+    /// the agent mints the authoritative operation at commit admission.
+    public init(
+        requestID: RequestID,
+        idempotencyKey: IdempotencyKey,
+        token: CreatorPlanToken,
+        operationID: OperationID
+    ) {
         self.requestID = requestID
         self.idempotencyKey = idempotencyKey
         self.token = token
+        self.options = CreateOptions()
+        self.optionsWereAsserted = false
+    }
+
+    /// Complete asserted snapshot. Operation identity is intentionally absent;
+    /// requestID/idempotencyKey provide correlation while the agent owns the
+    /// accepted OperationID.
+    public init(
+        requestID: RequestID,
+        idempotencyKey: IdempotencyKey,
+        token: CreatorPlanToken,
+        options: CreateOptions
+    ) {
+        self.requestID = requestID
+        self.idempotencyKey = idempotencyKey
+        self.token = token
+        self.options = options
+        self.optionsWereAsserted = true
+    }
+
+    /// Source-compatible overload for older in-process callers. The supplied
+    /// value is ignored and never crosses the agent boundary as authority.
+    public init(
+        requestID: RequestID,
+        idempotencyKey: IdempotencyKey,
+        token: CreatorPlanToken,
+        options: CreateOptions,
+        operationID: OperationID
+    ) {
+        self.init(requestID: requestID, idempotencyKey: idempotencyKey, token: token, options: options)
+    }
+}
+
+/// Accepted creator identity returned immediately after the agent registers
+/// the operation. It is the only OperationID the UI may display or cancel.
+public struct CreateOperationAccepted: Codable, Sendable, Equatable {
+    public let operationID: OperationID
+
+    public init(operationID: OperationID) {
+        self.operationID = operationID
     }
 }
 
@@ -668,7 +745,8 @@ public enum TorrentFormat: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
-/// Create flow options (v1).
+/// Create flow options (v1/v2/hybrid; WP-11). Tracker tier and URL order are
+/// significant and are deliberately retained by the canonical snapshot.
 public struct CreateOptions: Codable, Sendable, Equatable {
     public let outputPath: String?
     public let format: TorrentFormat
@@ -689,7 +767,7 @@ public struct CreateOptions: Codable, Sendable, Equatable {
         comment: String? = nil,
         source: String? = nil,
         seedWhileDownloading: Bool = true,
-        includeHiddenFiles: Bool = false
+        includeHiddenFiles: Bool = true
     ) {
         self.outputPath = outputPath
         self.format = format
@@ -714,6 +792,32 @@ public struct CreateOptions: Codable, Sendable, Equatable {
             seedWhileDownloading: seedWhileDownloading,
             includeHiddenFiles: includeHiddenFiles
         )
+    }
+
+    /// Canonical structural snapshot used by the inspect -> commit contract.
+/// Text and path presentation fields are canonicalized, while tracker URL
+/// bytes, tier order, and URL order are retained exactly after validation.
+    public var canonicalSnapshot: CreateOptions {
+        CreateOptions(
+            outputPath: outputPath.map { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            } ?? nil,
+            format: format,
+            trackers: trackers,
+            isPrivate: isPrivate,
+            pieceSizeKiB: pieceSizeKiB,
+            comment: canonicalText(comment),
+            source: canonicalText(source),
+            seedWhileDownloading: seedWhileDownloading,
+            includeHiddenFiles: includeHiddenFiles
+        )
+    }
+
+    private func canonicalText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -846,7 +950,12 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
             .fetchPendingRemovals(FetchPendingRemovalsRequest(requestID: rid)),
             .cancelOperation(CancelOperationRequest(requestID: rid, idempotencyKey: idempotency, operationID: OperationID())),
             .inspectCreateSource(InspectCreateSourceRequest(requestID: rid, sourcePath: "")),
-            .commitCreate(CommitCreateRequest(requestID: rid, idempotencyKey: idempotency, token: emptyPlan)),
+            .commitCreate(CommitCreateRequest(
+                requestID: rid,
+                idempotencyKey: idempotency,
+                token: emptyPlan,
+                options: CreateOptions()
+            )),
             .prepareForQuit(PrepareForQuitRequest(requestID: rid, reason: nil)),
             .restartEngineSafely(RestartEngineSafelyRequest(requestID: rid, idempotencyKey: idempotency)),
             .exportDiagnostics(ExportDiagnosticsRequest(requestID: rid, reason: "")),

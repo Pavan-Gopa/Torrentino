@@ -34,11 +34,25 @@ final class TorrentListViewModel: ObservableObject {
     @Published var showCreateSheet = false
     @Published private(set) var creatorProgressFraction: Double = 0.0
     @Published private(set) var creatorProgressStage: String = ""
+    @Published private(set) var creatorProgressBackend: String = ""
+    @Published private(set) var creatorProcessedBytes: Int64?
+    @Published private(set) var creatorTotalBytes: Int64?
+    @Published private(set) var creatorProcessedFiles: Int?
+    @Published private(set) var creatorTotalFiles: Int?
+    @Published private(set) var creatorETASeconds: Int64?
+    @Published private(set) var creatorCancellationRequested = false
+    @Published private(set) var creatorTerminalCancellation = false
     @Published private(set) var creatorCompletedSummary: CreateSummary?
     @Published private(set) var creatorError: String?
+    @Published private(set) var creatorOperationActive = false
+    @Published private(set) var creatorTerminalOutcome: OperationOutcome?
     @Published private(set) var activeCreatorToken: CreatorPlanToken?
-    /// Track the in-flight creation Task so cancelCreation() can cancel it.
-    private var creatorTask: Task<Void, Never>?
+    /// The accepted identity returned by the agent. It remains set through the
+    /// terminal presentation so late foreign events stay filtered out.
+    private var creatorOperationID: OperationID?
+    private var awaitingCreatorOperationID = false
+    private var creatorCancelPending = false
+    private var bufferedCreatorEvents: [OperationID: [EngineEventV1]] = [:]
     @Published var showInspector = false
     @Published var searchText = ""
     @Published var searchFocusRequest = 0
@@ -193,16 +207,56 @@ final class TorrentListViewModel: ObservableObject {
                 // pressure recovery without polling the heavy command lane.
                 systemConditions = payload.conditions
             case .operationProgress(let payload):
+                guard let creatorOperationID else {
+                    guard awaitingCreatorOperationID else { break }
+                    bufferedCreatorEvents[payload.operationID, default: []].append(event)
+                    break
+                }
+                // WP-11: only the accepted creator operation drives the sheet.
+                guard payload.operationID == creatorOperationID else { break }
+                guard creatorTerminalOutcome == nil else { break }
+                creatorOperationActive = true
                 creatorProgressFraction = payload.fraction
+                let detail = payload.detail
+                creatorProgressStage = detail?.stage ?? ""
+                creatorProgressBackend = detail?.backend ?? ""
+                creatorProcessedBytes = detail?.processedBytes
+                creatorTotalBytes = detail?.totalBytes
+                creatorProcessedFiles = detail?.fileCount
+                creatorTotalFiles = detail?.totalFileCount
+                creatorETASeconds = detail?.etaSeconds
+                if detail?.isCancelled == true {
+                    // Cancellation is monotonic until the matching terminal
+                    // event; a late ordinary progress update cannot hide it.
+                    creatorCancellationRequested = true
+                }
+                if creatorCancellationRequested {
+                    creatorProgressStage = "Cancelling"
+                }
             case .operationCompleted(let payload):
+                guard let creatorOperationID else {
+                    guard awaitingCreatorOperationID else { break }
+                    bufferedCreatorEvents[payload.operationID, default: []].append(event)
+                    break
+                }
+                guard payload.operationID == creatorOperationID else { break }
+                creatorOperationActive = false
+                creatorTerminalOutcome = payload.outcome
                 switch payload.outcome {
                 case .succeeded:
                     creatorProgressFraction = 1.0
                     creatorProgressStage = "Completed"
+                    creatorCancellationRequested = false
+                    creatorTerminalCancellation = false
                 case .cancelled:
-                    creatorError = "Operation cancelled"
+                    creatorProgressStage = "Cancelled"
+                    creatorCancellationRequested = true
+                    creatorTerminalCancellation = true
+                    creatorError = String(localized: "creator.fault.cancelled")
                 case .failed(let fault):
-                    creatorError = fault.redactedContext ?? fault.localizationKey
+                    creatorProgressStage = "Failed"
+                    creatorError = creatorUserMessage(for: fault)
+                    creatorTerminalCancellation = false
                 }
             case .engineHealthChanged, .engineLifecycleChanged, .recoverableIssue, .settingsChanged:
                 break
@@ -455,13 +509,14 @@ final class TorrentListViewModel: ObservableObject {
         }
     }
 
-    func editTrackers(_ recordID: TorrentRecordID, addedURLs: [String], removedURLs: [String]) async {
+    func editTrackers(_ recordID: TorrentRecordID, trackerTiers: [[String]]) async {
         let command = EngineCommandV1.editTrackers(EditTrackersRequest(
             requestID: RequestID(),
             idempotencyKey: IdempotencyKey(),
             recordID: recordID,
-            addedURLs: addedURLs,
-            removedURLs: removedURLs
+            addedURLs: [],
+            removedURLs: [],
+            trackerTiers: trackerTiers
         ))
         do {
             _ = try await client.sendCommand(command)
@@ -572,12 +627,92 @@ final class TorrentListViewModel: ObservableObject {
         return String(localized: String.LocalizationValue(fallback))
     }
 
+    /// Creator presentation is a closed catalog mapping. `redactedContext` is
+    /// intentionally absent here because it is diagnostics-only, even when a
+    /// fault happens to carry a stable localization key.
+    func creatorUserMessage(for error: Error, fallback: String = "creator.fault.storage") -> String {
+        if let clientError = error as? EngineClientError,
+           case .fault(let fault) = clientError {
+            return creatorUserMessage(for: fault, fallback: fallback)
+        }
+        if let fault = error as? EngineFault {
+            return creatorUserMessage(for: fault, fallback: fallback)
+        }
+        return String(localized: String.LocalizationValue(fallback))
+    }
+
+    private func creatorUserMessage(for fault: EngineFault, fallback: String = "creator.fault.storage") -> String {
+        let key: String
+        switch fault.localizationKey {
+        case "creator.fault.private_tracker_missing":
+            key = fault.localizationKey
+        case "creator.fault.stale_plan":
+            key = fault.localizationKey
+        case "creator.fault.assertion_mismatch":
+            key = fault.localizationKey
+        case "creator.fault.storage":
+            key = fault.localizationKey
+        case "creator.fault.cancelled":
+            key = fault.localizationKey
+        case "creator.fault.operation_conflict":
+            key = fault.localizationKey
+        case "creator.fault.unavailable":
+            key = fault.localizationKey
+        case "creator.fault.invalid_options":
+            key = fault.localizationKey
+        default:
+            switch fault.code {
+            case .operationCancelled:
+                key = "creator.fault.cancelled"
+            case .operationNotFound, .idempotencyConflict:
+                key = "creator.fault.operation_conflict"
+            case .invalidPayload, .invalidArgument:
+                key = "creator.fault.invalid_options"
+            case .permissionDenied, .insufficientSpace, .volumeUnavailable, .storeError:
+                key = "creator.fault.storage"
+            default:
+                key = fallback
+            }
+        }
+        return String(localized: String.LocalizationValue(key))
+    }
+
     // MARK: - Torrent Creator
+
+    /// Invalidates the UI's local token before any form reinspection starts.
+    /// The agent remains the source of truth; this only prevents a stale local
+    /// token from being selected by the commit button.
+    func invalidateCreatorInspection() {
+        activeCreatorToken = nil
+        creatorOperationID = nil
+        awaitingCreatorOperationID = false
+        creatorOperationActive = false
+        creatorCancelPending = false
+        bufferedCreatorEvents.removeAll()
+        creatorTerminalOutcome = nil
+        creatorTerminalCancellation = false
+        creatorError = nil
+    }
 
     func inspectCreateSource(sourcePath: String, options: CreateOptions? = nil) async throws -> CreateSourceInspection {
         creatorError = nil
         creatorProgressFraction = 0.0
         creatorProgressStage = "Scanning"
+        creatorProgressBackend = "cpu"
+        creatorProcessedBytes = nil
+        creatorTotalBytes = nil
+        creatorProcessedFiles = nil
+        creatorTotalFiles = nil
+        creatorETASeconds = nil
+        creatorCancellationRequested = false
+        creatorTerminalCancellation = false
+        creatorOperationID = nil
+        awaitingCreatorOperationID = false
+        creatorOperationActive = false
+        creatorCancelPending = false
+        bufferedCreatorEvents.removeAll()
+        creatorTerminalOutcome = nil
+        creatorCompletedSummary = nil
         let inspection = try await client.inspectCreateSource(sourcePath: sourcePath, options: options)
         activeCreatorToken = inspection.token
         return inspection
@@ -587,21 +722,84 @@ final class TorrentListViewModel: ObservableObject {
         try await client.fetchCreatorManifestPage(token: token, cursor: cursor, pageSize: pageSize)
     }
 
-    func commitCreate(token: CreatorPlanToken, idempotencyKey: IdempotencyKey = IdempotencyKey()) async throws {
+    func commitCreate(
+        token: CreatorPlanToken,
+        options: CreateOptions,
+        idempotencyKey: IdempotencyKey = IdempotencyKey()
+    ) async throws {
         creatorError = nil
         creatorProgressFraction = 0.0
         creatorProgressStage = "Creating..."
-        try await client.commitCreate(token: token, idempotencyKey: idempotencyKey)
-        try? await fetchFullSnapshot()
+        creatorProgressBackend = "cpu"
+        creatorProcessedBytes = nil
+        creatorTotalBytes = nil
+        creatorProcessedFiles = nil
+        creatorTotalFiles = nil
+        creatorETASeconds = nil
+        creatorCancellationRequested = false
+        creatorTerminalCancellation = false
+        creatorOperationID = nil
+        awaitingCreatorOperationID = true
+        creatorOperationActive = false
+        creatorCancelPending = false
+        bufferedCreatorEvents.removeAll()
+        creatorTerminalOutcome = nil
+        do {
+            let acceptedOperationID = try await client.commitCreate(
+                token: token,
+                options: options,
+                idempotencyKey: idempotencyKey
+            )
+            creatorOperationID = acceptedOperationID
+            awaitingCreatorOperationID = false
+            creatorOperationActive = true
+            let acceptedEvents = bufferedCreatorEvents.removeValue(forKey: acceptedOperationID) ?? []
+            bufferedCreatorEvents.removeAll()
+            if !acceptedEvents.isEmpty {
+                apply(acceptedEvents)
+            }
+            if creatorCancelPending, creatorOperationActive {
+                creatorCancelPending = false
+                sendCreatorCancellation(acceptedOperationID)
+            } else if !creatorOperationActive {
+                creatorCancelPending = false
+            }
+        } catch {
+            awaitingCreatorOperationID = false
+            creatorCancelPending = false
+            bufferedCreatorEvents.removeAll()
+            throw error
+        }
     }
 
-    /// Cancels an in-flight creation operation by cancelling the tracking
-    /// task. The agent-side CreatorPlanStore checks cancelCheck between stages
-    /// and cleans up the temp file via the defer block.
+    /// Requests cancellation only after an accepted agent operation exists. If
+    /// the acceptance reply is still in flight, the request is held locally
+    /// and sent once that authoritative ID arrives; the agent rejects an
+    /// unknown ID instead of retaining a pre-cancel signal.
     func cancelCreation() {
-        creatorTask?.cancel()
-        creatorTask = nil
-        creatorError = nil
+        guard creatorOperationActive || awaitingCreatorOperationID else { return }
+        creatorCancellationRequested = true
+        creatorProgressStage = "Cancelling"
+        creatorCancelPending = true
+        if let operationID = creatorOperationID, creatorOperationActive {
+            creatorCancelPending = false
+            sendCreatorCancellation(operationID)
+        }
+    }
+
+    private func sendCreatorCancellation(_ operationID: OperationID) {
+        let client = self.client
+        Task { @MainActor [weak self] in
+            do {
+                try await client.cancelOperation(operationID: operationID)
+            } catch {
+                guard let self, self.creatorTerminalOutcome == nil else { return }
+                self.creatorError = self.creatorUserMessage(
+                    for: error,
+                    fallback: "creator.fault.operation_conflict"
+                )
+            }
+        }
     }
 }
 // FixtureLibrary is kept in its dependency-free source file so the app tests

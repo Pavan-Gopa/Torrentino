@@ -10,10 +10,17 @@ public enum BencodeEncoder {
         case integer(Int64)
         case bytes(Data)
         case list([Value])
-        case dictionary([String: Value])
+        /// Keys are raw bytes (BEP-52 file-tree path elements must survive
+        /// byte-for-byte); sort order is lexicographical over those bytes.
+        case dictionary([Data: Value])
 
         public static func string(_ str: String) -> Value {
             .bytes(Data(str.utf8))
+        }
+
+        /// Convenience for ASCII-keyed dictionaries (metainfo field names).
+        public static func dictionary(_ pairs: [(String, Value)]) -> Value {
+            .dictionary(Dictionary(uniqueKeysWithValues: pairs.map { (Data($0.0.utf8), $0.1) }))
         }
     }
 
@@ -47,12 +54,10 @@ public enum BencodeEncoder {
             // BEP-3 requirement: dictionary keys MUST be sorted lexicographically
             // by raw byte string ordering.
             let sortedKeys = dict.keys.sorted { k1, k2 in
-                let d1 = Data(k1.utf8)
-                let d2 = Data(k2.utf8)
-                return d1.lexicographicallyPrecedes(d2)
+                k1.lexicographicallyPrecedes(k2)
             }
             for key in sortedKeys {
-                encode(.string(key), into: &data)
+                encode(.bytes(key), into: &data)
                 if let val = dict[key] {
                     encode(val, into: &data)
                 }

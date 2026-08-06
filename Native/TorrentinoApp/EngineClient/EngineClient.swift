@@ -174,11 +174,35 @@ actor EngineClient {
         return page
     }
 
-    func commitCreate(token: CreatorPlanToken, idempotencyKey: IdempotencyKey = IdempotencyKey()) async throws {
+    func commitCreate(
+        token: CreatorPlanToken,
+        options: CreateOptions = CreateOptions(),
+        idempotencyKey: IdempotencyKey = IdempotencyKey()
+    ) async throws -> OperationID {
         let command = EngineCommandV1.commitCreate(
-            CommitCreateRequest(requestID: RequestID(), idempotencyKey: idempotencyKey, token: token)
+            CommitCreateRequest(
+                requestID: RequestID(),
+                idempotencyKey: idempotencyKey,
+                token: token,
+                options: options
+            )
         )
-        _ = try await sendCommand(command)
+        let payload = try await sendCommand(command)
+        guard case .creatorOperationAccepted(let accepted) = payload else {
+            throw EngineClientError.protocolMismatch(details: "expected creator operation acceptance")
+        }
+        return accepted.operationID
+    }
+
+    /// Requests agent-side cancellation of the accepted creator operation. The
+    /// client never cancels a local task or invents an operation identity.
+    func cancelOperation(operationID: OperationID, idempotencyKey: IdempotencyKey = IdempotencyKey()) async throws {
+        let command = EngineCommandV1.cancelOperation(
+            CancelOperationRequest(requestID: RequestID(), idempotencyKey: idempotencyKey, operationID: operationID)
+        )
+        guard case .ack = try await sendCommand(command) else {
+            throw EngineClientError.protocolMismatch(details: "cancelOperation returned an unexpected payload")
+        }
     }
 
     /// Low-level variant returning the raw result envelope (tests, diagnostics).

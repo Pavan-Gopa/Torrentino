@@ -177,11 +177,15 @@ public enum MetainfoBuilder {
     }
 
     public static func singleFile(name: String = "fixture.bin", size: Int64 = 1024, pieceLength: Int64 = 256, piecesCount: Int = 1, trackers: [String] = ["udp://tracker.example:80/announce"]) -> Data {
+        let requiredPieces = size > 0 && pieceLength > 0
+            ? Int((size + pieceLength - 1) / pieceLength)
+            : 0
+        let effectivePieces = piecesCount == 0 ? 0 : max(piecesCount, requiredPieces)
         let info: [String: Data] = [
             "name": BencodeBuilder.encode(string: name),
             "length": BencodeBuilder.encode(integer: size),
             "piece length": BencodeBuilder.encode(integer: pieceLength),
-            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: piecesCount * 20)),
+            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: effectivePieces * 20)),
         ]
         var top: [String: Data] = [
             "info": BencodeBuilder.encode(dictionary: info),
@@ -204,6 +208,11 @@ public enum MetainfoBuilder {
     }
 
     public static func multiFile(files: [(String, Int64)], pieceLength: Int64 = 256, piecesCount: Int = 1, name: String = "fixture-dir", trackers: [String] = ["udp://tracker.example:80/announce"]) -> Data {
+        let totalSize = files.reduce(Int64(0)) { $0 + $1.1 }
+        let requiredPieces = totalSize > 0 && pieceLength > 0
+            ? Int((totalSize + pieceLength - 1) / pieceLength)
+            : 0
+        let effectivePieces = piecesCount == 0 ? 0 : max(piecesCount, requiredPieces)
         var entries: [Data] = []
         for (path, size) in files {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
@@ -217,7 +226,7 @@ public enum MetainfoBuilder {
             "name": BencodeBuilder.encode(string: name),
             "files": BencodeBuilder.encode(list: entries),
             "piece length": BencodeBuilder.encode(integer: pieceLength),
-            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: piecesCount * 20)),
+            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: effectivePieces * 20)),
         ]
         var top: [String: Data] = ["info": BencodeBuilder.encode(dictionary: info)]
         if let announce = trackers.first {

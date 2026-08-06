@@ -39,6 +39,9 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
     public let engineID: String?
     public let metainfoData: Data?
     public let trackers: [String]
+    /// The durable metainfo/topology projection used for fetch and edit. The
+    /// flat `trackers` field remains an engine compatibility projection only.
+    public let trackerTiers: [[String]]
     public let limits: TorrentinoIPC.TransferLimits
     public let fileSelection: [RecordFileSelection]
     public let saveLocation: PersistedLocation
@@ -61,7 +64,7 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
         seedsTotal: Int,
         engineID: String?,
         metainfoData: Data?,
-        trackers: [String],
+        trackerTiers: [[String]],
         fileSelection: [RecordFileSelection],
         saveLocation: PersistedLocation,
         addedAt: Int64,
@@ -83,7 +86,8 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
         self.seedsTotal = seedsTotal
         self.engineID = engineID
         self.metainfoData = metainfoData
-        self.trackers = trackers
+        self.trackerTiers = trackerTiers
+        self.trackers = trackerTiers.flatMap { $0 }
         self.limits = limits
         self.fileSelection = fileSelection
         self.saveLocation = saveLocation
@@ -208,6 +212,9 @@ public protocol TransferEngine: Sendable {
     /// `destinationPath` (destination files are adopted, never overwritten).
     func moveStorage(torrentID: String, destinationPath: String) async throws
     func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws
+    /// Accepted live edits are complete nested replacements. The scalar
+    /// overload below remains only as a reject-only compatibility surface.
+    func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws
     func editTrackers(torrentID: String, trackers: [String]) async throws
     func reannounce(torrentID: String) async throws
     /// Live per-torrent status (progress/rates/peers). Called by the pump.
@@ -233,6 +240,14 @@ public extension TransferEngine {
 
     func moveStorage(torrentID: String, destinationPath: String) async throws {
         throw EngineCoordinatorError.unsupportedOperation("storage move")
+    }
+
+    func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("structured tracker edit")
+    }
+
+    func editTrackers(torrentID: String, trackers: [String]) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("scalar tracker edit")
     }
 }
 

@@ -85,6 +85,12 @@ public enum MagnetParser {
                 displayName = val
             case "tr":
                 guard !val.isEmpty, val.count <= 2048 else { throw MagnetError.invalidTrackerURL(val) }
+                // Trackers the engine can actually talk to: http(s)/udp only.
+                // Anything else (ftp, ws, …) is rejected, not silently kept.
+                guard let scheme = URL(string: val)?.scheme?.lowercased(),
+                      ["http", "https", "udp"].contains(scheme) else {
+                    throw MagnetError.invalidTrackerURL(val)
+                }
                 if !trackers.contains(val) { trackers.append(val) }
             case "ws", "as":
                 guard !val.isEmpty else { continue }

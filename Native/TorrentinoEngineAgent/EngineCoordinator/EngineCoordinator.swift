@@ -11,6 +11,7 @@
 
 import Foundation
 import TorrentinoIPC
+import TorrentinoDomain
 
 /// Swift actor owning the native engine through the ObjC++ bridge adapter.
 /// All calls are serialized; each returns Sendable, immutable DTOs.
@@ -82,9 +83,19 @@ public actor EngineCoordinator {
         return try decode(AppliedTorrentLimitsDTO.self, from: response)
     }
 
-    public func editTrackers(torrentID: String, trackers: [String]) throws {
-        let payload = try encode(TrackersPayload(torrentID: torrentID, trackers: trackers))
+    public func editTrackers(torrentID: String, trackerTiers: [[String]]) throws {
+        do {
+            try MetainfoParser.validateTrackerTiers(trackerTiers)
+        } catch {
+            throw EngineCoordinatorError.malformedPayload("invalid tracker topology: \(error)")
+        }
+        let payload = try encode(EditTrackersDTO(torrentID: torrentID, trackerTiers: trackerTiers))
         try voidCall(payload) { try adapter.editTrackers(withPayloadData: $0) }
+    }
+
+    /// Reject-only compatibility surface. No scalar value reaches ObjC++.
+    public func editTrackers(torrentID: String, trackers: [String]) throws {
+        throw EngineCoordinatorError.malformedPayload("scalar tracker edit is unsupported")
     }
 
     public func reannounce(torrentID: String) throws {
@@ -98,6 +109,17 @@ public actor EngineCoordinator {
         let data = try encode(specification)
         let response = try envelope { try adapter.addTorrent(withSpecificationData: data) }
         return try decode(AddResultDTO.self, from: response)
+    }
+
+    /// Independently parses final creator bytes through the pinned libtorrent
+    /// bridge. Unlike engine mutations this read-only verification does not
+    /// require a running session and returns only immutable Swift DTO data.
+    public func verifyTorrent(data torrentData: Data) throws -> IndependentTorrentIdentityDTO {
+        guard !torrentData.isEmpty else {
+            throw EngineCoordinatorError.invalidArgument
+        }
+        let response = try envelope { try adapter.verifyTorrent(with: torrentData) }
+        return try decode(IndependentTorrentIdentityDTO.self, from: response)
     }
 
     public func pause(torrentID: String) throws {
@@ -229,16 +251,6 @@ public actor EngineCoordinator {
         }
     }
 
-    private struct TrackersPayload: Codable {
-        let torrentID: String
-        let trackers: [String]
-
-        enum CodingKeys: String, CodingKey {
-            case torrentID = "torrent-id"
-            case trackers
-        }
-    }
-
     private struct AlertDrainPayload: Codable {
         let maxCount: Int
         enum CodingKeys: String, CodingKey { case maxCount = "max-count" }
@@ -310,5 +322,35 @@ public actor EngineCoordinator {
         default:
             return base
         }
+    }
+}
+
+/// Keeps the independent creator verifier on the production bridge side while
+/// TransferCoordinator depends only on a value/async protocol. No C++ object
+/// crosses this extension's boundary.
+extension BridgeTransferEngine: CreatorIndependentVerifier {
+    func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity {
+        let dto = try await EngineCoordinator().verifyTorrent(data: data)
+        let v1 = dto.hasV1 ? Self.creatorDataFromHex(dto.v1Hash) : nil
+        let v2 = dto.hasV2 ? Self.creatorDataFromHex(dto.v2Hash) : nil
+        guard (!dto.hasV1 || v1?.count == 20), (!dto.hasV2 || v2?.count == 32) else {
+            throw EngineFault.corruptData(details: "pinned libtorrent returned malformed info identity")
+        }
+        return IndependentMetainfoIdentity(v1: v1, v2: v2)
+    }
+
+    private static func creatorDataFromHex(_ value: String) -> Data? {
+        let normalized = value.lowercased()
+        guard normalized.count % 2 == 0, normalized.allSatisfy({ $0.isHexDigit }) else { return nil }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(normalized.count / 2)
+        var index = normalized.startIndex
+        while index < normalized.endIndex {
+            let next = normalized.index(index, offsetBy: 2)
+            guard let byte = UInt8(normalized[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        return Data(bytes)
     }
 }

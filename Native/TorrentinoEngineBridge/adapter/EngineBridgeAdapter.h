@@ -62,7 +62,13 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 /// Adds a torrent from a JSON AddSpecification (exactly one of torrent-file
 /// base64 or magnet-uri). Returns a JSON AddResult on success.
 - (nullable NSData *)addTorrentWithSpecificationData:(NSData *)specificationData
-											   error:(NSError *_Nullable *_Nullable)error;
+															   error:(NSError *_Nullable *_Nullable)error;
+
+/// Parses a complete .torrent byte payload through the pinned libtorrent
+/// loader and returns {has-v1, has-v2, v1-hash, v2-hash}. This read-only call
+/// does not require the engine session to be started.
+- (nullable NSData *)verifyTorrentWithData:(NSData *)torrentData
+															 error:(NSError *_Nullable *_Nullable)error;
 
 /// Pauses, resumes, or rechecks the torrent identified by the JSON payload
 /// {"torrent-id": "..."}. Void results return `{}`.
@@ -84,7 +90,8 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 - (nullable NSData *)currentLimitsWithPayloadData:(NSData *)payloadData
 																 error:(NSError *_Nullable *_Nullable)error;
 
-/// Replaces the complete tracker URL list for {"torrent-id", "trackers"}.
+/// Replaces the complete structured tracker topology for
+/// {"torrent-id", "tracker-tiers"}. Scalar payloads are rejected.
 - (nullable NSData *)editTrackersWithPayloadData:(NSData *)payloadData
 															 error:(NSError *_Nullable *_Nullable)error;
 

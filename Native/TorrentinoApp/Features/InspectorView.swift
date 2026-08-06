@@ -180,7 +180,7 @@ struct InspectorView: View {
                 }
 
                 List {
-                    ForEach(trackers, id: \.url) { tracker in
+                    ForEach(Array(trackers.enumerated()), id: \.offset) { _, tracker in
                         HStack {
                             Image(systemName: "network")
                                 .foregroundStyle(.secondary)
@@ -191,7 +191,7 @@ struct InspectorView: View {
                                 .font(.caption)
                                 .foregroundStyle(.green)
                             Button {
-                                removeTracker(tracker.url)
+                                removeTracker(tierIndex: tracker.tierIndex, urlIndex: tracker.urlIndex)
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
@@ -360,18 +360,25 @@ struct InspectorView: View {
 
     private func loadTrackers() async {
         guard let torrent else { return }
-        let command = EngineCommandV1.fetchTrackers(FetchTrackersRequest(
-            requestID: RequestID(),
-            recordID: torrent.id,
-            cursor: nil,
-            pageSize: 50,
-            expectedRevision: torrent.revision
-        ))
         do {
-            guard case .trackers(let page) = try await viewModel.client.sendCommand(command) else {
-                throw EngineClientError.protocolMismatch(details: "unexpected fetchTrackers reply")
+            var cursor: PageCursor?
+            var loaded: [TrackerEntry] = []
+            while true {
+                let command = EngineCommandV1.fetchTrackers(FetchTrackersRequest(
+                    requestID: RequestID(),
+                    recordID: torrent.id,
+                    cursor: cursor,
+                    pageSize: 100,
+                    expectedRevision: torrent.revision
+                ))
+                guard case .trackers(let page) = try await viewModel.client.sendCommand(command) else {
+                    throw EngineClientError.protocolMismatch(details: "unexpected fetchTrackers reply")
+                }
+                loaded.append(contentsOf: page.items)
+                guard let nextCursor = page.nextCursor else { break }
+                cursor = nextCursor
             }
-            trackers = page.items
+            trackers = loaded
         } catch {
             viewModel.surfaceCommandError(error, fallback: "trackers.failed")
         }
@@ -383,17 +390,46 @@ struct InspectorView: View {
         guard !value.isEmpty else { return }
         newTrackerURL = ""
         Task {
-            await viewModel.editTrackers(torrent.id, addedURLs: [value], removedURLs: [])
+            var tiers = trackerTiersFromRows()
+            if tiers.isEmpty {
+                tiers = [[value]]
+            } else {
+                tiers[tiers.index(before: tiers.endIndex)].append(value)
+            }
+            await viewModel.editTrackers(torrent.id, trackerTiers: tiers)
             await loadTrackers()
         }
     }
 
-    private func removeTracker(_ url: String) {
+    private func removeTracker(tierIndex: Int, urlIndex: Int) {
         guard let torrent else { return }
         Task {
-            await viewModel.editTrackers(torrent.id, addedURLs: [], removedURLs: [url])
+            var tiers = trackerTiersFromRows()
+            guard tiers.indices.contains(tierIndex), tiers[tierIndex].indices.contains(urlIndex) else { return }
+            tiers[tierIndex].remove(at: urlIndex)
+            if tiers[tierIndex].isEmpty {
+                tiers.remove(at: tierIndex)
+            }
+            await viewModel.editTrackers(torrent.id, trackerTiers: tiers)
             await loadTrackers()
         }
+    }
+
+    /// Rebuilds a complete replacement from explicit row positions. URL text
+    /// is never used as identity, so repeated URLs remain separate entries.
+    private func trackerTiersFromRows() -> [[String]] {
+        guard let maxTier = trackers.map(\TrackerEntry.tierIndex).max() else { return [] }
+        var positioned = Array(repeating: [String?](), count: maxTier + 1)
+        for tracker in trackers where tracker.tierIndex >= 0 {
+            guard tracker.tierIndex < positioned.count else { continue }
+            guard tracker.urlIndex >= 0 else { continue }
+            while positioned[tracker.tierIndex].count <= tracker.urlIndex {
+                positioned[tracker.tierIndex].append(nil)
+            }
+            positioned[tracker.tierIndex][tracker.urlIndex] = tracker.url
+        }
+        guard positioned.allSatisfy({ !$0.contains(where: { $0 == nil }) }) else { return [] }
+        return positioned.map { $0.compactMap { $0 } }
     }
 
     private func byteCount(_ bytes: Int64) -> String {

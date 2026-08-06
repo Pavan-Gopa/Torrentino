@@ -13,6 +13,7 @@
 
 import Foundation
 import OSLog
+import TorrentinoDomain
 import TorrentinoIPC
 
 // MARK: - Value types (all Sendable)
@@ -107,7 +108,7 @@ actor PersistenceStore {
 
     /// Current schema version. The migration runner applies every migration
     /// above the stored version; a stored version ABOVE this blocks the open.
-    static let schemaVersion: Int = 2
+    static let schemaVersion: Int = 3
 
     /// Session keys. clean_shutdown is the last durable write of a clean stop.
     static let cleanShutdownKey = "clean_shutdown"
@@ -376,10 +377,13 @@ actor PersistenceStore {
         guard let row = try latestGenerationRow(kind: .metainfo, owner: torrentID) else { return nil }
         let digest = AtomicGeneration.sha256(row.data)
         guard digest == row.checksum else {
-            try quarantineCorruptRecord(kind: .metainfo, torrentID: torrentID,
-                                        generation: row.generation,
-                                        reason: "checksum mismatch on read (stored=\(row.checksum) computed=\(digest))")
-            return nil
+            // Keep the durable bytes available for diagnostics and fail closed;
+            // restore must not publish a record after a metainfo checksum fault.
+            throw PersistenceError.checksumMismatch(
+                kind: GenerationKind.metainfo.rawValue,
+                torrentID: torrentID,
+                generation: row.generation
+            )
         }
         return StoredPayload(generation: row.generation, data: row.data)
     }
@@ -430,16 +434,155 @@ actor PersistenceStore {
         return try JSONDecoder().decode(TorrentinoIPC.TransferLimits.self, from: payload.data)
     }
 
-    func setTorrentTrackers(torrentID: String, trackers: [String]) throws {
-        try requireOpen()
-        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
-        let data = try JSONEncoder().encode(trackers)
-        try setSessionValue(key: Self.torrentTrackersKey(torrentID), data: data)
+    // MARK: - Structured tracker topology (schema v3)
+
+    private struct TrackerTopologyEnvelope: Codable {
+        let version: Int
+        let tiers: [[String]]
     }
 
-    func torrentTrackers(torrentID: String) throws -> [String]? {
-        guard let payload = try sessionValue(key: Self.torrentTrackersKey(torrentID)) else { return nil }
-        return try JSONDecoder().decode([String].self, from: payload.data)
+    private struct TrackerTopologyRow {
+        let data: Data
+        let checksum: String
+        let generation: UInt64
+    }
+
+    private static let trackerTopologyVersion = 1
+    private static let trackerTopologyDiagnosticPrefix = "torrent_tracker_topology."
+
+    /// Persists the only lifecycle representation of tracker topology. The
+    /// versioned JSON bytes, not a decoded set or flat projection, are covered
+    /// by the checksum and generation discipline.
+    func setTorrentTrackerTiers(
+        torrentID: String,
+        tiers: [[String]],
+        isPrivate: Bool
+    ) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        do {
+            try MetainfoParser.validateTrackerTiers(tiers, isPrivate: isPrivate)
+        } catch {
+            throw PersistenceError.sqlite("invalid tracker topology: \(error)")
+        }
+        let envelope = TrackerTopologyEnvelope(version: Self.trackerTopologyVersion, tiers: tiers)
+        let data: Data
+        do {
+            // Declaration order intentionally produces the stable UTF-8
+            // envelope: {"version":1,"tiers":[...]}.
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            throw PersistenceError.sqlite("tracker topology encoding failed: \(error)")
+        }
+        let generation = try nextGeneration(.session)
+        try withTransaction {
+            try upsertTrackerTopologyRow(
+                torrentID: torrentID,
+                data: data,
+                checksum: AtomicGeneration.sha256(data),
+                generation: generation
+            )
+            try persistGenerationCounter(.session, generation)
+        }
+    }
+
+    /// Reads and validates the structured row only. Legacy flat state is not
+    /// consulted here; migration has its own explicitly named path below.
+    func torrentTrackerTiers(torrentID: String) throws -> [[String]]? {
+        try requireOpen()
+        guard let row = try trackerTopologyRow(torrentID: torrentID) else { return nil }
+        return try decodeTrackerTopology(row, torrentID: torrentID, isPrivate: false)
+    }
+
+    /// Captures the verified bytes for an edit rollback. This is intentionally
+    /// separate from the public structured projection so rollback can restore
+    /// the exact prior JSON payload, not merely an equivalent Swift value.
+    func torrentTrackerTopologyJSON(torrentID: String) throws -> Data? {
+        try requireOpen()
+        guard let row = try trackerTopologyRow(torrentID: torrentID) else { return nil }
+        _ = try decodeTrackerTopology(row, torrentID: torrentID, isPrivate: false)
+        return row.data
+    }
+
+    /// Restores a previously verified JSON payload during edit rollback while
+    /// advancing the same generation/checksum discipline as a normal write.
+    func restoreTorrentTrackerTopologyJSON(
+        torrentID: String,
+        data: Data,
+        isPrivate: Bool
+    ) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let checksum = AtomicGeneration.sha256(data)
+        _ = try decodeTrackerTopology(
+            TrackerTopologyRow(data: data, checksum: checksum, generation: 0),
+            torrentID: torrentID,
+            isPrivate: isPrivate
+        )
+        let generation = try nextGeneration(.session)
+        try withTransaction {
+            try upsertTrackerTopologyRow(
+                torrentID: torrentID,
+                data: data,
+                checksum: checksum,
+                generation: generation
+            )
+            try persistGenerationCounter(.session, generation)
+        }
+    }
+
+    /// Reconciles durable structured topology with authoritative metainfo.
+    /// A missing v3 row may be backfilled only from valid metainfo; a legacy
+    /// flat row is classified and preserved, never mapped to singleton tiers.
+    func restoreTorrentTrackerTiers(
+        torrentID: String,
+        metainfoTiers: [[String]]?,
+        isPrivate: Bool
+    ) throws -> [[String]] {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+
+        if let row = try trackerTopologyRow(torrentID: torrentID) {
+            let stored = try decodeTrackerTopology(row, torrentID: torrentID, isPrivate: isPrivate)
+            if let metainfoTiers {
+                do {
+                    try MetainfoParser.validateTrackerTiers(metainfoTiers, isPrivate: isPrivate)
+                } catch {
+                    throw PersistenceError.corruptDatabase(
+                        reason: "authoritative metainfo tracker topology is invalid: \(error)"
+                    )
+                }
+                guard stored == metainfoTiers else {
+                    throw PersistenceError.corruptDatabase(
+                        reason: "structured tracker topology does not match durable metainfo"
+                    )
+                }
+            }
+            return stored
+        }
+
+        if let metainfoTiers {
+            do {
+                try MetainfoParser.validateTrackerTiers(metainfoTiers, isPrivate: isPrivate)
+            } catch {
+                throw PersistenceError.corruptDatabase(
+                    reason: "metainfo topology backfill is invalid: \(error)"
+                )
+            }
+            try setTorrentTrackerTiers(torrentID: torrentID, tiers: metainfoTiers, isPrivate: isPrivate)
+            return metainfoTiers
+        }
+
+        // This is the sole legacy-read path. It only distinguishes an
+        // unsupported flat record for diagnostics; it never reconstructs it.
+        if try legacyFlatTrackerRowExists(torrentID: torrentID) {
+            throw PersistenceError.corruptDatabase(
+                reason: "legacy flat tracker representation cannot recover tier boundaries"
+            )
+        }
+        throw PersistenceError.corruptDatabase(
+            reason: "structured tracker topology is missing without authoritative metainfo"
+        )
     }
 
     /// Stores the canonical destination and optional volume identity in the
@@ -596,8 +739,25 @@ actor PersistenceStore {
     func quarantineCorruptRecord(kind: GenerationKind, torrentID: String?,
                                  generation: UInt64, reason: String) throws {
         try requireOpen()
+        let topologyDiagnosticKey = torrentID.flatMap { value in
+            value.hasPrefix(Self.trackerTopologyDiagnosticPrefix) ? value : nil
+        }
         let payload: Data? = try {
-            guard let owner = torrentID, kind != .session else { return nil }
+            guard let owner = torrentID else { return nil }
+            if let topologyDiagnosticKey {
+                let statement = try prepare("""
+                    SELECT topology_json FROM torrent_tracker_topology
+                    WHERE torrent_id = ? AND generation = ?
+                    """)
+                try statement.bindText(
+                    String(topologyDiagnosticKey.dropFirst(Self.trackerTopologyDiagnosticPrefix.count)),
+                    index: 1
+                )
+                try statement.bindInt64(Int64(generation), index: 2)
+                guard try statement.step() == .row else { return nil }
+                return statement.columnData(0)
+            }
+            guard kind != .session else { return nil }
             let statement = try prepare("SELECT data FROM \(tableName(kind)) WHERE torrent_id = ? AND generation = ?")
             try statement.bindText(owner, index: 1)
             try statement.bindInt64(Int64(generation), index: 2)
@@ -610,14 +770,18 @@ actor PersistenceStore {
                 VALUES (?, ?, ?, ?, ?, ?)
                 """)
             try insert.bindInt64(Int64(Date().timeIntervalSince1970 * 1000), index: 1)
-            try insert.bindText(kind.rawValue, index: 2)
-            try insert.bindText(torrentID, index: 3)
+            try insert.bindText(topologyDiagnosticKey == nil ? kind.rawValue : "tracker_topology", index: 2)
+            try insert.bindText(topologyDiagnosticKey == nil ? torrentID : String(topologyDiagnosticKey!), index: 3)
             try insert.bindInt64(Int64(generation), index: 4)
             try insert.bindText(reason, index: 5)
             try insert.bindBlob(payload, index: 6)
             _ = try insert.step()
         }
-        if let torrentID, kind != .session {
+        if topologyDiagnosticKey != nil {
+            // Leave the structured row in place for diagnostics. Restore will
+            // still fail closed on its checksum, so this cannot publish health.
+            return
+        } else if let torrentID, kind != .session {
             let delete = try prepare("DELETE FROM \(tableName(kind)) WHERE torrent_id = ? AND generation = ?")
             try delete.bindText(torrentID, index: 1)
             try delete.bindInt64(Int64(generation), index: 2)
@@ -670,7 +834,10 @@ actor PersistenceStore {
         try requireOpen()
         let statement = try prepare("SELECT COUNT(*) FROM session_state")
         guard try statement.step() == .row else { return 0 }
-        return Int(statement.columnInt64(0))
+        let sessionCount = Int(statement.columnInt64(0))
+        let topology = try prepare("SELECT COUNT(*) FROM torrent_tracker_topology")
+        guard try topology.step() == .row else { return sessionCount }
+        return sessionCount + Int(topology.columnInt64(0))
     }
 
     func clearQuarantine(seq: Int64) throws {
@@ -781,6 +948,27 @@ actor PersistenceStore {
                     torrentID: key,
                     generation: generation,
                     reason: "session checksum mismatch at startup"
+                ))
+            }
+        }
+        // Structured topology uses the same checksum discipline but has its
+        // own table. The diagnostic key keeps this legacy reconciler API
+        // source-compatible without treating topology as session state.
+        let topology = try prepare("""
+            SELECT torrent_id, generation, topology_json, checksum
+            FROM torrent_tracker_topology
+            """)
+        while try topology.step() == .row {
+            let torrentID = topology.columnText(0) ?? ""
+            let generation = UInt64(topology.columnInt64(1))
+            let data = topology.columnData(2) ?? Data()
+            let storedChecksum = topology.columnText(3) ?? ""
+            if AtomicGeneration.sha256(data) != storedChecksum {
+                failures.append(RecordCorruption(
+                    kind: .session,
+                    torrentID: Self.trackerTopologyDiagnosticKey(torrentID),
+                    generation: generation,
+                    reason: "tracker topology checksum mismatch at startup"
                 ))
             }
         }
@@ -956,6 +1144,10 @@ actor PersistenceStore {
         "torrent_trackers.\(torrentID)"
     }
 
+    private static func trackerTopologyDiagnosticKey(_ torrentID: String) -> String {
+        "\(trackerTopologyDiagnosticPrefix)\(torrentID)"
+    }
+
     private static func torrentLocationKey(_ torrentID: String) -> String {
         "torrent_location.\(torrentID)"
     }
@@ -973,6 +1165,85 @@ actor PersistenceStore {
         case .metainfo: return "metainfo"
         case .session: return "session_state"
         }
+    }
+
+    private func trackerTopologyRow(torrentID: String) throws -> TrackerTopologyRow? {
+        let statement = try prepare("""
+            SELECT topology_json, checksum, generation
+            FROM torrent_tracker_topology
+            WHERE torrent_id = ?
+            """)
+        try statement.bindText(torrentID, index: 1)
+        guard try statement.step() == .row else { return nil }
+        return TrackerTopologyRow(
+            data: statement.columnData(0) ?? Data(),
+            checksum: statement.columnText(1) ?? "",
+            generation: UInt64(statement.columnInt64(2))
+        )
+    }
+
+    private func decodeTrackerTopology(
+        _ row: TrackerTopologyRow,
+        torrentID: String,
+        isPrivate: Bool
+    ) throws -> [[String]] {
+        let computed = AtomicGeneration.sha256(row.data)
+        guard computed == row.checksum else {
+            throw PersistenceError.checksumMismatch(
+                kind: "tracker_topology",
+                torrentID: torrentID,
+                generation: row.generation
+            )
+        }
+        let envelope: TrackerTopologyEnvelope
+        do {
+            envelope = try JSONDecoder().decode(TrackerTopologyEnvelope.self, from: row.data)
+        } catch {
+            throw PersistenceError.corruptDatabase(
+                reason: "tracker topology JSON decode failed for \(torrentID): \(error)"
+            )
+        }
+        guard envelope.version == Self.trackerTopologyVersion else {
+            throw PersistenceError.corruptDatabase(
+                reason: "unsupported tracker topology envelope version \(envelope.version)"
+            )
+        }
+        do {
+            try MetainfoParser.validateTrackerTiers(envelope.tiers, isPrivate: isPrivate)
+        } catch {
+            throw PersistenceError.corruptDatabase(
+                reason: "stored tracker topology is invalid: \(error)"
+            )
+        }
+        return envelope.tiers
+    }
+
+    private func upsertTrackerTopologyRow(
+        torrentID: String,
+        data: Data,
+        checksum: String,
+        generation: UInt64
+    ) throws {
+        let statement = try prepare("""
+            INSERT INTO torrent_tracker_topology
+                (torrent_id, topology_json, checksum, generation)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(torrent_id) DO UPDATE SET
+                topology_json = excluded.topology_json,
+                checksum = excluded.checksum,
+                generation = excluded.generation
+            """)
+        try statement.bindText(torrentID, index: 1)
+        try statement.bindBlob(data, index: 2)
+        try statement.bindText(checksum, index: 3)
+        try statement.bindInt64(Int64(generation), index: 4)
+        _ = try statement.step()
+    }
+
+    private func legacyFlatTrackerRowExists(torrentID: String) throws -> Bool {
+        let statement = try prepare("SELECT 1 FROM session_state WHERE key = ? LIMIT 1")
+        try statement.bindText(Self.torrentTrackersKey(torrentID), index: 1)
+        return try statement.step() == .row
     }
 
     // WP-10: shared with the RemovalJournal store extension (separate file).
@@ -1246,6 +1517,16 @@ actor PersistenceStore {
                 failure_reason TEXT
             )
             """,
+        ]),
+        (3, [
+            """
+            CREATE TABLE torrent_tracker_topology (
+                torrent_id TEXT PRIMARY KEY NOT NULL REFERENCES torrents(id) ON DELETE CASCADE,
+                topology_json BLOB NOT NULL,
+                checksum TEXT NOT NULL,
+                generation INTEGER NOT NULL
+            )
+            """
         ]),
     ]
 

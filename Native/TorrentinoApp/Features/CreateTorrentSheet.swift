@@ -18,16 +18,20 @@ struct CreateTorrentSheet: View {
     @State private var outputPath: String = ""
     @State private var format: TorrentFormat = .hybrid
     @State private var trackerInput: String = ""
-    @State private var trackerList: [String] = []
+    /// Tracker tiers (BEP-12): each entry is a tier of fallback trackers; the
+    /// first non-empty tier is also written to "announce".
+    @State private var trackerTiers: [[String]] = []
     @State private var isPrivate: Bool = false
     @State private var pieceSizeIndex: Int = 0 // 0 = Automatic
     @State private var comment: String = ""
     @State private var source: String = ""
     @State private var startSeeding: Bool = true
-    @State private var includeHiddenFiles: Bool = false
+    @State private var includeHiddenFiles: Bool = true
 
     // State
     @State private var inspection: CreateSourceInspection?
+    @State private var inspectionRevision: UInt64?
+    @State private var formRevision: UInt64 = 0
     @State private var inspecting: Bool = false
     @State private var committing: Bool = false
     @State private var errorMessage: String?
@@ -35,19 +39,9 @@ struct CreateTorrentSheet: View {
     @State private var manifestEntries: [CreatorManifestEntry] = []
     @State private var loadingManifest: Bool = false
 
-    private let pieceSizesKiB: [(label: String, val: Int64?)] = [
-        ("Automatic", nil),
-        ("16 KiB", 16),
-        ("32 KiB", 32),
-        ("64 KiB", 64),
-        ("128 KiB", 128),
-        ("256 KiB", 256),
-        ("512 KiB", 512),
-        ("1024 KiB (1 MiB)", 1024),
-        ("2048 KiB (2 MiB)", 2048),
-        ("4096 KiB (4 MiB)", 4096),
-        ("8192 KiB (8 MiB)", 8192),
-        ("16384 KiB (16 MiB)", 16384)
+    private let pieceSizesKiB: [Int64?] = [
+        nil, 16, 32, 64, 128, 256, 512,
+        1024, 2048, 4096, 8192, 16384
     ]
 
     init(viewModel: TorrentListViewModel) {
@@ -94,6 +88,9 @@ struct CreateTorrentSheet: View {
                         HStack {
                             TextField(String(localized: "creator.output_placeholder"), text: $outputPath)
                                 .textFieldStyle(.roundedBorder)
+                                .onChange(of: outputPath) { _ in
+                                    triggerInspection()
+                                }
 
                             Button(String(localized: "creator.browse")) {
                                 selectOutputPath()
@@ -108,10 +105,13 @@ struct CreateTorrentSheet: View {
                                 .font(.subheadline)
                             Picker("", selection: $format) {
                                 ForEach(TorrentFormat.allCases, id: \.self) { fmt in
-                                    Text(fmt.displayName).tag(fmt)
+                                    Text(formatDisplayName(fmt)).tag(fmt)
                                 }
                             }
                             .pickerStyle(.segmented)
+                            .onChange(of: format) { _ in
+                                triggerInspection()
+                            }
                         }
 
                         GridRow {
@@ -119,10 +119,13 @@ struct CreateTorrentSheet: View {
                                 .font(.subheadline)
                             Picker("", selection: $pieceSizeIndex) {
                                 ForEach(0..<pieceSizesKiB.count, id: \.self) { idx in
-                                    Text(pieceSizesKiB[idx].label).tag(idx)
+                                    Text(pieceSizeLabel(pieceSizesKiB[idx])).tag(idx)
                                 }
                             }
                             .pickerStyle(.menu)
+                            .onChange(of: pieceSizeIndex) { _ in
+                                triggerInspection()
+                            }
                         }
                     }
 
@@ -136,29 +139,74 @@ struct CreateTorrentSheet: View {
                             TextField(String(localized: "creator.tracker_placeholder"), text: $trackerInput)
                                 .textFieldStyle(.roundedBorder)
                             Button(String(localized: "creator.add_tracker")) {
-                                addTracker()
+                                addTrackers()
                             }
                             .disabled(trackerInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
 
-                        if !trackerList.isEmpty {
-                            List {
-                                ForEach(trackerList.indices, id: \.self) { idx in
-                                    HStack {
-                                        Text(trackerList[idx])
-                                            .font(.caption)
-                                            .monospaced()
-                                        Spacer()
-                                        Button(action: { trackerList.remove(at: idx) }) {
-                                            Image(systemName: "trash")
+                        if !trackerTiers.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(trackerTiers.indices, id: \.self) { tierIndex in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                             Text(String.localizedStringWithFormat(
+                                                 NSLocalizedString("creator.tier", comment: "Creator tracker tier label"),
+                                                 Int64(tierIndex + 1)
+                                             ))
+                                                .font(.caption)
+                                                .bold()
+                                            Spacer()
+                                            Button {
+                                                moveTier(tierIndex, by: -1)
+                                            } label: {
+                                                Image(systemName: "arrow.up")
+                                            }
+                                            .buttonStyle(.plain)
+                                            .disabled(tierIndex == 0)
+                                            Button {
+                                                moveTier(tierIndex, by: 1)
+                                            } label: {
+                                                Image(systemName: "arrow.down")
+                                            }
+                                            .buttonStyle(.plain)
+                                            .disabled(tierIndex == trackerTiers.count - 1)
+                                            Button {
+                                                removeTier(tierIndex)
+                                            } label: {
+                                                Image(systemName: "trash")
+                                            }
+                                            .buttonStyle(.plain)
                                         }
-                                        .buttonStyle(.plain)
+                                        ForEach(trackerTiers[tierIndex].indices, id: \.self) { urlIndex in
+                                            HStack {
+                                                Text(trackerTiers[tierIndex][urlIndex])
+                                                    .font(.caption)
+                                                    .monospaced()
+                                                Spacer()
+                                                Button {
+                                                    removeTracker(tierIndex: tierIndex, urlIndex: urlIndex)
+                                                } label: {
+                                                    Image(systemName: "xmark.circle")
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        if tierIndex < trackerTiers.count - 1 {
+                                            Divider()
+                                        }
                                     }
                                 }
+                                Button(String(localized: "creator.new_tier")) {
+                                    trackerTiers.append([])
+                                }
+                                .font(.caption)
                             }
-                            .frame(height: 90)
-                            .border(Color.gray.opacity(0.3))
-                        }
+                            .padding(6)
+                                .border(Color.gray.opacity(0.3))
+                                .onChange(of: trackerTiers) { _ in
+                                    triggerInspection()
+                                }
+                            }
                     }
 
                     Divider()
@@ -170,6 +218,9 @@ struct CreateTorrentSheet: View {
                                 .font(.subheadline)
                             TextField("", text: $comment)
                                 .textFieldStyle(.roundedBorder)
+                                .onChange(of: comment) { _ in
+                                    triggerInspection()
+                                }
                         }
 
                         HStack {
@@ -177,13 +228,22 @@ struct CreateTorrentSheet: View {
                                 .font(.subheadline)
                             TextField("", text: $source)
                                 .textFieldStyle(.roundedBorder)
+                                .onChange(of: source) { _ in
+                                    triggerInspection()
+                                }
                         }
                     }
 
                     // Toggles
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle(String(localized: "creator.start_seeding"), isOn: $startSeeding)
+                            .onChange(of: startSeeding) { _ in
+                                triggerInspection()
+                            }
                         Toggle(String(localized: "creator.private_torrent"), isOn: $isPrivate)
+                            .onChange(of: isPrivate) { _ in
+                                triggerInspection()
+                            }
                         Toggle(String(localized: "creator.include_hidden"), isOn: $includeHiddenFiles)
                             .onChange(of: includeHiddenFiles) { _ in
                                 triggerInspection()
@@ -196,11 +256,15 @@ struct CreateTorrentSheet: View {
                     } else if let inspection {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text(String(localized: "creator.summary_file_count"))
-                                Text(": \(inspection.summary.fileCount)").bold()
+                                Text(String.localizedStringWithFormat(
+                                    NSLocalizedString("creator.summary_file_count_format", comment: "Creator file count summary"),
+                                    Int64(inspection.summary.fileCount)
+                                )).bold()
                                 Spacer()
-                                Text(String(localized: "creator.summary_total_size"))
-                                Text(": \(ByteCountFormatter.string(fromByteCount: inspection.summary.totalBytes, countStyle: .file))").bold()
+                                Text(String.localizedStringWithFormat(
+                                    NSLocalizedString("creator.summary_total_size_format", comment: "Creator total size summary"),
+                                    ByteCountFormatter.string(fromByteCount: inspection.summary.totalBytes, countStyle: .file)
+                                )).bold()
                             }
                             .font(.caption)
 
@@ -217,19 +281,56 @@ struct CreateTorrentSheet: View {
                         .cornerRadius(6)
                     }
 
-                    // Error presentation
-                    if let errorMessage {
+                    // Error presentation uses only catalog-backed messages;
+                    // diagnostics context never crosses into this view.
+                    if let errorMessage = errorMessage ?? viewModel.creatorError {
                         Text(errorMessage)
                             .foregroundColor(.red)
                             .font(.caption)
                     }
 
-                    // Progress bar when committing
-                    if committing {
+                    // Keep the projection visible while the agent operation is
+                    // active and after its matching terminal event.
+                    if committing || viewModel.creatorOperationActive || viewModel.creatorTerminalOutcome != nil {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("\(viewModel.creatorProgressStage) (\(Int(viewModel.creatorProgressFraction * 100))%)")
-                                .font(.caption)
+                            HStack {
+                                Text(progressStageText)
+                                    .font(.caption)
+                                Spacer()
+                                Text(String.localizedStringWithFormat(
+                                    NSLocalizedString("creator.progress_percent", comment: "Creator progress percentage"),
+                                    Int64(max(0, min(1, viewModel.creatorProgressFraction)) * 100)
+                                ))
+                                    .font(.caption.monospacedDigit())
+                            }
                             ProgressView(value: viewModel.creatorProgressFraction)
+                            Text(String.localizedStringWithFormat(
+                                NSLocalizedString("creator.progress_backend_format", comment: "Creator progress backend"),
+                                progressBackendText
+                            ))
+                                .font(.caption2)
+                            Text(String.localizedStringWithFormat(
+                                NSLocalizedString("creator.progress_bytes_format", comment: "Creator progress bytes"),
+                                progressBytesText
+                            ))
+                                .font(.caption2)
+                            Text(String.localizedStringWithFormat(
+                                NSLocalizedString("creator.progress_files_format", comment: "Creator progress files"),
+                                progressFilesText
+                            ))
+                                .font(.caption2)
+                            Text(String.localizedStringWithFormat(
+                                NSLocalizedString("creator.progress_eta_format", comment: "Creator progress ETA"),
+                                progressETAText
+                            ))
+                                .font(.caption2)
+                            if viewModel.creatorCancellationRequested {
+                                Text(viewModel.creatorTerminalCancellation
+                                     ? String(localized: "creator.progress_cancelled")
+                                     : String(localized: "creator.progress_cancelling"))
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                            }
                         }
                     }
                 }
@@ -241,10 +342,11 @@ struct CreateTorrentSheet: View {
             // Actions Footer
             HStack {
                 Button(String(localized: "creator.cancel")) {
-                    if committing {
+                    if committing || viewModel.creatorOperationActive {
                         viewModel.cancelCreation()
+                    } else {
+                        dismiss()
                     }
-                    dismiss()
                 }
 
                 Spacer()
@@ -253,7 +355,7 @@ struct CreateTorrentSheet: View {
                     startCreation()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(sourcePath.isEmpty || committing || inspecting)
+                .disabled(!canCommit)
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
@@ -265,10 +367,16 @@ struct CreateTorrentSheet: View {
                     .font(.headline)
 
                 if let inspection {
-                    Text("Excluded files: \(inspection.exclusions.joined(separator: ", "))")
+                    Text(String.localizedStringWithFormat(
+                        NSLocalizedString("creator.excluded_files_format", comment: "Creator excluded files"),
+                        inspection.exclusions.joined(separator: ", ")
+                    ))
                         .font(.caption)
                     if inspection.summary.skippedSymlinksCount > 0 {
-                        Text("Skipped symlinks: \(inspection.summary.skippedSymlinksCount)")
+                        Text(String.localizedStringWithFormat(
+                            NSLocalizedString("creator.skipped_symlinks_format", comment: "Creator skipped symlinks"),
+                            Int64(inspection.summary.skippedSymlinksCount)
+                        ))
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -276,7 +384,7 @@ struct CreateTorrentSheet: View {
 
                 Divider()
 
-                Text("File Manifest Preview:")
+                Text(String(localized: "creator.manifest_preview"))
                     .font(.subheadline)
 
                 if loadingManifest {
@@ -320,51 +428,92 @@ struct CreateTorrentSheet: View {
                 let parentDir = url.deletingLastPathComponent().path
                 outputPath = (parentDir as NSString).appendingPathComponent(defaultOutputName)
             }
-            triggerInspection()
         }
     }
 
     private func selectOutputPath() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "torrent")!]
-        panel.nameFieldStringValue = sourcePath.isEmpty ? "new.torrent" : (URL(fileURLWithPath: sourcePath).lastPathComponent + ".torrent")
+        panel.nameFieldStringValue = sourcePath.isEmpty
+            ? String(localized: "creator.default_output_filename")
+            : (URL(fileURLWithPath: sourcePath).lastPathComponent + ".torrent")
         if panel.runModal() == .OK, let url = panel.url {
             outputPath = url.path
         }
     }
 
-    private func addTracker() {
+    private func addTrackers() {
+        // Paste support: pasted text may contain several URLs separated by
+        // newlines or commas; each valid one is added to the last tier.
         let trimmed = trackerInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if !trackerList.contains(trimmed) {
-            trackerList.append(trimmed)
+        let candidates = trimmed
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && isValidTrackerURL($0) }
+        guard !candidates.isEmpty else {
+            errorMessage = String(localized: "creator.invalid_tracker")
+            return
         }
+        if trackerTiers.isEmpty {
+            trackerTiers.append([])
+        }
+        var lastTier = trackerTiers.removeLast()
+        for url in candidates {
+            lastTier.append(url)
+        }
+        trackerTiers.append(lastTier)
         trackerInput = ""
     }
 
+    private func isValidTrackerURL(_ url: String) -> Bool {
+        guard url.count <= 2048,
+              let scheme = URL(string: url)?.scheme?.lowercased() else { return false }
+        return ["http", "https", "udp"].contains(scheme)
+    }
+
+    private func removeTracker(tierIndex: Int, urlIndex: Int) {
+        trackerTiers[tierIndex].remove(at: urlIndex)
+        if trackerTiers[tierIndex].isEmpty {
+            trackerTiers.remove(at: tierIndex)
+        }
+    }
+
+    private func removeTier(_ index: Int) {
+        trackerTiers.remove(at: index)
+    }
+
+    private func moveTier(_ index: Int, by delta: Int) {
+        let target = index + delta
+        guard target >= 0, target < trackerTiers.count else { return }
+        trackerTiers.swapAt(index, target)
+    }
+
     private func triggerInspection() {
-        guard !sourcePath.isEmpty else { return }
+        formRevision &+= 1
+        let revision = formRevision
+        inspection = nil
+        inspectionRevision = nil
+        viewModel.invalidateCreatorInspection()
+        manifestEntries = []
+        guard !sourcePath.isEmpty else {
+            inspecting = false
+            return
+        }
         inspecting = true
         errorMessage = nil
-        let opts = CreateOptions(
-            outputPath: outputPath,
-            format: format,
-            trackers: [trackerList],
-            isPrivate: isPrivate,
-            pieceSizeKiB: pieceSizesKiB[pieceSizeIndex].val,
-            comment: comment,
-            source: source,
-            seedWhileDownloading: startSeeding,
-            includeHiddenFiles: includeHiddenFiles
-        )
+        let opts = currentCreateOptions()
         Task {
             do {
                 let res = try await viewModel.inspectCreateSource(sourcePath: sourcePath, options: opts)
+                guard revision == formRevision else { return }
                 inspection = res
+                inspectionRevision = revision
                 inspecting = false
             } catch {
+                guard revision == formRevision else { return }
                 inspecting = false
-                errorMessage = error.localizedDescription
+                errorMessage = viewModel.creatorUserMessage(for: error)
             }
         }
     }
@@ -378,26 +527,127 @@ struct CreateTorrentSheet: View {
                 loadingManifest = false
             } catch {
                 loadingManifest = false
+                errorMessage = viewModel.creatorUserMessage(for: error)
             }
         }
     }
 
     private func startCreation() {
-        guard let token = inspection?.token ?? viewModel.activeCreatorToken else {
-            errorMessage = "Please inspect source first."
+        guard let inspection, inspectionRevision == formRevision, !inspecting else {
+            errorMessage = String(localized: "creator.reinspect_first")
             return
         }
+        let token = inspection.token
+        let options = currentCreateOptions()
         committing = true
         errorMessage = nil
         Task {
             do {
-                try await viewModel.commitCreate(token: token)
+                try await viewModel.commitCreate(token: token, options: options)
                 committing = false
-                dismiss()
             } catch {
                 committing = false
-                errorMessage = error.localizedDescription
+                errorMessage = viewModel.creatorUserMessage(for: error)
             }
         }
+    }
+
+    private var canCommit: Bool {
+        !sourcePath.isEmpty && !committing && !viewModel.creatorOperationActive
+            && viewModel.creatorTerminalOutcome == nil && !inspecting
+            && inspection != nil && inspectionRevision == formRevision
+    }
+
+    private func currentCreateOptions() -> CreateOptions {
+        CreateOptions(
+            outputPath: outputPath,
+            format: format,
+            trackers: trackerTiers,
+            isPrivate: isPrivate,
+            pieceSizeKiB: pieceSizesKiB[pieceSizeIndex],
+            comment: comment,
+            source: source,
+            seedWhileDownloading: startSeeding,
+            includeHiddenFiles: includeHiddenFiles
+        )
+    }
+
+    private var progressStageText: String {
+        switch viewModel.creatorProgressStage {
+        case "Scanning": return String(localized: "creator.stage.scanning")
+        case "Hashing": return String(localized: "creator.stage.hashing")
+        case "Building Metadata": return String(localized: "creator.stage.metadata")
+        case "Writing Torrent": return String(localized: "creator.stage.writing")
+        case "Verification": return String(localized: "creator.stage.verification")
+        case "Seeding": return String(localized: "creator.stage.seeding")
+        case "Completed": return String(localized: "creator.stage.completed")
+        case "Cancelled": return String(localized: "creator.progress_cancelled")
+        case "Cancelling": return String(localized: "creator.progress_cancelling")
+        case "Failed": return String(localized: "creator.stage.failed")
+        default: return String(localized: "creator.progress_unavailable")
+        }
+    }
+
+    private var progressBackendText: String {
+        switch viewModel.creatorProgressBackend.lowercased() {
+        case "cpu": return String(localized: "creator.backend_cpu")
+        default: return String(localized: "creator.progress_unavailable")
+        }
+    }
+
+    private var progressBytesText: String {
+        guard let processed = viewModel.creatorProcessedBytes,
+              let total = viewModel.creatorTotalBytes else {
+            return String(localized: "creator.progress_unavailable")
+        }
+        return String.localizedStringWithFormat(
+            NSLocalizedString("creator.progress_bytes_value", comment: "Creator processed and total bytes"),
+            ByteCountFormatter.string(fromByteCount: processed, countStyle: .file),
+            ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        )
+    }
+
+    private var progressFilesText: String {
+        guard let processed = viewModel.creatorProcessedFiles,
+              let total = viewModel.creatorTotalFiles else {
+            return String(localized: "creator.progress_unavailable")
+        }
+        return String.localizedStringWithFormat(
+            NSLocalizedString("creator.progress_files_value", comment: "Creator processed and total files"),
+            Int64(processed),
+            Int64(total)
+        )
+    }
+
+    private var progressETAText: String {
+        guard let seconds = viewModel.creatorETASeconds else {
+            return String(localized: "creator.progress_eta_unavailable")
+        }
+        return String.localizedStringWithFormat(
+            NSLocalizedString("creator.progress_seconds", comment: "Creator ETA seconds"),
+            seconds
+        )
+    }
+
+    private func formatDisplayName(_ format: TorrentFormat) -> String {
+        switch format {
+        case .hybrid: return String(localized: "creator.format_hybrid")
+        case .v1: return String(localized: "creator.format_v1")
+        case .v2: return String(localized: "creator.format_v2")
+        }
+    }
+
+    private func pieceSizeLabel(_ sizeKiB: Int64?) -> String {
+        guard let sizeKiB else { return String(localized: "creator.piece_size_automatic") }
+        if sizeKiB >= 1024, sizeKiB % 1024 == 0 {
+            return String.localizedStringWithFormat(
+                NSLocalizedString("creator.piece_size_mib", comment: "Creator piece size in MiB"),
+                sizeKiB / 1024
+            )
+        }
+        return String.localizedStringWithFormat(
+            NSLocalizedString("creator.piece_size_kib", comment: "Creator piece size in KiB"),
+            sizeKiB
+        )
     }
 }

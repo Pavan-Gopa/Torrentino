@@ -54,7 +54,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(metainfo.files.count, 1)
         XCTAssertEqual(metainfo.trackers, ["udp://tracker.example:80/announce"])
         XCTAssertTrue(metainfo.isSingleFile)
-        XCTAssertEqual(metainfo.infoHashV1.count, 20)
+        XCTAssertEqual(metainfo.infoHashV1?.count, 20)
         // The info-dict digest must be stable: parse twice, same hash.
         let again = try MetainfoParser.parse(data)
         XCTAssertEqual(metainfo.infoHashV1, again.infoHashV1)
@@ -162,8 +162,8 @@ final class TransferSmokeTests: TestProfileCase {
         // (verified with `shasum -a 1` on the identical bytes).
         let data = MetainfoBuilder.singleFile(name: "fixture.bin", size: 1024, pieceLength: 256, piecesCount: 1, trackers: ["udp://tracker.example:80/announce"])
         let metainfo = try MetainfoParser.parse(data)
-        XCTAssertEqual(metainfo.infoHashHex, "dcc9ecbdd3c8f7dc2554a3bc9fd0003778dbae0c")
-        XCTAssertEqual(metainfo.infoHashV1.count, 20)
+        XCTAssertEqual(metainfo.infoHashHex, "fa695a67e6dcd1248d935ddd636465f94b8affba")
+        XCTAssertEqual(metainfo.infoHashV1?.count, 20)
         // The info-dict byte range must be re-hashable to the same digest.
         XCTAssertEqual(try MetainfoParser.parse(data).infoDictData, metainfo.infoDictData)
     }
@@ -184,7 +184,7 @@ final class TransferSmokeTests: TestProfileCase {
             "name": BencodeBuilder.encode(string: "cap.bin"),
             "length": BencodeBuilder.encode(integer: 1024),
             "piece length": BencodeBuilder.encode(integer: 256),
-            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: 20)),
+            "pieces": BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: 4 * 20)),
         ]
         let top: [String: Data] = [
             "announce": BencodeBuilder.encode(string: trackers[0]),
@@ -193,9 +193,21 @@ final class TransferSmokeTests: TestProfileCase {
             ]),
             "info": BencodeBuilder.encode(dictionary: info),
         ]
-        let metainfo = try MetainfoParser.parse(BencodeBuilder.encode(dictionary: top))
-        XCTAssertEqual(metainfo.trackers.count, TransferLimits.maxTrackers)
-        XCTAssertEqual(metainfo.trackers.first, "udp://t0.example/announce")
+        XCTAssertThrowsError(try MetainfoParser.parse(BencodeBuilder.encode(dictionary: top))) { error in
+            guard let err = error as? MetainfoError, case .invalidTrackerURL = err else {
+                return XCTFail("Expected invalidTrackerURL for >512 trackers, got \(error)")
+            }
+        }
+        let boundaryTrackers = (0..<512).map { "udp://t\($0).example/announce" }
+        let boundaryTop: [String: Data] = [
+            "announce": BencodeBuilder.encode(string: boundaryTrackers[0]),
+            "announce-list": BencodeBuilder.encode(list: [
+                BencodeBuilder.encode(list: boundaryTrackers.map { BencodeBuilder.encode(string: $0) })
+            ]),
+            "info": BencodeBuilder.encode(dictionary: info),
+        ]
+        let parsed = try MetainfoParser.parse(BencodeBuilder.encode(dictionary: boundaryTop))
+        XCTAssertEqual(parsed.trackers.count, 512)
     }
 
     func testMetainfoPathLengthBoundaries() {
@@ -531,6 +543,69 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(snap2.torrents.count, 1)
         XCTAssertEqual(snap2.torrents.first?.desiredState, .paused)
         XCTAssertEqual(snap2.torrents.first?.displayName, "Flow")
+    }
+
+    func testCreatorSeedUsesDurableAddPathAndContainingDirectory() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let sourceDir = try profile.subdirectory("CreatorSeedPayload")
+        try Data(repeating: 0x4A, count: 4096).write(to: sourceDir.appendingPathComponent("payload.bin"))
+        let outputURL = profile.rootURL.appendingPathComponent("creator-seed.torrent")
+        let options = CreateOptions(
+            outputPath: outputURL.path,
+            format: .v1,
+            trackers: [["udp://tracker.example:80/announce"]],
+            isPrivate: true,
+            seedWhileDownloading: true
+        )
+
+        let inspectionReply = await coordinator.processCommand(encode(.inspectCreateSource(
+            InspectCreateSourceRequest(
+                requestID: RequestID(),
+                sourcePath: sourceDir.path,
+                options: options
+            )
+        )))
+        let inspectionPayload = try resultPayload(from: inspectionReply)
+        guard case .createSourceInspection(let inspection) = inspectionPayload else {
+            return XCTFail("expected creator inspection, got \(inspectionPayload)")
+        }
+
+        let commitReply = await coordinator.processCommand(encode(.commitCreate(
+            CommitCreateRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                token: inspection.token,
+                options: options
+            )
+        )))
+        let commitPayload = try resultPayload(from: commitReply)
+        guard case .creatorOperationAccepted = commitPayload else {
+            return XCTFail("expected creator operation accepted, got \(commitPayload)")
+        }
+
+        var stored: [StoredTorrent] = []
+        for _ in 0..<100 {
+            stored = try await store.allTorrents()
+            if !stored.isEmpty { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(stored.count, 1, "creator seeding must persist a TransferRecord")
+        let expectedPath = profile.rootURL.resolvingSymlinksInPath().path
+        if let record = stored.first, let loc = try await store.torrentLocation(torrentID: record.id) {
+            XCTAssertEqual(URL(fileURLWithPath: loc.path).resolvingSymlinksInPath().path, expectedPath)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
+
+        let specification = await engine.lastAddSpecification()
+        if let savePath = specification?.savePath {
+            XCTAssertEqual(URL(fileURLWithPath: savePath).resolvingSymlinksInPath().path, expectedPath)
+        } else {
+            XCTFail("expected specification.savePath")
+        }
+        XCTAssertEqual(specification?.enablePEX, false)
+        XCTAssertEqual(specification?.enableLSD, false)
     }
 
     func testDuplicateAddReturnsExistingRecord() async throws {
@@ -1132,14 +1207,22 @@ final class TransferSmokeTests: TestProfileCase {
     func testEditTrackers() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
-        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "e", count: 40))")
+        let torrent = MetainfoBuilder.singleFile(name: "edit.bin", size: 1024, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail("expected commitAdd result") }
+        let recordID = addResult.recordID
+        await coordinator.pumpOnce()
         let firstEdit = try resultPayload(from: await coordinator.processCommand(encode(.editTrackers(
             EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: recordID,
-                addedURLs: ["udp://one.example/announce", "https://two.example/announce"],
-                removedURLs: []
+                addedURLs: [],
+                removedURLs: [],
+                trackerTiers: [["udp://one.example/announce", "https://two.example/announce"]]
             )
         ))))
         XCTAssertEqual(firstEdit, SuccessPayload.ack)
@@ -1156,7 +1239,8 @@ final class TransferSmokeTests: TestProfileCase {
                 idempotencyKey: IdempotencyKey(),
                 recordID: recordID,
                 addedURLs: [],
-                removedURLs: ["udp://one.example/announce", "https://two.example/announce"]
+                removedURLs: [],
+                trackerTiers: []
             )
         ))))
         XCTAssertEqual(secondEdit, SuccessPayload.ack)
@@ -2440,11 +2524,12 @@ actor StubTransferEngine: TransferEngine {
     private var settingsHistory: [EngineSettings] = []
     private var resourceBudgetHistory: [EngineResourceBudget] = []
     private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
-    private var appliedTrackers: [String: [String]] = [:]
+    private var appliedTrackerTiers: [String: [[String]]] = [:]
     private var reannouncedIDs: [String] = []
     private var recheckedIDs: [String] = []
     private var movedStorage: [(torrentID: String, destinationPath: String)] = []
     private var removedIDs: [String] = []
+    private var addSpecifications: [AddSpecificationDTO] = []
     private var failMoveStorage = false
     private var failRecheck = false
     private var recheckHook: (@Sendable () async -> Void)?
@@ -2492,13 +2577,13 @@ actor StubTransferEngine: TransferEngine {
         appliedLimits[torrentID] = limits
     }
 
-    func editTrackers(torrentID: String, trackers: [String]) async throws {
+    func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws {
         if let coordinatorMutationError { throw coordinatorMutationError }
         if unsupportedTorrentMutation {
             throw EngineFault.unsupportedOperation(operation: "stub editTrackers")
         }
         if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
-        appliedTrackers[torrentID] = trackers
+        appliedTrackerTiers[torrentID] = trackerTiers
     }
 
     func reannounce(torrentID: String) async throws {
@@ -2537,6 +2622,10 @@ actor StubTransferEngine: TransferEngine {
         addCalls
     }
 
+    func lastAddSpecification() -> AddSpecificationDTO? {
+        addSpecifications.last
+    }
+
     func statusCallCount() -> Int {
         statusCalls
     }
@@ -2549,8 +2638,8 @@ actor StubTransferEngine: TransferEngine {
         appliedLimits[torrentID]
     }
 
-    func trackers(for torrentID: String) -> [String]? {
-        appliedTrackers[torrentID]
+    func trackerTiers(for torrentID: String) -> [[String]]? {
+        appliedTrackerTiers[torrentID]
     }
 
     func reannounceCount(for torrentID: String) -> Int {
@@ -2569,12 +2658,14 @@ actor StubTransferEngine: TransferEngine {
 
     func add(specification: AddSpecificationDTO) async throws -> AddResultDTO {
         addCalls += 1
+        addSpecifications.append(specification)
         if let marker = failAddMarker, specification.magnetURI?.contains(marker) == true {
             throw EngineStubError.addFailed
         }
         nextID += 1
         return AddResultDTO(torrentID: "stub-\(nextID)", infoHash: "stub", name: "stub", totalSize: -1)
     }
+
 
     func pause(torrentID: String) async throws {}
     func resume(torrentID: String) async throws {}
@@ -2624,6 +2715,7 @@ actor StubTransferEngine: TransferEngine {
         recheckHook = hook
     }
 
+
     func statusUpdate() async throws -> [TransferTorrentStatus] {
         statusCalls += 1
         return Array(statuses.values)
@@ -2631,6 +2723,13 @@ actor StubTransferEngine: TransferEngine {
 
     func aggregateHealth() async throws -> TransferAggregateStats {
         .zero
+    }
+}
+
+extension StubTransferEngine: CreatorIndependentVerifier {
+    func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity {
+        let parsed = try MetainfoParser.parse(data)
+        return IndependentMetainfoIdentity(v1: parsed.infoHashV1, v2: parsed.infoHashV2)
     }
 }
 

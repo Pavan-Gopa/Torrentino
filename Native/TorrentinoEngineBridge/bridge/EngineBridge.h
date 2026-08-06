@@ -23,6 +23,7 @@ namespace torrentino::bridge {
 // Registry identity of a torrent record: the v1 info-hash hex when present,
 // otherwise the v2 hex (the identity rule established by the WP-01 bakeoff).
 using TorrentRecordID = std::string;
+using TrackerTiers = std::vector<std::vector<std::string>>;
 
 // Structured error taxonomy mirroring the Swift EngineCoordinatorError cases.
 // Every public method converts a C++/libtorrent exception into one of these
@@ -103,6 +104,12 @@ struct AddSpecification {
 	std::string magnet_uri;
 	std::string save_path; // required
 	bool paused = false;   // add paused (the coordinator owns the state machine)
+	// Per-task peer-discovery policy (WP-11): -1 = leave engine default,
+	// 0 = force disabled, 1 = force enabled. Private torrents must disable
+	// DHT/PEX/LSD so peers are only discovered through the tracker.
+	int enable_dht = -1;
+	int enable_pex = -1;
+	int enable_lsd = -1;
 };
 
 struct BootReport {
@@ -116,6 +123,16 @@ struct AddResult {
 	std::string info_hash;  // "v1=... v2=..." description for diagnostics
 	std::string name;
 	std::int64_t total_size = 0; // -1 while metadata is unknown (magnet)
+};
+
+/// Identities parsed by the pinned libtorrent bridge from an exact torrent
+/// byte buffer. Empty hex strings are not used as an implicit presence flag;
+/// the booleans make v1/v2/hybrid shape explicit at the Swift boundary.
+struct IndependentTorrentIdentity {
+	bool has_v1 = false;
+	bool has_v2 = false;
+	std::string v1_hash;
+	std::string v2_hash;
 };
 
 enum class EngineAlertKind : std::int32_t {
@@ -264,6 +281,10 @@ public:
 	// download directory is retained as the default for subsequent adds.
 	Result<void> apply(const SessionConfiguration& config) noexcept;
 	Result<AddResult> add(const AddSpecification& spec) noexcept;
+	/// Parses a complete .torrent byte buffer with the pinned libtorrent
+	/// loader. This is a read-only verifier and does not require a running
+	/// session or create an engine handle.
+	Result<IndependentTorrentIdentity> verifyTorrent(const std::vector<char>& torrent_file) noexcept;
 	Result<void> pause(const TorrentRecordID& id) noexcept;
 	Result<void> resume(const TorrentRecordID& id) noexcept;
 	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
@@ -273,6 +294,8 @@ public:
 	Result<void> moveStorage(const TorrentRecordID& id, const std::string& path) noexcept;
 	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits) noexcept;
 	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id) noexcept;
+	Result<void> editTrackers(const TorrentRecordID& id, const TrackerTiers& tracker_tiers) noexcept;
+	// Reject-only compatibility stub; accepted edits use TrackerTiers.
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;
 	Result<void> reannounce(const TorrentRecordID& id) noexcept;
 	// WP-10 (Gate 6): no delete_files parameter — the bridge can never delete

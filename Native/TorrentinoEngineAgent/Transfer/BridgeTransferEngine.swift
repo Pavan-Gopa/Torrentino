@@ -126,12 +126,17 @@ public actor BridgeTransferEngine: TransferEngine {
         }
     }
 
-    public func editTrackers(torrentID: String, trackers: [String]) async throws {
+    public func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws {
         do {
-            try await coordinator.editTrackers(torrentID: torrentID, trackers: trackers)
+            try await coordinator.editTrackers(torrentID: torrentID, trackerTiers: trackerTiers)
         } catch {
             throw Self.mappedBridgeError(error, operation: "editTrackers")
         }
+    }
+
+    /// Reject-only compatibility stub. Accepted live edits are nested.
+    public func editTrackers(torrentID: String, trackers: [String]) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("scalar tracker edit")
     }
 
     public func reannounce(torrentID: String) async throws {

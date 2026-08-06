@@ -84,32 +84,28 @@ final class TorrentCreatorDomainTests: XCTestCase {
         XCTAssertEqual(SourceScanner.calculateAutomaticPieceSize(totalSizeBytes: 2 * 1024 * 1024 * 1024), 4 * 1024 * 1024)
     }
 
-    func testBencodeEncoderAndMetainfoParserRoundTrip() throws {
-        let scanResult = SourceScanResult(
-            isDirectory: true,
-            rootName: "TestRoot",
-            files: [
-                ScannedFileEntry(relativePath: "a.txt", fullPath: "/tmp/a.txt", sizeBytes: 100, fileResourceID: 1, mtimeSeconds: 1000, mtimeNanos: 0),
-                ScannedFileEntry(relativePath: "b.txt", fullPath: "/tmp/b.txt", sizeBytes: 200, fileResourceID: 2, mtimeSeconds: 1000, mtimeNanos: 0)
-            ],
-            totalSizeBytes: 300,
-            pieceSizeBytes: 16 * 1024,
-            skippedSymlinksCount: 0,
-            skippedSpecialCount: 0,
-            hardlinkCount: 0,
-            exclusions: [],
-            warnings: []
-        )
+    func testBencodeEncoderAndMetainfoParserRoundTrip() async throws {
+        // Round trip through the real pipeline: scan → hash (CPUHasher) →
+        // generate (MetainfoGenerator) → parse (MetainfoParser). Fabricated
+        // hashes are deliberately NOT accepted here: the hybrid cross-check
+        // and the v2 pieces-root validation reject torrents whose file tree
+        // has no real merkle roots.
+        let sourceDir = tempDirURL.appendingPathComponent("TestRoot")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try Data(repeating: 0x01, count: 100).write(to: sourceDir.appendingPathComponent("a.txt"))
+        try Data(repeating: 0x02, count: 200).write(to: sourceDir.appendingPathComponent("b.txt"))
 
-        let dummyV1Hashes = Data(repeating: 0xAB, count: 20)
-        let hashingResult = HashingResult(
-            v1PiecesData: dummyV1Hashes,
-            totalBytesHashed: 300,
-            totalFilesHashed: 2
+        let scanResult = try SourceScanner.scan(sourcePath: sourceDir.path, manualPieceSizeKiB: 16)
+
+        let hashingResult = try await CPUHasher().hash(
+            scannedFiles: scanResult.files,
+            pieceSizeBytes: scanResult.pieceSizeBytes,
+            format: .hybrid,
+            onProgress: { _, _, _, _ in }
         )
 
         let options = CreateOptions(
-            outputPath: "/tmp/test.torrent",
+            outputPath: tempDirURL.appendingPathComponent("test.torrent").path,
             format: .hybrid,
             trackers: [["https://tracker.example.com/announce"]],
             isPrivate: true,

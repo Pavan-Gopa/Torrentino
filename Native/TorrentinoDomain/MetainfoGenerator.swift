@@ -4,7 +4,9 @@
 // Invariants: lexicographically sorted bencode dictionaries; Sendable.
 
 import Foundation
+#if canImport(TorrentinoIPC)
 import TorrentinoIPC
+#endif
 
 public enum MetainfoGenerator {
     public static func buildTorrentFile(
@@ -16,60 +18,81 @@ public enum MetainfoGenerator {
         let isV1 = options.format == .v1 || options.format == .hybrid
         let isV2 = options.format == .v2 || options.format == .hybrid
 
-        var infoDict: [String: BencodeEncoder.Value] = [:]
-        infoDict["name"] = .string(scanResult.rootName)
-        infoDict["piece length"] = .integer(scanResult.pieceSizeBytes)
+        var infoPairs: [(String, BencodeEncoder.Value)] = []
+        infoPairs.append(("name", .string(scanResult.rootName)))
+        infoPairs.append(("piece length", .integer(scanResult.pieceSizeBytes)))
 
         if options.isPrivate {
-            infoDict["private"] = .integer(1)
+            infoPairs.append(("private", .integer(1)))
         }
 
         if let source = options.source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            infoDict["source"] = .string(source.trimmingCharacters(in: .whitespacesAndNewlines))
+            infoPairs.append(("source", .string(source.trimmingCharacters(in: .whitespacesAndNewlines))))
         }
 
         if isV1 {
-            infoDict["pieces"] = .bytes(hashingResult.v1PiecesData)
+            infoPairs.append(("pieces", .bytes(hashingResult.v1PiecesData)))
         }
 
         // Handle single file vs multi-file for v1
         if isV1 {
             if !scanResult.isDirectory && scanResult.files.count == 1 {
-                infoDict["length"] = .integer(scanResult.files[0].sizeBytes)
+                infoPairs.append(("length", .integer(scanResult.files[0].sizeBytes)))
             } else {
                 var filesList: [BencodeEncoder.Value] = []
-                for file in scanResult.files {
-                    var fileDict: [String: BencodeEncoder.Value] = [:]
-                    fileDict["length"] = .integer(file.sizeBytes)
+                let padding = CreatorLayout.v1PaddingBytes(
+                    files: scanResult.files,
+                    pieceSizeBytes: scanResult.pieceSizeBytes,
+                    format: options.format
+                )
+                for (index, file) in scanResult.files.enumerated() {
                     let pathParts = file.relativePath.split(separator: "/").map { String($0) }
-                    fileDict["path"] = .list(pathParts.map { .string($0) })
-                    filesList.append(.dictionary(fileDict))
+                    filesList.append(.dictionary([
+                        ("length", .integer(file.sizeBytes)),
+                        ("path", .list(pathParts.map { .string($0) })),
+                    ]))
+                    // BEP-47 alignment padding: a zero-byte entry in the same
+                    // directory, present only in the v1 address space.
+                    if index < padding.count, padding[index] > 0 {
+                        filesList.append(.dictionary([
+                            ("length", .integer(padding[index])),
+                            ("path", .list(paddingPathParts(for: file, index: index))),
+                            ("attr", .string("p")),
+                        ]))
+                    }
                 }
-                infoDict["files"] = .list(filesList)
+                infoPairs.append(("files", .list(filesList)))
             }
         }
 
         // Handle v2 file tree
-        var pieceLayersDict: [String: BencodeEncoder.Value] = [:]
+        var pieceLayersDict: [Data: BencodeEncoder.Value] = [:]
 
         if isV2 {
-            var fileTreeRoot: [String: BencodeEncoder.Value] = [:]
+            var fileTreeRoot: [Data: BencodeEncoder.Value] = [:]
 
             for file in scanResult.files {
-                guard let v2Entry = hashingResult.v2FileTrees[file.relativePath] else {
-                    continue
+                let v2Entry = hashingResult.v2FileTrees[file.relativePath]
+                if file.sizeBytes > 0, v2Entry == nil {
+                    throw MetainfoError.invalidPiecesRoot(file.relativePath)
                 }
 
-                // If piece layers are present, add to piece layers dictionary
-                if !v2Entry.pieceLayers.isEmpty {
-                    let rootKey = String(decoding: v2Entry.piecesRoot, as: UTF8.self)
-                    pieceLayersDict[rootKey] = .bytes(v2Entry.pieceLayers)
+                // If piece layers are present, add to piece layers dictionary.
+                // BEP-52 keys are the 32-byte pieces-root hashes (raw bytes);
+                // libtorrent's parser requires exactly sha256_hash::size().
+                if let v2Entry, !v2Entry.pieceLayers.isEmpty {
+                    pieceLayersDict[v2Entry.piecesRoot] = .bytes(v2Entry.pieceLayers)
                 }
 
                 let pathParts: [String]
                 if !scanResult.isDirectory && scanResult.files.count == 1 {
+                    // BEP-52 single-file: the tree root key IS the file name.
                     pathParts = [scanResult.rootName]
                 } else {
+                    // BEP-52 multi-file trees are rooted by the info name at
+                    // the engine boundary; the bencoded tree itself contains
+                    // only paths below that root. Adding the name here would
+                    // make libtorrent resolve the payload as name/name/path.
                     pathParts = file.relativePath.split(separator: "/").map { String($0) }
                 }
 
@@ -77,71 +100,83 @@ public enum MetainfoGenerator {
                     tree: &fileTreeRoot,
                     components: pathParts,
                     fileSize: file.sizeBytes,
-                    piecesRoot: v2Entry.piecesRoot
+                    piecesRoot: v2Entry?.piecesRoot
                 )
             }
 
-            infoDict["file tree"] = .dictionary(fileTreeRoot)
-            if options.format == .v2 {
-                infoDict["meta version"] = .integer(2)
-            }
+            infoPairs.append(("file tree", .dictionary(fileTreeRoot)))
+            // BEP-52: "meta version" is 2 for v2 AND hybrid torrents.
+            infoPairs.append(("meta version", .integer(2)))
         }
 
-        var topDict: [String: BencodeEncoder.Value] = [:]
-        topDict["info"] = .dictionary(infoDict)
+        var topPairs: [(String, BencodeEncoder.Value)] = []
+        topPairs.append(("info", .dictionary(infoPairs)))
 
-        // Trackers tier handling
-        let trackers = options.trackers.flatMap { $0 }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        // Validate before encoding so a private seed admission cannot be
+        // bypassed by malformed or unsupported topology. Reusing the value
+        // after validation prevents generation from becoming a normalization
+        // pass that drops duplicate URLs or changes tier boundaries.
+        try MetainfoParser.validateTrackerTiers(options.trackers, isPrivate: options.isPrivate)
+        let validatedTiers = options.trackers
+        let trackers = validatedTiers.flatMap { $0 }
         if !trackers.isEmpty {
-            topDict["announce"] = .string(trackers[0])
+            topPairs.append(("announce", .string(trackers[0])))
             var announceList: [BencodeEncoder.Value] = []
-            for tier in options.trackers {
-                let validUrls = tier.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-                if !validUrls.isEmpty {
-                    announceList.append(.list(validUrls.map { .string($0) }))
-                }
+            for tier in validatedTiers {
+                announceList.append(.list(tier.map { .string($0) }))
             }
             if !announceList.isEmpty {
-                topDict["announce-list"] = .list(announceList)
+                topPairs.append(("announce-list", .list(announceList)))
             }
         }
 
         if let comment = options.comment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            topDict["comment"] = .string(comment.trimmingCharacters(in: .whitespacesAndNewlines))
+            topPairs.append(("comment", .string(comment.trimmingCharacters(in: .whitespacesAndNewlines))))
         }
 
-        topDict["created by"] = .string("Torrentino Native 1.0")
-        topDict["creation date"] = .integer(Int64(creationDate.timeIntervalSince1970))
-        topDict["encoding"] = .string("UTF-8")
+        topPairs.append(("created by", .string("Torrentino Native 1.0")))
+        topPairs.append(("creation date", .integer(Int64(creationDate.timeIntervalSince1970))))
+        topPairs.append(("encoding", .string("UTF-8")))
 
-        if isV2 && !pieceLayersDict.isEmpty {
-            topDict["piece layers"] = .dictionary(pieceLayersDict)
+        if isV2 {
+            // BEP-52 requires the field for created v2 metadata even when no
+            // file spans more than one piece; an empty dictionary is the
+            // canonical representation in that case.
+            topPairs.append(("piece layers", .dictionary(pieceLayersDict)))
         }
+        return BencodeEncoder.encode(.dictionary(topPairs))
+    }
 
-        return BencodeEncoder.encode(.dictionary(topDict))
+    /// BEP-47 padding file path: same directory as the padded file, name
+    /// `_____padding_file_<n>_<sha1>` (SHA-1 of the padded file's relative
+    /// path — deterministic, no extra I/O).
+    private static func paddingPathParts(for file: ScannedFileEntry, index: Int) -> [BencodeEncoder.Value] {
+        var parts = file.relativePath.split(separator: "/").dropLast().map { String($0) }
+        let digest = SHA1.digest(Data(file.relativePath.utf8)).map { String(format: "%02x", $0) }.joined()
+        parts.append("_____padding_file_\(index)_\(digest)")
+        return parts.map { .string($0) }
     }
 
     private static func insertIntoFileTree(
-        tree: inout [String: BencodeEncoder.Value],
+        tree: inout [Data: BencodeEncoder.Value],
         components: [String],
         fileSize: Int64,
-        piecesRoot: Data
+        piecesRoot: Data?
     ) {
         guard !components.isEmpty else { return }
 
-        let head = components[0]
+        let head = Data(components[0].utf8)
         if components.count == 1 {
-            var leafDict: [String: BencodeEncoder.Value] = [:]
-            leafDict["length"] = .integer(fileSize)
-            if fileSize > 0 {
-                leafDict["pieces root"] = .bytes(piecesRoot)
+            var leafPairs: [(String, BencodeEncoder.Value)] = [("length", .integer(fileSize))]
+            if let piecesRoot, fileSize > 0 {
+                leafPairs.append(("pieces root", .bytes(piecesRoot)))
             }
 
-            var itemDict: [String: BencodeEncoder.Value] = [:]
-            itemDict[""] = .dictionary(leafDict)
-            tree[head] = .dictionary(itemDict)
+            var leaf: [Data: BencodeEncoder.Value] = [:]
+            leaf[Data()] = .dictionary(leafPairs)
+            tree[head] = .dictionary(leaf)
         } else {
-            var childTree: [String: BencodeEncoder.Value] = [:]
+            var childTree: [Data: BencodeEncoder.Value] = [:]
             if case .dictionary(let existing)? = tree[head] {
                 childTree = existing
             }

@@ -16,13 +16,32 @@ public enum BencodeValue: Sendable, Equatable {
     case integer(Int64, span: Range<Int>)
     case bytes(Data, span: Range<Int>)
     case list([BencodeValue], span: Range<Int>)
-    case dictionary([String: BencodeValue], span: Range<Int>)
+    /// Dictionary keys are raw bytes, not decoded strings: BEP-52 file-tree
+    /// path elements may be any UTF-8 byte sequence and must round-trip
+    /// byte-for-byte. Look up ASCII field names with `value(for:)`.
+    case dictionary([Data: BencodeValue], span: Range<Int>)
 
     public var span: Range<Int> {
         switch self {
         case .integer(_, let span), .bytes(_, let span), .list(_, let span), .dictionary(_, let span):
             return span
         }
+    }
+}
+
+public extension BencodeValue {
+    /// Looks up an ASCII field name (e.g. "info", "length") by its exact
+    /// UTF-8 bytes. Field names in metainfo are ASCII by convention, so the
+    /// byte form is unambiguous.
+    func value(for key: String) -> BencodeValue? {
+        guard case .dictionary(let dict, _) = self else { return nil }
+        return dict[Data(key.utf8)]
+    }
+}
+
+public extension Dictionary where Key == Data {
+    func value(for key: String) -> Value? {
+        self[Data(key.utf8)]
     }
 }
 
@@ -171,10 +190,9 @@ public enum BencodeParser {
     private static func parseDictionary(_ data: Data, cursor: inout Int, depth: Int) throws -> BencodeValue {
         let start = cursor
         cursor += 1 // 'd'
-        var dict: [String: BencodeValue] = [:]
+        var dict: [Data: BencodeValue] = [:]
         var lastKeyData: Data? = nil
         while let b = data.byte(at: cursor), b != 0x65 /* 'e' */ {
-            let keyStart = cursor
             let keyVal = try parseValue(data, cursor: &cursor, depth: depth + 1)
             guard case .bytes(let keyData, _) = keyVal else {
                 throw BencodeError.invalidDictionaryKey
@@ -186,12 +204,8 @@ public enum BencodeParser {
                 if keyData.lexicographicallyPrecedes(lastKeyData) { throw BencodeError.invalidDictionaryKey }
             }
             lastKeyData = keyData
-            guard let keyString = String(data: keyData, encoding: .utf8) ?? String(data: keyData, encoding: .isoLatin1) else {
-                throw BencodeError.invalidDictionaryKey
-            }
-            _ = keyStart // suppress unused
             let val = try parseValue(data, cursor: &cursor, depth: depth + 1)
-            dict[keyString] = val
+            dict[keyData] = val
         }
         guard data.byte(at: cursor) == 0x65 else { throw BencodeError.truncated }
         cursor += 1 // 'e'

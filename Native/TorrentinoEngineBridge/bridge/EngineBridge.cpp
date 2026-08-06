@@ -35,6 +35,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace torrentino::bridge {
 namespace {
@@ -908,6 +909,31 @@ struct EngineBridge::Impl {
 			if (spec.paused) {
 				atp.flags |= lt::torrent_flags::paused;
 			}
+			// Per-task DHT/PEX/LSD policy (private torrents: trackers are the
+			// only allowed peer source, so discovery is forced off).
+			// libtorrent 2.0 exposes inverted flags: set disable_* to turn the
+			// feature OFF for this torrent, clear it to leave it ON.
+			if (spec.enable_dht >= 0) {
+				if (spec.enable_dht) {
+					atp.flags &= ~lt::torrent_flags::disable_dht;
+				} else {
+					atp.flags |= lt::torrent_flags::disable_dht;
+				}
+			}
+			if (spec.enable_pex >= 0) {
+				if (spec.enable_pex) {
+					atp.flags &= ~lt::torrent_flags::disable_pex;
+				} else {
+					atp.flags |= lt::torrent_flags::disable_pex;
+				}
+			}
+			if (spec.enable_lsd >= 0) {
+				if (spec.enable_lsd) {
+					atp.flags &= ~lt::torrent_flags::disable_lsd;
+				} else {
+					atp.flags |= lt::torrent_flags::disable_lsd;
+				}
+			}
 
 			// NOTE: add_torrent can throw duplicate_torrent; caught below and
 			// reported as a structured engine_failure.
@@ -940,6 +966,47 @@ struct EngineBridge::Impl {
 		} catch (...) {
 			return Result<AddResult>::failed(BridgeError::internal,
 				"add failed: unknown exception");
+		}
+	}
+
+	Result<IndependentTorrentIdentity> verifyTorrent(const std::vector<char>& torrent_file)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (torrent_file.empty()) {
+			return Result<IndependentTorrentIdentity>::failed(
+				BridgeError::invalid_argument, "verifyTorrent: empty torrent file");
+		}
+
+		try {
+			// load_torrent_buffer is the pinned libtorrent parser used by the
+			// production add path. It validates the complete bencoded file and
+			// exposes the identities calculated by libtorrent's torrent_info.
+			const lt::add_torrent_params parsed = lt::load_torrent_buffer(torrent_file);
+			if (!parsed.ti) {
+				return Result<IndependentTorrentIdentity>::failed(
+					BridgeError::engine_failure, "verifyTorrent: libtorrent returned no torrent_info");
+			}
+
+			const lt::info_hash_t hashes = parsed.ti->info_hashes();
+			IndependentTorrentIdentity result;
+			result.has_v1 = hashes.has_v1();
+			result.has_v2 = hashes.has_v2();
+			if (result.has_v1) {
+				result.v1_hash = lt::aux::to_hex(hashes.v1);
+			}
+			if (result.has_v2) {
+				result.v2_hash = lt::aux::to_hex(hashes.v2);
+			}
+			return Result<IndependentTorrentIdentity>::ok(std::move(result));
+		} catch (const lt::system_error& e) {
+			return Result<IndependentTorrentIdentity>::failed(
+				BridgeError::engine_failure, std::string("verifyTorrent parse failed: ") + e.what());
+		} catch (const std::exception& e) {
+			return Result<IndependentTorrentIdentity>::failed(
+				BridgeError::internal, std::string("verifyTorrent parse failed: ") + e.what());
+		} catch (...) {
+			return Result<IndependentTorrentIdentity>::failed(
+				BridgeError::internal, "verifyTorrent parse failed: unknown exception");
 		}
 	}
 
@@ -1088,7 +1155,7 @@ struct EngineBridge::Impl {
 	}
 
 	Result<void> editTrackers(const TorrentRecordID& id,
-		const std::vector<std::string>& trackers)
+		const TrackerTiers& tracker_tiers)
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		const Result<void> startedResult = requireStartedLocked();
@@ -1100,13 +1167,24 @@ struct EngineBridge::Impl {
 			return Result<void>::failed(found.error_code(), found.error_message());
 		}
 		std::vector<lt::announce_entry> entries;
-		entries.reserve(trackers.size());
-		for (const std::string& tracker : trackers) {
-			if (!valid_tracker_url(tracker)) {
+		std::size_t total_urls = 0;
+		for (std::size_t tier_index = 0; tier_index < tracker_tiers.size(); ++tier_index) {
+			const auto& tier = tracker_tiers[tier_index];
+			if (tier.empty()) {
 				return Result<void>::failed(BridgeError::invalid_argument,
-					"editTrackers: tracker URL is malformed or uses an unsupported scheme");
+					"editTrackers: empty tracker tier is invalid");
 			}
-			entries.emplace_back(tracker);
+			for (const std::string& tracker : tier) {
+				if (++total_urls > 512 || !valid_tracker_url(tracker)) {
+					return Result<void>::failed(BridgeError::invalid_argument,
+						"editTrackers: tracker topology is malformed or exceeds the URL limit");
+				}
+				lt::announce_entry entry(tracker);
+				// libtorrent's tier is the outer announce-list index. Do not
+				// deduplicate: repeated URLs at different positions are valid.
+				entry.tier = static_cast<int>(tier_index);
+				entries.emplace_back(std::move(entry));
+			}
 		}
 		try {
 			found.value().replace_trackers(entries);
@@ -1456,6 +1534,20 @@ Result<AddResult> EngineBridge::add(const AddSpecification& spec) noexcept
 	}
 }
 
+Result<IndependentTorrentIdentity> EngineBridge::verifyTorrent(
+	const std::vector<char>& torrent_file) noexcept
+{
+	try {
+		return impl_->verifyTorrent(torrent_file);
+	} catch (const std::exception& e) {
+		return Result<IndependentTorrentIdentity>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<IndependentTorrentIdentity>::failed(
+			BridgeError::internal,
+			detail::internal_message("verifyTorrent: unknown exception"));
+	}
+}
+
 Result<void> EngineBridge::pause(const TorrentRecordID& id) noexcept
 {
 	try {
@@ -1532,16 +1624,24 @@ Result<AppliedTorrentLimits> EngineBridge::currentLimits(const TorrentRecordID& 
 }
 
 Result<void> EngineBridge::editTrackers(const TorrentRecordID& id,
-	const std::vector<std::string>& trackers) noexcept
+	const TrackerTiers& tracker_tiers) noexcept
 {
 	try {
-		return impl_->editTrackers(id, trackers);
+		return impl_->editTrackers(id, tracker_tiers);
 	} catch (const std::exception& e) {
 		return Result<void>::failed(BridgeError::internal, e.what());
 	} catch (...) {
 		return Result<void>::failed(BridgeError::internal,
 			detail::internal_message("editTrackers: unknown exception"));
 	}
+}
+
+Result<void> EngineBridge::editTrackers(const TorrentRecordID&,
+	const std::vector<std::string>&) noexcept
+{
+	return Result<void>::failed(
+		BridgeError::invalid_argument,
+		"editTrackers: scalar tracker payload is unsupported");
 }
 
 Result<void> EngineBridge::reannounce(const TorrentRecordID& id) noexcept

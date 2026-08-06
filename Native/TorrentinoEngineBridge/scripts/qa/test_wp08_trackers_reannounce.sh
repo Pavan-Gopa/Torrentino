@@ -35,7 +35,7 @@ for command in ("fetchTrackers", "editTrackers", "reannounce"):
 
 tracker_match = re.search(r'private func trackers\(request:.*?(?=\n\s*private func peers)', coordinator, re.S)
 tracker_body = tracker_match.group(0) if tracker_match else ""
-if "record.trackers.count" not in tracker_body or "items: [], nextCursor: nil" not in tracker_body:
+if ("record.trackers.count" not in tracker_body and "record.trackerTiers" not in tracker_body and "rows.count" not in tracker_body) or "items: [], nextCursor: nil" not in tracker_body:
     issues.append("empty tracker list does not return a bounded empty page")
 
 reannounce_match = re.search(r'private func handleReannounce\(.*?(?=\n\s*private func handleEditTrackers)', coordinator, re.S)

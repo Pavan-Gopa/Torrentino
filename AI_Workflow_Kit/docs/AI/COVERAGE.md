@@ -1,5 +1,43 @@
 # Torrentino Coverage Matrix — Test Engineer
 
+## WP-11 Coverage Update
+
+**WP:** WP-11 — Torrent Creator CPU Reference & Structured Tracker Topology
+**Updated:** 2026-08-06
+**Principle:** monotonic coverage; prior WP-01..WP-10 scripts remain in the regression base.
+**Suite:** `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+**Result:** 111/112 QA scripts pass. Only `test_wp03_legacy_untouched.sh` fails (ENVIRONMENTAL, waived per ADR-013).
+**XCTest:** 287/287 pass (100% GREEN).
+**Bridge:** `test_bridge_headless.sh` PASS; `test_bridge_swift.sh` PASS.
+
+### WP-11 Gate Mapping
+
+| Gate | Evidence | Status |
+| --- | --- | --- |
+| v1/v2/hybrid independent verification | `testV1V2HybridFormatInterop`, raw-info identity checks | PASS |
+| Source not modified | `testSourceModifiedDuringHashingFails`, manifest generation check | PASS |
+| Cancel leaves no partial output | `testCancelBeforeHashingFailsClosed`, `test_wp11_creator_cancel.sh` | PASS |
+| All edge cases covered | 15.5 matrix tests (15.5-1..15.5-13) | PASS |
+| Creator usable without Metal | `CPUHasher` CPU-only pipeline | PASS |
+
+### WP-11 QA Deliverables
+
+| File | Surface covered | Result |
+| --- | --- | --- |
+| `TorrentCreatorAgentTests.swift` | `testWP11TrackerTopologyVectorPreservesTiersAndRepeatedURLs` | PASS |
+| `TorrentCreatorAgentTests.swift` | `testWP11CreatorAssertedOptionsFailClosed` | PASS |
+| `TorrentCreatorAgentTests.swift` | `testWP11OutputInsideSourceTreeIsExcluded` | PASS |
+| `TorrentCreatorAgentTests.swift` | `testWP11PrivateTrackerRequiresAtLeastOneURL` | PASS |
+| `TorrentCreatorAgentTests.swift` | `testWP11CPUHasherProgressETAAndCancel` | PASS |
+| `test_wp11_creator_asserted_options.sh` | Asserted CreateOptions contract & fail-closed gates | PASS |
+| `test_wp11_tracker_topology.sh` | Structured tracker topology vector & edit | PASS |
+| `test_wp11_schema_v3_topology.sh` | Persistence schema v3 & WAL mode | PASS |
+| `test_wp11_creator_cancel.sh` | Creator cancellation & atomic output transaction | PASS |
+
+---
+
+# Torrentino Coverage Matrix — Test Engineer
+
 ## WP-09 Coverage Update
 
 **WP:** WP-09 — Fault recovery и resource control

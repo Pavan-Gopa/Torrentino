@@ -46,6 +46,9 @@ public enum SuccessPayload: Codable, Sendable, Equatable {
     /// WP-10 fetchPendingRemovals: unsettled removal batches for guided recovery.
     case pendingRemovals([PendingRemovalSummary])
     case createSourceInspection(CreateSourceInspection)
+    /// The agent returns this before creator work starts; the caller never
+    /// supplies or derives the accepted OperationID.
+    case creatorOperationAccepted(CreateOperationAccepted)
     case diagnosticsExport(DiagnosticsExportResult)
     case ack
 }

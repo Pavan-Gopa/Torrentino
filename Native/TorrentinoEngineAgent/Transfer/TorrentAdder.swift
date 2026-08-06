@@ -87,7 +87,10 @@ public enum TorrentAdder {
     /// Inspects raw .torrent bytes: size gate → parse → policy gate.
     public static func inspectTorrentData(_ data: Data, desiredName: String?) throws -> Inspection {
         let metainfo = try Preflight.validateTorrentData(data)
-        let identity = ContentIdentity(infoHashV1: metainfo.infoHashV1, infoHashV2: nil)
+        let identity = ContentIdentity(
+            infoHashV1: metainfo.infoHashV1,
+            infoHashV2: metainfo.infoHashV2
+        )
         return Inspection(
             operationID: AddOperationID(),
             contentIdentity: identity,
@@ -131,22 +134,65 @@ public enum TorrentAdder {
     public static func makeSpecification(
         identity: ContentIdentity,
         metainfoData: Data?,
-        trackers: [String],
+        trackerTiers: [[String]],
         savePath: String,
-        paused: Bool
+        paused: Bool,
+        privateTorrent: Bool = false
     ) -> AddSpecificationDTO {
+        let enableDHT = privateTorrent ? false : nil
+        let enablePEX = privateTorrent ? false : nil
+        let enableLSD = privateTorrent ? false : nil
         if let metainfoData {
-            return AddSpecificationDTO(torrentFile: metainfoData, magnetURI: nil, savePath: savePath, paused: paused)
+            return AddSpecificationDTO(
+                torrentFile: metainfoData,
+                magnetURI: nil,
+                savePath: savePath,
+                paused: paused,
+                enableDHT: enableDHT,
+                enablePEX: enablePEX,
+                enableLSD: enableLSD
+            )
         }
         if let infoHashV1 = identity.infoHashV1 {
             return AddSpecificationDTO(
                 torrentFile: nil,
-                magnetURI: buildMagnetURI(infoHashV1: infoHashV1, trackers: trackers),
+                magnetURI: buildMagnetURI(infoHashV1: infoHashV1, trackers: trackerTiers.flatMap { $0 }),
                 savePath: savePath,
-                paused: paused
+                paused: paused,
+                enableDHT: enableDHT,
+                enablePEX: enablePEX,
+                enableLSD: enableLSD
             )
         }
-        return AddSpecificationDTO(torrentFile: nil, magnetURI: nil, savePath: savePath, paused: paused)
+        return AddSpecificationDTO(
+            torrentFile: nil,
+            magnetURI: nil,
+            savePath: savePath,
+            paused: paused,
+            enableDHT: enableDHT,
+            enablePEX: enablePEX,
+            enableLSD: enableLSD
+        )
+    }
+
+    /// Magnet-only compatibility entry point. Creator/metainfo re-adds use
+    /// the structured overload above; this legacy scalar path has no tiered
+    /// metainfo to reconstruct and is not used for normal restore/admission.
+    public static func makeMagnetCompatibilitySpecification(
+        identity: ContentIdentity,
+        trackers: [String],
+        savePath: String,
+        paused: Bool,
+        privateTorrent: Bool = false
+    ) -> AddSpecificationDTO {
+        makeSpecification(
+            identity: identity,
+            metainfoData: nil,
+            trackerTiers: trackers.isEmpty ? [] : [trackers],
+            savePath: savePath,
+            paused: paused,
+            privateTorrent: privateTorrent
+        )
     }
 
     /// Regenerates a magnet URI from a v1 info hash + trackers (BEP-9).

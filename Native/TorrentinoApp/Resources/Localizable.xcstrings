@@ -205,6 +205,338 @@
         }
       }
     },
+    "creator.new_tier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New tier"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новый уровень"
+          }
+        }
+      }
+    },
+    "creator.tier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Tier %lld" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Уровень %lld" } }
+      }
+    },
+    "creator.summary_file_count_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Files: %lld" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Файлов: %lld" } }
+      }
+    },
+    "creator.summary_total_size_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Total Size: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Общий размер: %@" } }
+      }
+    },
+    "creator.progress_percent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld%%" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%lld%%" } }
+      }
+    },
+    "creator.progress_backend_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Backend: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Бэкенд: %@" } }
+      }
+    },
+    "creator.progress_bytes_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Bytes: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Байт: %@" } }
+      }
+    },
+    "creator.progress_files_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Files: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Файлы: %@" } }
+      }
+    },
+    "creator.progress_eta_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "ETA: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Осталось: %@" } }
+      }
+    },
+    "creator.excluded_files_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Excluded files: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Исключённые файлы: %@" } }
+      }
+    },
+    "creator.skipped_symlinks_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Skipped symlinks: %lld" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Пропущено символических ссылок: %lld" } }
+      }
+    },
+    "creator.manifest_preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "File Manifest Preview:" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Предпросмотр манифеста файлов:" } }
+      }
+    },
+    "creator.default_output_filename": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "new.torrent" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "new.torrent" } }
+      }
+    },
+    "creator.invalid_tracker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Invalid tracker URL. Supported schemes: http, https, udp" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Недопустимый URL трекера. Поддерживаются схемы: http, https, udp" } }
+      }
+    },
+    "creator.reinspection_error_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not re-inspect the source: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось повторно проверить источник: %@" } }
+      }
+    },
+    "creator.manifest_error_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not load the manifest: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось загрузить манифест: %@" } }
+      }
+    },
+    "creator.reinspect_first": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Inspect the source before creating." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Проверьте источник перед созданием." } }
+      }
+    },
+    "creator.creation_error_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not create the torrent: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось создать торрент: %@" } }
+      }
+    },
+    "creator.progress_bytes_value": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%@ / %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%@ / %@" } }
+      }
+    },
+    "creator.progress_files_value": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld / %lld" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%lld / %lld" } }
+      }
+    },
+    "creator.progress_seconds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%llds" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%lld с" } }
+      }
+    },
+    "creator.format_hybrid": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Hybrid (v1 + v2)" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Гибридный (v1 + v2)" } }
+      }
+    },
+    "creator.format_v1": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "v1 (Legacy)" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "v1 (классический)" } }
+      }
+    },
+    "creator.format_v2": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "v2 (Next-Gen)" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "v2 (нового поколения)" } }
+      }
+    },
+    "creator.piece_size_automatic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Automatic" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Автоматически" } }
+      }
+    },
+    "creator.piece_size_kib": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld KiB" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%lld КиБ" } }
+      }
+    },
+    "creator.piece_size_mib": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld MiB" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "%lld МиБ" } }
+      }
+    },
+    "creator.stage.scanning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Scanning" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Сканирование" } }
+      }
+    },
+    "creator.stage.hashing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Hashing" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Хеширование" } }
+      }
+    },
+    "creator.stage.metadata": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Building Metadata" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Построение метаданных" } }
+      }
+    },
+    "creator.stage.writing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Writing Torrent" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Запись торрента" } }
+      }
+    },
+    "creator.stage.verification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Verification" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Проверка" } }
+      }
+    },
+    "creator.stage.seeding": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Starting Seed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Запуск раздачи" } }
+      }
+    },
+    "creator.stage.completed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Completed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Завершено" } }
+      }
+    },
+    "creator.stage.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Failed" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Ошибка" } }
+      }
+    },
+    "creator.backend_cpu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "CPU" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "ЦП" } }
+      }
+    },
+    "creator.operation_cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Operation cancelled" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Операция отменена" } }
+      }
+    },
+    "creator.cancel_error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Could not cancel creation: %@" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось отменить создание: %@" } }
+      }
+    },
+    "creator.fault.private_tracker_missing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "A private torrent needs at least one tracker. Add a tracker and inspect again." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Для приватного торрента нужен хотя бы один трекер. Добавьте трекер и повторите проверку." } }
+      }
+    },
+    "creator.fault.stale_plan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The creator plan is out of date. Inspect the source again before creating." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "План создания устарел. Повторно проверьте источник перед созданием." } }
+      }
+    },
+    "creator.fault.assertion_mismatch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The creation request no longer matches the inspected options. Inspect again." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Запрос создания больше не совпадает с проверенными параметрами. Повторите проверку." } }
+      }
+    },
+    "creator.fault.invalid_options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Review the creator options and inspect the source again." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Проверьте параметры создания и повторно проверьте источник." } }
+      }
+    },
+    "creator.fault.storage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The torrent could not be saved or verified. Choose an available destination and try again. The source was not changed." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось сохранить или проверить торрент. Выберите доступное место и повторите попытку. Источник не изменён." } }
+      }
+    },
+    "creator.fault.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Torrent creation was cancelled. No incomplete output was kept." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Создание торрента отменено. Неполный файл не сохранён." } }
+      }
+    },
+    "creator.fault.operation_conflict": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "This creation operation is no longer active. Start a new creation." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Эта операция создания больше не активна. Начните новое создание." } }
+      }
+    },
+    "creator.fault.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Torrent creation could not start. Try again." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Не удалось начать создание торрента. Повторите попытку." } }
+      }
+    },
     "creator.comment": {
       "extractionState": "manual",
       "localizations": {
@@ -424,6 +756,62 @@
             "value": "Исключения и манифест"
           }
         }
+      }
+    },
+    "creator.progress_backend": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Backend" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Бэкенд" } }
+      }
+    },
+    "creator.progress_bytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Bytes" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Байт" } }
+      }
+    },
+    "creator.progress_files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Files" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Файлы" } }
+      }
+    },
+    "creator.progress_eta": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "ETA" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Осталось" } }
+      }
+    },
+    "creator.progress_eta_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Unavailable" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Недоступно" } }
+      }
+    },
+    "creator.progress_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Unavailable" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Недоступно" } }
+      }
+    },
+    "creator.progress_cancelling": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Cancelling..." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Отмена..." } }
+      }
+    },
+    "creator.progress_cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Cancelled" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Отменено" } }
       }
     },
     "add.failed": {

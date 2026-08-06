@@ -41,6 +41,7 @@ using torrentino::bridge::RemovalResult;
 using torrentino::bridge::RemovalToken;
 using torrentino::bridge::SessionConfiguration;
 using torrentino::bridge::TorrentLimits;
+using torrentino::bridge::TrackerTiers;
 
 int g_failures = 0;
 
@@ -305,11 +306,13 @@ int main()
 		TH_REQUIRE(seedTime.error_code() == BridgeError::unsupported_operation,
 			"unsupported seed-time goal maps to typed unsupported_operation");
 
+		// ADR-017: tracker edits carry the structured [[String]] topology
+		// (TrackerTiers); the scalar overload is a reject-only stub.
 		const auto trackers = bridge.editTrackers(add_result.torrent_id,
-			{"udp://127.0.0.1:1/announce"});
+			TrackerTiers{{"udp://127.0.0.1:1/announce"}});
 		TH_REQUIRE(trackers.is_ok(), "tracker replacement must apply");
 		const auto validIPv6Tracker = bridge.editTrackers(add_result.torrent_id,
-			{"udp://[2001:db8::1]:1/announce"});
+			TrackerTiers{{"udp://[2001:db8::1]:1/announce"}});
 		TH_REQUIRE(validIPv6Tracker.is_ok(), "well-formed IPv6 tracker URL must apply");
 		const std::vector<std::string> invalidTrackerURLs = {
 			"not-a-tracker-url",
@@ -329,12 +332,13 @@ int main()
 			"https://127.0.0.1/ann\nounce",
 		};
 		for (const std::string& invalidURL : invalidTrackerURLs) {
-			const auto invalidTracker = bridge.editTrackers(add_result.torrent_id, {invalidURL});
+			const auto invalidTracker = bridge.editTrackers(add_result.torrent_id,
+				TrackerTiers{{invalidURL}});
 			TH_REQUIRE(!invalidTracker.is_ok(), "malformed tracker URL must be rejected");
 			TH_REQUIRE(invalidTracker.error_code() == BridgeError::invalid_argument,
 				"malformed tracker URL maps to invalid_argument");
 		}
-		const auto emptyTrackers = bridge.editTrackers(add_result.torrent_id, {});
+		const auto emptyTrackers = bridge.editTrackers(add_result.torrent_id, TrackerTiers{});
 		TH_REQUIRE(emptyTrackers.is_ok(), "explicitly empty tracker list must apply");
 		const auto reannounce = bridge.reannounce(add_result.torrent_id);
 		TH_REQUIRE(reannounce.is_ok(), "reannounce must reach the torrent handle");

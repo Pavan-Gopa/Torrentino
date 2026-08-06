@@ -13,11 +13,25 @@
 // (re)start so the UI discards stale deltas.
 
 import Foundation
+import os
 import OSLog
 import TorrentinoIPC
 import TorrentinoDomain
+
+/// Production BridgeTransferEngine conforms in EngineCoordinator.swift. Test
+/// engines intentionally do not expose this capability; their fallback keeps
+/// existing in-memory command tests independent of the native bridge.
+protocol CreatorIndependentVerifier: Sendable {
+    func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity
+}
+
 public actor TransferCoordinator {
     // MARK: - Configuration
+
+    private struct CreatorCancellationState: Sendable {
+        var cancelled: Set<OperationID> = []
+        var active: Set<OperationID> = []
+    }
 
     /// Default pump cadence (production). Tests pass nil to pump manually.
     public static let defaultPumpIntervalNanoseconds: UInt64 = 500_000_000
@@ -25,6 +39,11 @@ public actor TransferCoordinator {
     private let engine: any TransferEngine
     private let persistence: PersistenceStore
     private let eventBus: TransferEventBus
+    /// WP-11: cancellation registry for creator operations accepted by this
+    /// agent. Unknown IDs are never inserted, so a pre-cancel cannot affect a
+    /// later operation. Locked so the sync cancelCheck closure can observe it
+    /// without hopping actors.
+    private let creatorCancellationGate = OSAllocatedUnfairLock(initialState: CreatorCancellationState())
     private let agentVersion: String
     private let defaultSaveLocation: PersistedLocation
     private let pumpIntervalNanoseconds: UInt64?
@@ -47,6 +66,12 @@ public actor TransferCoordinator {
     private var pendingInspectionBytes = 0
     private var idempotencyResults: [IdempotencyKey: CommitAddResult] = [:]
     private var idempotencyOrder: [IdempotencyKey] = []
+    private struct TrackerEditIdempotency: Sendable {
+        let recordID: TorrentRecordID
+        let trackerTiers: [[String]]
+    }
+    private var trackerEditResults: [IdempotencyKey: TrackerEditIdempotency] = [:]
+    private var activeTrackerEditRecords: Set<TorrentRecordID> = []
     private var pumpTask: Task<Void, Never>?
     private let instanceID = UUID()
     private var activeSettings: EngineSettings
@@ -65,6 +90,17 @@ public actor TransferCoordinator {
     private var readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
     private var restartInFlight = false
     private let creatorPlanStore = CreatorPlanStore()
+    /// The actor owns the active-operation set; the lock-backed cancellation
+    /// set is only a synchronous signal observed by the domain actor.
+    private var activeCreatorOperations: Set<OperationID> = []
+    private var activeCreatorPlans: Set<CreatorPlanToken> = []
+    /// Operation identities are minted once per agent lifetime. Retaining
+    /// completed identities prevents a generated collision from being reused.
+    private var acceptedCreatorOperations: Set<OperationID> = []
+    /// Idempotency keys are caller correlation only; replaying one cannot mint
+    /// a second authoritative creator operation.
+    private var acceptedCreatorIdempotencyKeys: Set<IdempotencyKey> = []
+    private var creatorTasks: [OperationID: Task<Void, Never>] = [:]
 
     private static let reannounceCooldown: TimeInterval = 30
     private static let pendingOperationsLimit = 256
@@ -174,13 +210,40 @@ public actor TransferCoordinator {
                 infoHashV1: torrent.infoHashV1.flatMap { TorrentAdder.dataFromHex($0) },
                 infoHashV2: torrent.infoHashV2.flatMap { TorrentAdder.dataFromHex($0) }
             )
-            let metainfoData = (try? await persistence.metainfo(torrentID: torrent.id))?.data
-            let metainfo = metainfoData.flatMap { try? Preflight.validateTorrentData($0) }
+            let metainfoData: Data?
+            do {
+                metainfoData = try await persistence.metainfo(torrentID: torrent.id)?.data
+            } catch {
+                log.error("restore: metainfo integrity failed for \(torrent.id): \(String(describing: error))")
+                continue
+            }
+            let metainfo: Metainfo?
+            do {
+                if let metainfoData {
+                    metainfo = try Preflight.validateTorrentData(metainfoData)
+                } else {
+                    metainfo = nil
+                }
+            } catch {
+                log.error("restore: metainfo parse failed for \(torrent.id): \(String(describing: error))")
+                continue
+            }
             let desired = DesiredTorrentState(rawValue: torrent.state) ?? .paused
             let limits = (try? await persistence.torrentLimits(torrentID: torrent.id)) ?? TorrentinoIPC.TransferLimits()
-            let trackers = (try? await persistence.torrentTrackers(torrentID: torrent.id))
-                ?? metainfo?.trackers
-                ?? []
+            let trackerTiers: [[String]]
+            do {
+                trackerTiers = try await persistence.restoreTorrentTrackerTiers(
+                    torrentID: torrent.id,
+                    metainfoTiers: metainfo?.trackerTiers,
+                    isPrivate: metainfo?.isPrivate ?? false
+                )
+            } catch {
+                // A record without reconciled structured topology is not a
+                // healthy record. In particular, legacy flat-only data never
+                // becomes a guessed singleton-tier in-memory value.
+                log.error("restore: tracker topology failed for \(torrent.id): \(String(describing: error))")
+                continue
+            }
             let saveLocation = Self.normalizedSaveLocation(
                 (try? await persistence.torrentLocation(torrentID: torrent.id))
                     ?? configuredSaveLocation()
@@ -208,7 +271,7 @@ public actor TransferCoordinator {
                 seedsTotal: 0,
                 engineID: nil,
                 metainfoData: metainfoData,
-                trackers: trackers,
+                trackerTiers: trackerTiers,
                 fileSelection: [],
                 saveLocation: saveLocation,
                 addedAt: torrent.addedAt,
@@ -448,7 +511,25 @@ public actor TransferCoordinator {
             return await handleSetFileSelection(request)
         case .requestRecheck(let request):
             return await handleRecheck(request.recordID)
-        case .cancelOperation:
+        case .cancelOperation(let request):
+            guard activeCreatorOperations.contains(request.operationID) else {
+                return .failure(.operationNotFound(details: "creator operation is not active"))
+            }
+            let accepted = creatorCancellationGate.withLock { state in
+                guard state.active.contains(request.operationID) else { return false }
+                state.cancelled.insert(request.operationID)
+                return true
+            }
+            guard accepted else {
+                return .failure(.operationNotFound(details: "creator operation is not active"))
+            }
+            await eventBus.publish([.operationProgress(OperationProgressEvent(
+                operationID: request.operationID,
+                phase: .running,
+                fraction: 0,
+                timestamp: Date(),
+                detail: OperationProgressDetail(stage: "Cancelling", backend: "cpu", isCancelled: true)
+            ))], urgent: true)
             return .success(.ack)
         case .prepareForQuit:
             return .success(.ack)
@@ -602,7 +683,26 @@ public actor TransferCoordinator {
             }
         }
 
+        // Magnet input is the pre-existing scalar compatibility path. Creator
+        // and durable .torrent records always arrive with structured tiers;
+        // only a magnet without announce-list semantics is grouped here.
+        let trackerTiers: [[String]]
+        if let metainfoTiers = inspection.metainfo?.trackerTiers {
+            trackerTiers = metainfoTiers
+        } else if let magnetTrackers = inspection.magnet?.trackers {
+            trackerTiers = magnetTrackers.isEmpty ? [] : [magnetTrackers]
+        } else {
+            trackerTiers = []
+        }
+        let privateTorrent = inspection.metainfo?.isPrivate == true
+        do {
+            try MetainfoParser.validateTrackerTiers(trackerTiers, isPrivate: privateTorrent)
+        } catch {
+            return .failure(.invalidPayload(details: "tracker topology is invalid"))
+        }
+
         // 1. Durable first (journal + row + metainfo) — only then visible.
+        var durableRecordCreated = false
         do {
             try await persistence.addTorrent(StoredTorrent(
                 id: recordID.rawValue.uuidString,
@@ -613,6 +713,7 @@ public actor TransferCoordinator {
                 addedAt: now,
                 quarantined: false
             ))
+            durableRecordCreated = true
             try await persistence.setTorrentLocation(
                 torrentID: recordID.rawValue.uuidString,
                 location: saveLocation
@@ -621,8 +722,25 @@ public actor TransferCoordinator {
             if let sourceData = inspection.sourceData {
                 _ = try await persistence.storeMetainfo(torrentID: recordID.rawValue.uuidString, data: sourceData)
             }
+            try await persistence.setTorrentTrackerTiers(
+                torrentID: recordID.rawValue.uuidString,
+                tiers: trackerTiers,
+                isPrivate: privateTorrent
+            )
             try await persistence.journalMarkCommitted(seq: seq)
         } catch {
+            if durableRecordCreated {
+                do {
+                    try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
+                } catch {
+                    log.error("commitAdd: durable rollback failed for \(recordID): \(String(describing: error))")
+                    return .failure(Self.persistenceFault(
+                        error,
+                        recordID: recordID,
+                        volumeIdentifier: saveLocation.volumeIdentifier
+                    ))
+                }
+            }
             log.error("commitAdd persistence failed: \(String(describing: error))")
             return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: saveLocation.volumeIdentifier))
         }
@@ -659,9 +777,10 @@ public actor TransferCoordinator {
                 let result = try await engine.add(specification: TorrentAdder.makeSpecification(
                     identity: inspection.contentIdentity,
                     metainfoData: inspection.sourceData,
-                    trackers: inspection.magnet?.trackers ?? [],
+                    trackerTiers: trackerTiers,
                     savePath: saveLocation.path,
-                    paused: request.startPaused ?? false
+                    paused: request.startPaused ?? false,
+                    privateTorrent: privateTorrent
                 ))
                 engineID = result.torrentID
             } catch {
@@ -694,7 +813,7 @@ public actor TransferCoordinator {
             seedsTotal: 0,
             engineID: engineID,
             metainfoData: inspection.sourceData,
-            trackers: inspection.magnet?.trackers ?? inspection.metainfo?.trackers ?? [],
+            trackerTiers: trackerTiers,
             fileSelection: selection,
             saveLocation: saveLocation,
             addedAt: now,
@@ -882,15 +1001,30 @@ public actor TransferCoordinator {
         let revision = recordRevisions[record.id] ?? 0
         let pageSize = PageSize.bounded(request.pageSize)
         let start = startIndex(from: request.cursor)
-        guard start < record.trackers.count else {
-            return Page(items: [], nextCursor: nil, totalCount: record.trackers.count, revision: revision)
+        let rows = record.trackerTiers.enumerated().flatMap { tierIndex, tier in
+            tier.enumerated().map { urlIndex, url in
+                (url: url, tierIndex: tierIndex, urlIndex: urlIndex)
+            }
         }
-        let slice = record.trackers[start..<min(start + pageSize, record.trackers.count)]
+        guard start < rows.count else {
+            return Page(items: [], nextCursor: nil, totalCount: rows.count, revision: revision)
+        }
+        let slice = rows[start..<min(start + pageSize, rows.count)]
         let nextStart = start + slice.count
         return Page(
-            items: slice.map { TrackerEntry(url: $0, status: .updating, seeds: 0, peers: 0, message: nil) },
-            nextCursor: nextStart < record.trackers.count ? PageCursor(token: indexToken(nextStart)) : nil,
-            totalCount: record.trackers.count,
+            items: slice.map {
+                TrackerEntry(
+                    url: $0.url,
+                    status: .updating,
+                    seeds: 0,
+                    peers: 0,
+                    message: nil,
+                    tierIndex: $0.tierIndex,
+                    urlIndex: $0.urlIndex
+                )
+            },
+            nextCursor: nextStart < rows.count ? PageCursor(token: indexToken(nextStart)) : nil,
+            totalCount: rows.count,
             revision: revision
         )
     }
@@ -1001,7 +1135,7 @@ public actor TransferCoordinator {
             let specification = TorrentAdder.makeSpecification(
                 identity: record.contentIdentity,
                 metainfoData: record.metainfoData,
-                trackers: record.trackers,
+                trackerTiers: record.trackerTiers,
                 savePath: record.saveLocation.path,
                 paused: record.desiredState == .paused
             )
@@ -1460,7 +1594,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1473,7 +1608,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1486,7 +1622,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1499,7 +1636,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1512,7 +1650,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1526,7 +1665,8 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1547,21 +1687,26 @@ extension TransferRecord {
             totalBytes: totalBytes, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
             downloadBytesPerSec: status.downloadBytesPerSec, uploadBytesPerSec: status.uploadBytesPerSec,
             peersConnected: status.peersConnected, seedsTotal: status.seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: trackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
         return candidate == self ? self : candidate
     }
 
-    fileprivate func withTrackers(_ newTrackers: [String]) -> TransferRecord {
+    fileprivate func withTrackers(
+        trackerTiers: [[String]],
+        metainfoData: Data?
+    ) -> TransferRecord {
         TransferRecord(
             id: id, contentIdentity: contentIdentity, displayName: displayName,
             desiredState: desiredState, activity: activity, health: health,
             totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
             downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
             peersConnected: peersConnected, seedsTotal: seedsTotal,
-            engineID: engineID, metainfoData: metainfoData, trackers: newTrackers,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,
             addedAt: addedAt, revision: revision, limits: limits
         )
@@ -1712,42 +1857,139 @@ extension TransferCoordinator {
         guard let record = records[request.recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
-        let additions = request.addedURLs.compactMap(Self.normalizedTrackerURL)
-        let removals = request.removedURLs.compactMap(Self.normalizedTrackerURL)
-        guard additions.count == request.addedURLs.count,
-              removals.count == request.removedURLs.count else {
-            return .failure(.invalidPayload(details: "tracker URL is invalid"))
+        guard let requestedTiers = request.trackerTiers else {
+            return .failure(.invalidPayload(details: "structured tracker replacement is required"))
         }
-        var updated = record.trackers
-        for added in additions {
-            if !updated.contains(added) { updated.append(added) }
+        guard request.addedURLs.isEmpty, request.removedURLs.isEmpty else {
+            return .failure(.invalidPayload(details: "structured tracker edit cannot mix delta fields"))
         }
-        updated.removeAll { removals.contains($0) }
-        guard updated.count <= TransferLimits.maxTrackers else {
-            return .failure(.invalidPayload(details: "tracker limit exceeded"))
+
+        if let previous = trackerEditResults[request.idempotencyKey] {
+            guard previous.recordID == request.recordID,
+                  previous.trackerTiers == requestedTiers else {
+                return .failure(.creatorOperationConflict(details: "tracker edit idempotency key was reused with a different topology"))
+            }
+            return .success(.ack)
         }
-        guard let engineID = await liveEngineID(for: request.recordID) else {
-            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        guard activeTrackerEditRecords.insert(request.recordID).inserted else {
+            return .failure(.creatorOperationConflict(details: "tracker edit is already active for this record"))
+        }
+        defer { activeTrackerEditRecords.remove(request.recordID) }
+
+        guard let metainfoData = record.metainfoData else {
+            return .failure(.invalidPayload(details: "structured tracker edit requires metainfo"))
+        }
+        let parsedMetainfo: Metainfo
+        do {
+            parsedMetainfo = try Preflight.validateTorrentData(metainfoData)
+        } catch {
+            return .failure(.corruptData(details: "stored metainfo cannot authorize tracker edit"))
+        }
+        guard parsedMetainfo.trackerTiers == record.trackerTiers else {
+            return .failure(.corruptData(details: "record tracker topology does not match metainfo"))
+        }
+        let priorTopologyJSON: Data
+        do {
+            guard let storedJSON = try await persistence.torrentTrackerTopologyJSON(
+                torrentID: request.recordID.rawValue.uuidString
+            ) else {
+                return .failure(.corruptData(details: "structured tracker topology row is missing"))
+            }
+            priorTopologyJSON = storedJSON
+        } catch {
+            return .failure(.corruptData(details: "structured tracker topology row is corrupt"))
         }
         do {
-            try await persistence.setTorrentTrackers(
+            try MetainfoParser.validateTrackerTiers(requestedTiers, isPrivate: parsedMetainfo.isPrivate)
+        } catch {
+            return .failure(.invalidPayload(details: "tracker topology is invalid"))
+        }
+        if requestedTiers == record.trackerTiers {
+            trackerEditResults[request.idempotencyKey] = TrackerEditIdempotency(
+                recordID: request.recordID,
+                trackerTiers: requestedTiers
+            )
+            return .success(.ack)
+        }
+
+        let updatedMetainfoData: Data
+        do {
+            updatedMetainfoData = try MetainfoParser.replacingTrackerTiers(
+                in: metainfoData,
+                with: requestedTiers
+            )
+            let reparsed = try Preflight.validateTorrentData(updatedMetainfoData)
+            guard reparsed.trackerTiers == requestedTiers else {
+                return .failure(.corruptData(details: "structured tracker edit changed topology during metainfo rewrite"))
+            }
+        } catch let fault as EngineFault {
+            return .failure(fault)
+        } catch {
+            return .failure(.corruptData(details: "structured tracker edit cannot update metainfo"))
+        }
+
+        func restoreDurableState() async -> Error? {
+            do {
+                try await persistence.restoreTorrentTrackerTopologyJSON(
+                    torrentID: request.recordID.rawValue.uuidString,
+                    data: priorTopologyJSON,
+                    isPrivate: parsedMetainfo.isPrivate
+                )
+                _ = try await persistence.storeMetainfo(
+                    torrentID: request.recordID.rawValue.uuidString,
+                    data: metainfoData
+                )
+                return nil
+            } catch {
+                return error
+            }
+        }
+
+        do {
+            try await persistence.setTorrentTrackerTiers(
                 torrentID: request.recordID.rawValue.uuidString,
-                trackers: updated
+                tiers: requestedTiers,
+                isPrivate: parsedMetainfo.isPrivate
+            )
+            _ = try await persistence.storeMetainfo(
+                torrentID: request.recordID.rawValue.uuidString,
+                data: updatedMetainfoData
             )
         } catch {
+            if let rollbackError = await restoreDurableState() {
+                return .failure(Self.persistenceFault(
+                    rollbackError,
+                    recordID: request.recordID,
+                    volumeIdentifier: record.saveLocation.volumeIdentifier
+                ))
+            }
             return .failure(Self.persistenceFault(
                 error,
                 recordID: request.recordID,
                 volumeIdentifier: record.saveLocation.volumeIdentifier
             ))
         }
+
+        guard let engineID = await liveEngineID(for: request.recordID) else {
+            if let rollbackError = await restoreDurableState() {
+                return .failure(Self.persistenceFault(
+                    rollbackError,
+                    recordID: request.recordID,
+                    volumeIdentifier: record.saveLocation.volumeIdentifier
+                ))
+            }
+            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        }
         do {
-            try await engine.editTrackers(torrentID: engineID, trackers: updated)
+            try await engine.editTrackers(torrentID: engineID, trackerTiers: requestedTiers)
         } catch {
-            try? await persistence.setTorrentTrackers(
-                torrentID: request.recordID.rawValue.uuidString,
-                trackers: record.trackers
-            )
+            if let rollbackError = await restoreDurableState() {
+                return .failure(Self.persistenceFault(
+                    rollbackError,
+                    recordID: request.recordID,
+                    volumeIdentifier: record.saveLocation.volumeIdentifier
+                ))
+            }
             return .failure(Self.engineFault(
                 error,
                 operation: "editTrackers",
@@ -1755,7 +1997,14 @@ extension TransferCoordinator {
                 fallback: "tracker edit rejected by engine"
             ))
         }
-        records[request.recordID] = (records[request.recordID] ?? record).withTrackers(updated)
+        records[request.recordID] = record.withTrackers(
+            trackerTiers: requestedTiers,
+            metainfoData: updatedMetainfoData
+        )
+        trackerEditResults[request.idempotencyKey] = TrackerEditIdempotency(
+            recordID: request.recordID,
+            trackerTiers: requestedTiers
+        )
         bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         return .success(.ack)
@@ -1768,17 +2017,6 @@ extension TransferCoordinator {
         }
         await pumpOnce()
         return records[recordID]?.engineID
-    }
-
-    private static func normalizedTrackerURL(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let components = URLComponents(string: trimmed),
-              let scheme = components.scheme?.lowercased(),
-              ["http", "https", "udp"].contains(scheme),
-              components.host?.isEmpty == false else {
-            return nil
-        }
-        return trimmed
     }
 
     // MARK: - WP-10 removal (durable two-phase + Trash-only)
@@ -2501,62 +2739,180 @@ extension TransferCoordinator {
         }
     }
 
+    /// Routes a creator's completed metadata through the same durable add path
+    /// as an imported .torrent. Calling the bridge directly here would create
+    /// an engine handle without a persisted TransferRecord or revision.
+    private func admitCreatedTorrent(
+        metainfoData: Data,
+        savePath: String,
+        paused: Bool,
+        expectedTrackerTiers: [[String]],
+        idempotencyKey: IdempotencyKey
+    ) async throws {
+        let parsedMetainfo: Metainfo
+        do {
+            parsedMetainfo = try Preflight.validateTorrentData(metainfoData)
+        } catch {
+            throw EngineFault.corruptData(details: "creator admission metainfo parse failed")
+        }
+        guard parsedMetainfo.trackerTiers == expectedTrackerTiers else {
+            // Admission must compare the generated bytes with the immutable
+            // requested topology before the common durable add path can seed.
+            throw EngineFault.corruptData(details: "creator metainfo tracker topology mismatch")
+        }
+
+        let inspectionResult = await handleInspect(InspectAddSourceRequest(
+            requestID: RequestID(),
+            source: .torrentFileData(metainfoData)
+        ))
+        let addInspection: AddSourceInspection
+        switch inspectionResult {
+        case .success(.addSourceInspection(let inspection)):
+            addInspection = inspection
+        case .failure(let fault):
+            throw fault
+        default:
+            throw EngineFault.internalError(details: "creator admission returned an unexpected inspection payload")
+        }
+
+        defer {
+            // handleCommitAdd removes successful inspections. On a persistence
+            // or admission failure, do not retain creator metadata in the
+            // bounded pending-operation table.
+            if pendingOperations[addInspection.operationID] != nil {
+                removePendingInspection(addInspection.operationID)
+            }
+        }
+
+        let commitResult = await handleCommitAdd(CommitAddRequest(
+            requestID: RequestID(),
+            idempotencyKey: idempotencyKey,
+            operationID: addInspection.operationID,
+            saveLocation: PersistedLocation(path: savePath),
+            startPaused: paused
+        ))
+        switch commitResult {
+        case .success(.commitAdd):
+            return
+        case .failure(let fault):
+            throw fault
+        default:
+            throw EngineFault.internalError(details: "creator admission returned an unexpected commit payload")
+        }
+    }
+
     private func handleCommitCreate(_ request: CommitCreateRequest) async -> EngineCommandResult {
-        let operationID = OperationID()
+        guard request.optionsWereAsserted else {
+            return .failure(.creatorAssertionMissing())
+        }
+        guard !activeCreatorPlans.contains(request.token) else {
+            return .failure(.creatorOperationConflict(details: "creator plan is already being committed"))
+        }
+        guard acceptedCreatorIdempotencyKeys.insert(request.idempotencyKey).inserted else {
+            return .failure(.creatorOperationConflict(details: "creator idempotency key was already used"))
+        }
+
+        var mintedOperationID = OperationID()
+        while acceptedCreatorOperations.contains(mintedOperationID) {
+            mintedOperationID = OperationID()
+        }
+        let operationID = mintedOperationID
+        acceptedCreatorOperations.insert(operationID)
+        activeCreatorPlans.insert(request.token)
+        activeCreatorOperations.insert(operationID)
+        _ = creatorCancellationGate.withLock { state in
+            state.active.insert(operationID)
+        }
+
         await eventBus.publish([.operationProgress(OperationProgressEvent(
             operationID: operationID,
             phase: .started,
             fraction: 0.0,
-            timestamp: Date()
+            timestamp: Date(),
+            detail: OperationProgressDetail(stage: "Scanning", backend: "cpu")
         ))])
 
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runCreatorCommit(request: request, operationID: operationID)
+        }
+        creatorTasks[operationID] = task
+        return .success(.creatorOperationAccepted(CreateOperationAccepted(operationID: operationID)))
+    }
+
+    private func runCreatorCommit(request: CommitCreateRequest, operationID: OperationID) async {
+        let cancelCheck: @Sendable () throws -> Void = { [creatorCancellationGate] in
+            let cancelled = creatorCancellationGate.withLock { $0.cancelled.contains(operationID) }
+            if cancelled { throw HasherError.cancelled }
+        }
+
         do {
-            let _ = try await creatorPlanStore.commitCreate(
+            guard let pinnedVerifier = engine as? any CreatorIndependentVerifier else {
+                throw EngineFault.creatorUnavailable(details: "creator independent verifier is unavailable")
+            }
+            let _ = try await creatorPlanStore.commitCreateVerified(
                 token: request.token,
                 idempotencyKey: request.idempotencyKey,
-                addTorrent: { [engine] metainfoData, savePath, paused in
-                    let spec = AddSpecificationDTO(
-                        torrentFile: metainfoData,
-                        magnetURI: nil,
-                        savePath: savePath,
-                        paused: paused
-                    )
-                    _ = try await engine.add(specification: spec)
+                assertedOptions: request.options,
+                independentVerifier: { data in
+                    try await pinnedVerifier.verifyCreatorTorrent(data: data)
                 },
-                onProgress: { [eventBus] fraction, stage in
-                    Task {
-                        await eventBus.publish([.operationProgress(OperationProgressEvent(
-                            operationID: operationID,
-                            phase: .running,
-                            fraction: fraction,
-                            timestamp: Date()
-                        ))])
-                    }
-                }
+                addTorrent: { [self] metainfoData, savePath, paused, _ in
+                    try await self.admitCreatedTorrent(
+                        metainfoData: metainfoData,
+                        savePath: savePath,
+                        paused: paused,
+                        expectedTrackerTiers: request.options.trackers,
+                        idempotencyKey: request.idempotencyKey
+                    )
+                },
+                onProgress: { [eventBus] fraction, detail in
+                    await eventBus.publish([.operationProgress(OperationProgressEvent(
+                        operationID: operationID,
+                        phase: .running,
+                        fraction: fraction,
+                        timestamp: Date(),
+                        detail: detail
+                    ))])
+                },
+                cancelCheck: cancelCheck
             )
 
+            finishCreatorOperation(operationID, token: request.token)
             await eventBus.publish([.operationCompleted(OperationCompletedEvent(
                 operationID: operationID,
                 outcome: .succeeded,
                 timestamp: Date()
-            ))])
-
-            return .success(.ack)
+            ))], urgent: true)
         } catch let fault as EngineFault {
+            let outcome: OperationOutcome = fault.code == .operationCancelled
+                ? .cancelled
+                : .failed(fault)
+            finishCreatorOperation(operationID, token: request.token)
             await eventBus.publish([.operationCompleted(OperationCompletedEvent(
                 operationID: operationID,
-                outcome: .failed(fault),
+                outcome: outcome,
                 timestamp: Date()
-            ))])
-            return .failure(fault)
+            ))], urgent: true)
         } catch {
-            let fault = EngineFault.storageFailure(details: "commitCreate failed: \(error.localizedDescription)")
+            let fault = EngineFault.creatorStorageFailure(details: "commitCreate failed: \(error.localizedDescription)")
+            finishCreatorOperation(operationID, token: request.token)
             await eventBus.publish([.operationCompleted(OperationCompletedEvent(
                 operationID: operationID,
                 outcome: .failed(fault),
                 timestamp: Date()
-            ))])
-            return .failure(fault)
+            ))], urgent: true)
         }
     }
+
+    private func finishCreatorOperation(_ operationID: OperationID, token: CreatorPlanToken) {
+        activeCreatorOperations.remove(operationID)
+        activeCreatorPlans.remove(token)
+        creatorTasks.removeValue(forKey: operationID)
+        creatorCancellationGate.withLock { state in
+            state.active.remove(operationID)
+            state.cancelled.remove(operationID)
+        }
+    }
+
 }

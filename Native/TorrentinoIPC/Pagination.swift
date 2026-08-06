@@ -126,13 +126,27 @@ public struct TrackerEntry: Codable, Sendable, Equatable {
     public let seeds: Int
     public let peers: Int
     public let message: String?
+    /// Structured position in the asserted announce-list. Repeated URLs are
+    /// represented by distinct rows instead of being collapsed by URL value.
+    public let tierIndex: Int
+    public let urlIndex: Int
 
-    public init(url: String, status: TrackerStatus, seeds: Int, peers: Int, message: String?) {
+    public init(
+        url: String,
+        status: TrackerStatus,
+        seeds: Int,
+        peers: Int,
+        message: String?,
+        tierIndex: Int = 0,
+        urlIndex: Int = 0
+    ) {
         self.url = url
         self.status = status
         self.seeds = seeds
         self.peers = peers
         self.message = message
+        self.tierIndex = tierIndex
+        self.urlIndex = urlIndex
     }
 }
 

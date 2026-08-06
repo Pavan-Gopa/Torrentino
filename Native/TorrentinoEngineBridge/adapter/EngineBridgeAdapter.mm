@@ -13,6 +13,9 @@
 
 #import <Foundation/Foundation.h>
 
+#include <arpa/inet.h>
+#include <cctype>
+
 using torrentino::bridge::AddResult;
 using torrentino::bridge::AddSpecification;
 using torrentino::bridge::AppliedTorrentLimits;
@@ -22,10 +25,12 @@ using torrentino::bridge::EngineAlertDTO;
 using torrentino::bridge::EngineAlertKind;
 using torrentino::bridge::EngineBridge;
 using torrentino::bridge::HealthDTO;
+using torrentino::bridge::IndependentTorrentIdentity;
 using torrentino::bridge::RemovalResult;
 using torrentino::bridge::RemovalToken;
 using torrentino::bridge::ResumeDataDTO;
 using torrentino::bridge::SessionConfiguration;
+using torrentino::bridge::TrackerTiers;
 using torrentino::bridge::TorrentLimits;
 using torrentino::bridge::TorrentRecordID;
 
@@ -133,25 +138,138 @@ void setInvalidArgument(NSError** error, NSString* message)
 	}
 }
 
-bool stringArrayValue(
-	NSDictionary* dict,
-	const char* key,
-	std::vector<std::string>& result,
-	NSError** error)
+bool validTrackerURLValue(NSString* value)
 {
-	id value = dict[jsonKey(key)];
-	if (![value isKindOfClass:[NSArray class]]) {
-		setInvalidArgument(error, [NSString stringWithFormat:@"%s must be an array", key]);
+	if (value == nil || value.length == 0 || value.length > 2048) {
 		return false;
 	}
-	NSArray* array = (NSArray*)value;
-	result.reserve(array.count);
-	for (id item in array) {
-		if (![item isKindOfClass:[NSString class]]) {
-			setInvalidArgument(error, [NSString stringWithFormat:@"%s must contain only strings", key]);
+	for (NSUInteger index = 0; index < value.length; ++index) {
+		unichar character = [value characterAtIndex:index];
+		if ([[NSCharacterSet whitespaceAndNewlineCharacterSet] characterIsMember:character]
+			|| character < 0x20 || character == 0x7f) {
 			return false;
 		}
-		result.emplace_back([(NSString*)item UTF8String]);
+		if (character == '%') {
+			if (index + 2 >= value.length) {
+				return false;
+			}
+			for (NSUInteger escapeIndex = index + 1; escapeIndex <= index + 2; ++escapeIndex) {
+				unichar escaped = [value characterAtIndex:escapeIndex];
+				if (!std::isxdigit(static_cast<unsigned char>(escaped))) {
+					return false;
+				}
+			}
+			index += 2;
+		}
+	}
+	NSURLComponents* components = [NSURLComponents componentsWithString:value];
+	NSString* scheme = components.scheme.lowercaseString;
+	if (!(scheme.length > 0
+			&& ([scheme isEqualToString:@"http"]
+				|| [scheme isEqualToString:@"https"]
+				|| [scheme isEqualToString:@"udp"])
+			&& components.host.length > 0
+			&& components.user == nil)) {
+		return false;
+	}
+	if (components.port != nil
+		&& (components.port.longLongValue <= 0 || components.port.longLongValue > 65535)) {
+		return false;
+	}
+
+	NSString* host = components.host;
+	const char* hostBytes = host.UTF8String;
+	struct in_addr ipv4;
+	struct in6_addr ipv6;
+	if ([host containsString:@":"]) {
+		return hostBytes != nullptr && inet_pton(AF_INET6, hostBytes, &ipv6) == 1;
+	}
+	bool numericDottedHost = host.length > 0;
+	for (NSUInteger index = 0; index < host.length; ++index) {
+		unichar character = [host characterAtIndex:index];
+		if ((character < '0' || character > '9') && character != '.') {
+			numericDottedHost = false;
+			break;
+		}
+	}
+	if (numericDottedHost) {
+		return hostBytes != nullptr && inet_pton(AF_INET, hostBytes, &ipv4) == 1;
+	}
+
+	NSArray<NSString*>* labels = [host componentsSeparatedByString:@"."];
+	if (labels.count > 1 && [labels.lastObject length] == 0) {
+		labels = [labels subarrayWithRange:NSMakeRange(0, labels.count - 1)];
+	}
+	for (NSString* label in labels) {
+		if (label.length == 0 || label.length > 63) {
+			return false;
+		}
+		unichar first = [label characterAtIndex:0];
+		unichar last = [label characterAtIndex:label.length - 1];
+		if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z')
+			|| (first >= '0' && first <= '9'))
+			|| !((last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z')
+				|| (last >= '0' && last <= '9'))) {
+			return false;
+		}
+		for (NSUInteger index = 0; index < label.length; ++index) {
+			unichar character = [label characterAtIndex:index];
+			const bool alphaNumeric = (character >= 'A' && character <= 'Z')
+				|| (character >= 'a' && character <= 'z')
+				|| (character >= '0' && character <= '9');
+			if (!alphaNumeric && character != '-') {
+				return false;
+			}
+		}
+	}
+	return labels.count > 0;
+}
+
+bool trackerTiersValue(
+	NSDictionary* dict,
+	TrackerTiers& result,
+	NSError** error)
+{
+	if (dict[jsonKey("trackers")] != nil
+		|| dict[jsonKey("addedURLs")] != nil
+		|| dict[jsonKey("removedURLs")] != nil) {
+		setInvalidArgument(error, @"mixed or scalar tracker payload is unsupported");
+		return false;
+	}
+	id value = dict[jsonKey("tracker-tiers")];
+	if (![value isKindOfClass:[NSArray class]]) {
+		setInvalidArgument(error, @"tracker-tiers must be an array of arrays");
+		return false;
+	}
+	NSArray* tiers = (NSArray*)value;
+	std::size_t total = 0;
+	result.reserve(tiers.count);
+	for (id tierValue in tiers) {
+		if (![tierValue isKindOfClass:[NSArray class]]) {
+			setInvalidArgument(error, @"tracker-tiers must contain arrays");
+			return false;
+		}
+		NSArray* tier = (NSArray*)tierValue;
+		if (tier.count == 0) {
+			setInvalidArgument(error, @"tracker-tiers cannot contain an empty tier");
+			return false;
+		}
+		std::vector<std::string> urls;
+		urls.reserve(tier.count);
+		for (id urlValue in tier) {
+			if (![urlValue isKindOfClass:[NSString class]]
+				|| !validTrackerURLValue((NSString*)urlValue)) {
+				setInvalidArgument(error, @"tracker-tiers contains an invalid URL");
+				return false;
+			}
+			++total;
+			if (total > 512) {
+				setInvalidArgument(error, @"tracker-tiers exceeds the URL limit");
+				return false;
+			}
+			urls.emplace_back([(NSString*)urlValue UTF8String]);
+		}
+		result.emplace_back(std::move(urls));
 	}
 	return true;
 }
@@ -243,7 +361,21 @@ AddSpecification addSpecificationFromJSON(NSDictionary* dict)
 	spec.magnet_uri = std::string(stringValue(dict, "magnet-uri", @"").UTF8String);
 	spec.save_path = std::string(stringValue(dict, "save-path", @"").UTF8String);
 	spec.paused = boolValue(dict, "paused", false);
+	// Per-task policy: missing key = -1 (engine default), present = 0/1.
+	spec.enable_dht = (int)int64Value(dict, "enable-dht", -1);
+	spec.enable_pex = (int)int64Value(dict, "enable-pex", -1);
+	spec.enable_lsd = (int)int64Value(dict, "enable-lsd", -1);
 	return spec;
+}
+
+std::vector<char> rawTorrentBytes(NSData* data)
+{
+	std::vector<char> bytes;
+	if (data.length > 0) {
+		bytes.assign(static_cast<const char*>(data.bytes),
+			static_cast<const char*>(data.bytes) + data.length);
+	}
+	return bytes;
 }
 
 NSDictionary* bootReportToJSON(const BootReport& report)
@@ -262,6 +394,16 @@ NSDictionary* addResultToJSON(const AddResult& result)
 		jsonKey("info-hash") : [NSString stringWithUTF8String:result.info_hash.c_str()],
 		jsonKey("name") : [NSString stringWithUTF8String:result.name.c_str()],
 		jsonKey("total-size") : @(result.total_size),
+	};
+}
+
+NSDictionary* independentTorrentIdentityToJSON(const IndependentTorrentIdentity& identity)
+{
+	return @{
+		jsonKey("has-v1") : @(identity.has_v1),
+		jsonKey("has-v2") : @(identity.has_v2),
+		jsonKey("v1-hash") : [NSString stringWithUTF8String:identity.v1_hash.c_str()],
+		jsonKey("v2-hash") : [NSString stringWithUTF8String:identity.v2_hash.c_str()],
 	};
 }
 
@@ -447,7 +589,7 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 }
 
 - (nullable NSData *)addTorrentWithSpecificationData:(NSData *)specificationData
-											   error:(NSError *_Nullable *_Nullable)error
+															   error:(NSError *_Nullable *_Nullable)error
 {
 	return runBridge([&]() -> NSData* {
 		NSDictionary* dict = toJSON(specificationData, error);
@@ -457,6 +599,19 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		const AddSpecification spec = addSpecificationFromJSON(dict);
 		auto result = _engine->add(spec);
 		return resultToData(result, addResultToJSON, error);
+	}, error);
+}
+
+- (nullable NSData *)verifyTorrentWithData:(NSData *)torrentData
+															 error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		if (torrentData == nil || torrentData.length == 0) {
+			setInvalidArgument(error, @"empty torrent payload");
+			return nil;
+		}
+		const std::vector<char> bytes = rawTorrentBytes(torrentData);
+		return resultToData(_engine->verifyTorrent(bytes), independentTorrentIdentityToJSON, error);
 	}, error);
 }
 
@@ -548,11 +703,11 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 			return nil;
 		}
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
-		std::vector<std::string> trackers;
-		if (!stringArrayValue(dict, "trackers", trackers, error)) {
+		TrackerTiers trackerTiers;
+		if (!trackerTiersValue(dict, trackerTiers, error)) {
 			return nil;
 		}
-		return voidResultToData(_engine->editTrackers(id, trackers), error);
+		return voidResultToData(_engine->editTrackers(id, trackerTiers), error);
 	}, error);
 }
 

@@ -1,3 +1,51 @@
+# Torrentino QA Coverage — WP-11 Torrent Creator & Structured Tracker Topology
+
+Updated: 2026-08-06 (Test Engineer, WP-11 QA cycle)
+Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+**WP-11 result:** **PRODUCT GREEN; ALL XCTESTS & QA SCRIPTS PASS**
+**Last full suite:** **111/112 PASS; 1 ENVIRONMENTAL Legacy FAIL (waived per ADR-013)**
+**Full XCTest run:** **287/287 PASS (100% GREEN)**
+
+## WP-11 Feature Matrix
+
+| # | Feature | Dedicated evidence | Happy | Error / invalid | Recovery / edge | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Creator v1/v2/hybrid options assertion | `test_wp11_creator_asserted_options.sh`; `testWP11CreatorAssertedOptionsFailClosed` | `commitCreateVerified` with matching asserted options | unasserted `commitCreate` throws `creatorAssertionMissing`; mismatched options throw `creatorAssertionMismatch` | token invalidated on form change / superseded plan | covered / PASS |
+| 2 | Structured tracker topology (`[[String]]`) | `test_wp11_tracker_topology.sh`; `testWP11TrackerTopologyVectorPreservesTiersAndRepeatedURLs`; `testEditTrackers` | ordered tiers, URL order, repeated URLs preserved across boundaries | malformed URL, invalid inner tier, >512 URLs rejected | structured replacement; scalar delta fields rejected | covered / PASS |
+| 3 | Persistence schema v3 (`torrent_tracker_topology`) | `test_wp11_schema_v3_topology.sh`; `testOpenCreatesSchemaWithWAL` | version 3, WAL mode, versioned JSON envelope + SHA-256 + generation | corrupt JSON / checksum mismatch fails closed | schema v2 migration; metainfo reconciliation | covered / PASS |
+| 4 | Source scan & output exclusion | `testWP11OutputInsideSourceTreeIsExcluded` | output inside source tree excluded from manifest | source file modified during scan/hash fails closed | exact canonical output leaf excluded via aliases (/tmp /var) | covered / PASS |
+| 5 | Atomic output transaction & cancellation | `test_wp11_creator_cancel.sh`; `testCancelBeforeHashingFailsClosed`; `testWP11CPUHasherProgressETAAndCancel` | descriptor-relative temp/final/rename/sync | ENOSPC / read-only dir / missing dir fails closed | cancellation before seeding leaves zero temp/final artifacts | covered / PASS |
+| 6 | Independent metadata & info hash verification | `testV1V2HybridFormatInterop`; `testSingleFileCommitUsesParentDirectorySavePath` | raw-info SHA-1 v1 / SHA-256 v2 match pinned libtorrent identity | v1/v2 identity mismatch or parse failure fails closed | single-file seed uses parent directory savePath | covered / PASS |
+| 7 | Private-tracker admission | `testWP11PrivateTrackerRequiresAtLeastOneURL` | private torrent with >=1 URL admits and disables DHT/PEX/LSD | private torrent with 0 URLs rejected before persistence/engine | scalar tracker field cannot bypass private admission | covered / PASS |
+| 8 | Agent-authoritative operation identity & cancellation | `testCreatorSeedUsesDurableAddPathAndContainingDirectory`; `TransferSmokeTests` | agent mints `OperationID` and returns `createOperationAccepted` | cancellation of non-existent or inactive operation rejected | terminal cancellation state observable in UI projection | covered / PASS |
+
+## WP-11 Gate Matrix
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| v1/v2/hybrid independent verification | `testV1V2HybridFormatInterop`, raw-info SHA-1/SHA-256 verifier | PASS |
+| Source not modified | `testSourceModifiedDuringHashingFails`, manifest generation check | PASS |
+| Cancel leaves no partial output | `testCancelBeforeHashingFailsClosed`, `testWP11CPUHasherProgressETAAndCancel` | PASS |
+| All edge cases covered (zero-byte, unreadable, overlong, etc.) | 15.5 matrix tests (15.5-1..15.5-13) | PASS |
+| Creator usable without Metal | `CPUHasher` CPU-only pipeline, strict concurrency | PASS |
+
+## New XCTest & QA Script Inventory
+
+New WP-11 XCTests added:
+- `testWP11TrackerTopologyVectorPreservesTiersAndRepeatedURLs`
+- `testWP11CreatorAssertedOptionsFailClosed`
+- `testWP11OutputInsideSourceTreeIsExcluded`
+- `testWP11PrivateTrackerRequiresAtLeastOneURL`
+- `testWP11CPUHasherProgressETAAndCancel`
+
+New WP-11 QA scripts added:
+- `test_wp11_creator_asserted_options.sh`
+- `test_wp11_tracker_topology.sh`
+- `test_wp11_schema_v3_topology.sh`
+- `test_wp11_creator_cancel.sh`
+
+---
+
 # Torrentino QA Coverage — WP-10 Safe File Operations
 
 Updated: 2026-08-04 (Test Engineer, WP-10 re-run after `0ec428f`)

@@ -1,20 +1,15 @@
-current_step: WP-11
+current_step: WP-12
 step_description: >-
-  Torrent Creator CPU reference: production-correct v1/v2/hybrid creator per
-  plan §15 (Creator sheet UI, source scan/exclusions, tracker tiers/private,
-  piece size, CPU hashing with progress/cancel, inspectCreateSource +
-  CreatorPlanToken + commitCreate, atomic output, identity validation,
-  independent parse/recheck, start seeding). No Metal dependency.
+  Metal research per plan §12: CPU/libtorrent baselines, experimental Metal
+  backend, known/randomized/stress correctness, benchmark corpus,
+  failure/cancel/fallback tests, energy/thermal/memory analysis, recheck
+  supported-hook verification. Outcome: measured ADOPT_METAL or REJECT_METAL
+  with a formal ADR. REJECT is a normal successful outcome.
 target_files:
-- Native/TorrentinoApp/
-- Native/TorrentinoEngineAgent/
-- Native/TorrentinoIPC/
-- Native/TorrentinoDomain/
 - Native/TorrentinoHashing/
-- Native/TorrentinoEngineBridge/
 - Native/Tests/
-- Native/Torrentino.xcodeproj/
-- Native/TorrentinoEngineBridge/scripts/qa/
+- Native/TorrentinoEngineBridge/scripts/
+- AI_Workflow_Kit/docs/DECISIONS.md
 completed_steps:
 - WP-00
 - WP-01
@@ -27,58 +22,45 @@ completed_steps:
 - WP-08
 - WP-09
 - WP-10
+- WP-11
 implementation:
-  status: done
-  attempts: 1
+  status: pending
+  attempts: 0
   note: >-
-    Fix round 1 complete: both FEEDBACK §5 harness defects fixed
-    (bridge_smoke.cpp explicit TrackerTiers; test_bridge_swift.sh source
-    paths/module order). Two masked harness defects also fixed and flagged
-    for attribution: FileKind shim collision (test_bridge_swift.sh) and
-    stale scalar-tracker expectations in bridge_swift_test.swift (harness
-    input file, outside the two-file mandate). Evidence: build green,
-    test_bridge_headless.sh exit 0, four WP-04 helpers PASS, QA 107/112
-    with remainder classified (1 Human env dirt, 4 Tester-owned).
+    WP-11 closed PRODUCT GREEN: review APPROVED, XCTest 287/287, QA 111/112
+    (sole failure = Legacy env dirt, Human-owned, waived per ADR-013),
+    BUG_REPORT verdict NO PRODUCT BUGS DETECTED.
 review:
-  status: approved
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: approved
-  note: >-
-    Fix round 1 re-review APPROVED: both harness fixes verified, scope
-    extension attributed harness-only and ADR-017-conforming, product
-    contracts intact. 9 red XCTests + 4 stale QA scripts confirmed
-    Tester-owned; Legacy dirt Human-owned (waived WP-10).
+  verdict: pending
+  note: Awaiting WP-12 research implementation.
 qa:
-  status: in_progress
+  status: pending
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-11
+  suite: WP-12
   bugs_open: none
-  note: >-
-    Tester QA phase: functional gap-hunt for WP-11/ADR-016/ADR-017 plus
-    rewrite of the 9 stale XCTests and 4 stale QA scripts to the current
-    contracts. Target: full XCTest + QA suite green (Legacy env script
-    waived).
-next_actor: tester
-track: PRODUCT
+  note: Blocked until WP-12 implementation receives Reviewer APPROVED.
+next_actor: coder
+track: RESEARCH
 prior_track: PRODUCT
 working_roots:
 - .
 security_engineer: on_demand_only
 checkpoint:
-  last_pre_tag: torrentino/pre-WP-11
-  last_post_tag: torrentino/WP-10-done
-  last_commit: 9e920a8
+  last_pre_tag: torrentino/pre-WP-12
+  last_post_tag: torrentino/WP-11-done
+  last_commit: PENDING_POST_COMMIT
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Re-review fix round 1 (harness-only): verify the two FEEDBACK §5 fixes and
-  the flagged scope extension to bridge_swift_test.swift; independently re-run
-  build, test_bridge_headless.sh, the four WP-04 helpers, and run_qa_suite.sh.
+  Pending WP-12 implementation; will review research evidence, correctness
+  gates, benchmark corpus, and the draft ADR against plan §12.
 coder_brief: |
-  Fix only the two Reviewer-listed harness defects (FEEDBACK §5 items 1-2):
-  bridge_smoke.cpp editTrackers TrackerTiers initializer ambiguity and
-  test_bridge_swift.sh stale TorrentinoDomain source paths. Do not touch
-  approved ADR-017 product contracts, test sources, or Legacy.
+  WP-12 Metal research: execute plan §12 work items (baselines, experimental
+  Metal backend, correctness, benchmark corpus, failure/cancel/fallback,
+  energy/thermal/memory, recheck hook), then record measured ADOPT_METAL or
+  REJECT_METAL as a formal ADR in DECISIONS.md. REJECT is a normal outcome.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

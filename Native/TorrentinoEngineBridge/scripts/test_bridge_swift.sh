@@ -73,16 +73,24 @@ clang++ -std=c++17 -O1 -fexceptions \
 
 echo "==> building TorrentinoIPC module [Swift 6, strict concurrency]"
 swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
-	-module-name TorrentinoDomain \
-	-emit-module -emit-module-path "${BUILD_DIR}/TorrentinoDomain.swiftmodule" \
-	-emit-library -o "${BUILD_DIR}/libTorrentinoDomain.dylib" \
-	"${NATIVE_DIR}/TorrentinoDomain/"*.swift
-
-swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
 	-module-name TorrentinoIPC \
 	-emit-module -emit-module-path "${BUILD_DIR}/TorrentinoIPC.swiftmodule" \
 	-emit-library -o "${BUILD_DIR}/libTorrentinoIPC.dylib" \
 	"${NATIVE_DIR}/TorrentinoIPC/"*.swift
+
+# TorrentinoDomain is built against the freshly built TorrentinoIPC module so
+# its #if canImport(TorrentinoIPC) shims (EngineFault/FileKind/Page fallbacks)
+# stay out: the agent sources compiled below import both modules, and the
+# standalone shims would otherwise collide with the real IPC types.
+echo "==> building TorrentinoDomain module [Swift 6, strict concurrency]"
+swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
+	-module-name TorrentinoDomain \
+	-I "${BUILD_DIR}" \
+	-emit-module -emit-module-path "${BUILD_DIR}/TorrentinoDomain.swiftmodule" \
+	-emit-library -o "${BUILD_DIR}/libTorrentinoDomain.dylib" \
+	-L "${BUILD_DIR}" -lTorrentinoIPC \
+	-Xlinker -rpath -Xlinker "${BUILD_DIR}" \
+	"${NATIVE_DIR}/TorrentinoDomain/"*.swift
 
 echo "==> building + linking swift integration test"
 BINARY="${BUILD_DIR}/bridge-swift-test"
@@ -101,11 +109,8 @@ AGENT_SOURCES=(
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/ShutdownCoordinator.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/SQLiteConnection.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/StartupReconciler.swift"
-	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/BencodeParser.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/BridgeTransferEngine.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/HTTPSourceFetcher.swift"
-	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MagnetParser.swift"
-	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Metainfo.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/MoveStorageRecovery.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/Preflight.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Transfer/RemovalManifest.swift"

@@ -157,12 +157,30 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
     public let magnetURI: String?
     public let savePath: String
     public let paused: Bool
+    /// Per-task DHT/PEX/LSD policy (WP-11 private-torrent invariant). nil
+    /// leaves the engine default; false explicitly disables the feature for
+    /// this torrent (required for private torrents: no tracker-independent
+    /// peer discovery).
+    public let enableDHT: Bool?
+    public let enablePEX: Bool?
+    public let enableLSD: Bool?
 
-    public init(torrentFile: Data? = nil, magnetURI: String? = nil, savePath: String, paused: Bool = false) {
+    public init(
+        torrentFile: Data? = nil,
+        magnetURI: String? = nil,
+        savePath: String,
+        paused: Bool = false,
+        enableDHT: Bool? = nil,
+        enablePEX: Bool? = nil,
+        enableLSD: Bool? = nil
+    ) {
         self.torrentFile = torrentFile
         self.magnetURI = magnetURI
         self.savePath = savePath
         self.paused = paused
+        self.enableDHT = enableDHT
+        self.enablePEX = enablePEX
+        self.enableLSD = enableLSD
     }
 
     enum CodingKeys: String, CodingKey {
@@ -170,6 +188,26 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         case magnetURI = "magnet-uri"
         case savePath = "save-path"
         case paused = "paused"
+        case enableDHT = "enable-dht"
+        case enablePEX = "enable-pex"
+        case enableLSD = "enable-lsd"
+    }
+}
+
+/// Complete structured tracker replacement crossing the Swift/ObjC++ value
+/// boundary. The scalar compatibility payload is intentionally not modeled.
+public struct EditTrackersDTO: Codable, Sendable, Equatable {
+    public let torrentID: String
+    public let trackerTiers: [[String]]
+
+    public init(torrentID: String, trackerTiers: [[String]]) {
+        self.torrentID = torrentID
+        self.trackerTiers = trackerTiers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case torrentID = "torrent-id"
+        case trackerTiers = "tracker-tiers"
     }
 }
 
@@ -199,6 +237,30 @@ public struct AddResultDTO: Codable, Sendable, Equatable {
         case infoHash = "info-hash"
         case name = "name"
         case totalSize = "total-size"
+    }
+}
+
+/// Identities returned by the pinned libtorrent parser for a complete
+/// .torrent byte buffer. Hash strings are lowercase hex; presence is explicit
+/// so v1, v2, and hybrid shapes cannot be inferred from an empty value.
+public struct IndependentTorrentIdentityDTO: Codable, Sendable, Equatable {
+    public let hasV1: Bool
+    public let hasV2: Bool
+    public let v1Hash: String
+    public let v2Hash: String
+
+    public init(hasV1: Bool, hasV2: Bool, v1Hash: String, v2Hash: String) {
+        self.hasV1 = hasV1
+        self.hasV2 = hasV2
+        self.v1Hash = v1Hash
+        self.v2Hash = v2Hash
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hasV1 = "has-v1"
+        case hasV2 = "has-v2"
+        case v1Hash = "v1-hash"
+        case v2Hash = "v2-hash"
     }
 }
 

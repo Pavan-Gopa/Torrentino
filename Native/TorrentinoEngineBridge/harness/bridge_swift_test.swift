@@ -85,40 +85,60 @@ struct BridgeSwiftTest {
                 // Expected: invalid values stay invalid at the native boundary.
             }
 
-            // --- trackers: replacement, explicit empty list and reannounce --
+            // --- trackers: structured [[String]] topology replacement, explicit
+            // empty list and reannounce (ADR-017; scalar edit is reject-only).
             try await coordinator.editTrackers(
                 torrentID: torrentID,
-                trackers: ["udp://127.0.0.1:1/announce", "https://127.0.0.1/announce"]
+                trackerTiers: [["udp://127.0.0.1:1/announce", "https://127.0.0.1/announce"]]
             )
-            try await coordinator.editTrackers(torrentID: torrentID, trackers: [])
+            try await coordinator.editTrackers(torrentID: torrentID, trackerTiers: [])
             try await coordinator.reannounce(torrentID: torrentID)
 
             do {
-                try await coordinator.editTrackers(torrentID: torrentID, trackers: ["not-a-tracker-url"])
-                fatalError("malformed tracker URL must throw invalidArgument")
-            } catch EngineCoordinatorError.invalidArgument {
-                // Expected: the C++ boundary validates tracker syntax.
+                try await coordinator.editTrackers(torrentID: torrentID, trackerTiers: [["not-a-tracker-url"]])
+                fatalError("malformed tracker URL must throw malformedPayload")
+            } catch EngineCoordinatorError.malformedPayload {
+                // Expected: topology validation is fail-closed before the adapter.
             }
 
-            // The Swift method type cannot represent a malformed element, so
-            // exercise the adapter's JSON boundary directly for this contract.
-            let adapter = TorrentinoEngineBridgeAdapter()
-            let nonArrayTrackers = Data(#"{"torrent-id":"ignored","trackers":{}}"#.utf8)
             do {
-                _ = try adapter.editTrackers(withPayloadData: nonArrayTrackers)
+                try await coordinator.editTrackers(torrentID: torrentID, trackers: ["udp://127.0.0.1:1/announce"])
+                try await coordinator.editTrackers(torrentID: torrentID, trackers: [])
+                fatalError("scalar tracker edit must be rejected")
+            } catch EngineCoordinatorError.malformedPayload {
+                // Expected: ADR-017 scalar edits — including the empty list —
+                // are reject-only; explicit empty replacement is trackerTiers: [].
+            }
+
+            // The structured contract is exercised over the adapter's JSON
+            // boundary directly: non-array/non-string tiers and the legacy
+            // scalar surface must all map to invalidArgument.
+            let adapter = TorrentinoEngineBridgeAdapter()
+            let nonArrayTiers = Data(#"{"torrent-id":"ignored","tracker-tiers":{}}"#.utf8)
+            do {
+                _ = try adapter.editTrackers(withPayloadData: nonArrayTiers)
                 fatalError("non-array tracker payload must throw invalidArgument")
             } catch let error as NSError {
                 guard error.code == 5 else {
                     fatalError("non-array tracker payload returned unexpected error: \(error.code)")
                 }
             }
-            let malformedTrackers = Data(#"{"torrent-id":"ignored","trackers":["udp://127.0.0.1:1/announce",7]}"#.utf8)
+            let malformedTiers = Data(#"{"torrent-id":"ignored","tracker-tiers":[["udp://127.0.0.1:1/announce",7]]}"#.utf8)
             do {
-                _ = try adapter.editTrackers(withPayloadData: malformedTrackers)
+                _ = try adapter.editTrackers(withPayloadData: malformedTiers)
                 fatalError("non-string tracker payload element must throw invalidArgument")
             } catch let error as NSError {
                 guard error.code == 5 else {
                     fatalError("malformed tracker payload returned unexpected error: \(error.code)")
+                }
+            }
+            let scalarPayload = Data(#"{"torrent-id":"ignored","trackers":["udp://127.0.0.1:1/announce"]}"#.utf8)
+            do {
+                _ = try adapter.editTrackers(withPayloadData: scalarPayload)
+                fatalError("scalar trackers payload must throw invalidArgument")
+            } catch let error as NSError {
+                guard error.code == 5 else {
+                    fatalError("scalar trackers payload returned unexpected error: \(error.code)")
                 }
             }
 
@@ -220,25 +240,44 @@ struct BridgeSwiftTest {
                 fatalError("native invalid limit must not change persisted limits")
             }
 
+            // The magnet fixture carries no metainfo, so ADR-017 admission
+            // fails closed at the IPC boundary: structured edits require a
+            // metainfo-backed record, and scalar delta fields are rejected.
             let agentTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: agentRecordID,
-                addedURLs: ["udp://127.0.0.1:1/announce"],
-                removedURLs: []
+                addedURLs: [],
+                removedURLs: [],
+                trackerTiers: [["udp://127.0.0.1:1/announce"]]
             ))))
-            guard case .success(.ack) = Self.decode(agentTrackers).result else {
-                fatalError("real tracker replacement must succeed at IPC")
+            guard case .failure(let metainfoFault) = Self.decode(agentTrackers).result,
+                  metainfoFault.code == .invalidPayload else {
+                fatalError("structured tracker edit on a metainfo-less record must fail closed: \(String(describing: Self.decode(agentTrackers).result))")
             }
             let agentEmptyTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: agentRecordID,
                 addedURLs: [],
-                removedURLs: ["udp://127.0.0.1:1/announce"]
+                removedURLs: [],
+                trackerTiers: []
             ))))
-            guard case .success(.ack) = Self.decode(agentEmptyTrackers).result else {
-                fatalError("real empty tracker replacement must succeed at IPC")
+            guard case .failure(let emptyFault) = Self.decode(agentEmptyTrackers).result,
+                  emptyFault.code == .invalidPayload else {
+                fatalError("empty tracker edit on a metainfo-less record must fail closed: \(String(describing: Self.decode(agentEmptyTrackers).result))")
+            }
+            let agentMixedTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: agentRecordID,
+                addedURLs: ["udp://127.0.0.1:1/announce"],
+                removedURLs: [],
+                trackerTiers: [["udp://127.0.0.1:1/announce"]]
+            ))))
+            guard case .failure(let mixedFault) = Self.decode(agentMixedTrackers).result,
+                  mixedFault.code == .invalidPayload else {
+                fatalError("scalar delta fields must remain rejected at IPC: \(String(describing: Self.decode(agentMixedTrackers).result))")
             }
             let agentReannounce = await agent.processCommand(Self.encode(.reannounce(ReannounceRequest(
                 requestID: RequestID(),

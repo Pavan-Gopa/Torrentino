@@ -166,6 +166,105 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         )
     }
 
+    // MARK: - Creator presentation faults
+
+    /// Creator faults use stable catalog keys while retaining technical detail
+    /// only for diagnostics. These constructors keep recovery advice separate
+    /// from paths, tracker data, and internal exception text.
+    public static func creatorPrivateTrackerMissing() -> EngineFault {
+        EngineFault(
+            code: .invalidPayload,
+            severity: .error,
+            localizationKey: "creator.fault.private_tracker_missing",
+            recoveryActions: ["add_tracker", "reinspect_source"],
+            redactedContext: "private torrent has no validated tracker"
+        )
+    }
+
+    public static func creatorStalePlan(details: String = "creator plan is stale") -> EngineFault {
+        EngineFault(
+            code: .invalidPayload,
+            severity: .error,
+            localizationKey: "creator.fault.stale_plan",
+            recoveryActions: ["reinspect_source"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorAssertionMissing(details: String = "creator options assertion is missing") -> EngineFault {
+        EngineFault(
+            code: .invalidPayload,
+            severity: .error,
+            localizationKey: "creator.fault.assertion_mismatch",
+            recoveryActions: ["reinspect_source"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorAssertionMismatch(details: String = "creator options differ from the inspected plan") -> EngineFault {
+        EngineFault(
+            code: .invalidPayload,
+            severity: .error,
+            localizationKey: "creator.fault.assertion_mismatch",
+            recoveryActions: ["reinspect_source"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorInvalidOptions(details: String = "creator options are invalid") -> EngineFault {
+        EngineFault(
+            code: .invalidPayload,
+            severity: .error,
+            localizationKey: "creator.fault.invalid_options",
+            recoveryActions: ["review_options", "reinspect_source"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorStorageFailure(
+        details: String,
+        volumeIdentifier: String? = nil
+    ) -> EngineFault {
+        EngineFault(
+            code: .storeError,
+            severity: .error,
+            affectedVolume: volumeIdentifier,
+            localizationKey: "creator.fault.storage",
+            recoveryActions: ["choose_storage", "retry_op"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorCancelled(details: String = "creator operation cancelled") -> EngineFault {
+        EngineFault(
+            code: .operationCancelled,
+            severity: .info,
+            localizationKey: "creator.fault.cancelled",
+            recoveryActions: [],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorOperationConflict(details: String) -> EngineFault {
+        EngineFault(
+            code: .idempotencyConflict,
+            severity: .warning,
+            localizationKey: "creator.fault.operation_conflict",
+            recoveryActions: ["start_new_creation"],
+            redactedContext: details
+        )
+    }
+
+    public static func creatorUnavailable(details: String) -> EngineFault {
+        EngineFault(
+            code: .internalError,
+            severity: .error,
+            localizationKey: "creator.fault.unavailable",
+            recoveryActions: ["retry_op", "restart_engine_safely"],
+            redactedContext: details
+        )
+    }
+
     public static func invalidArgument(details: String, recordID: TorrentRecordID? = nil) -> EngineFault {
         EngineFault(
             code: .invalidArgument,
@@ -372,6 +471,7 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         }
         if text.contains("volume unavailable") || text.contains("not mounted")
             || text.contains("no such file") || text.contains("enoent")
+            || text.contains("not a directory") || text.contains("enotdir")
             || text.contains("enodev") || text.contains("enxio")
             || text.contains("stale file handle") {
             return .volumeUnavailable(recordID: recordID, volumeIdentifier: volumeIdentifier)
