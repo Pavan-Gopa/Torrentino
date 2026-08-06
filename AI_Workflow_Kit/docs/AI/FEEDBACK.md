@@ -1,3 +1,47 @@
+# FEEDBACK — WP-13 Diagnostics/security/deps review
+
+### 1. Build & tests
+- `graphify query` executed for WP-13 diagnostics logging, scrubbing, XPC peer verification, SBOM entitlements, TransferCoordinator.
+- `git rev-parse torrentino/pre-WP-13`: `4cae0c06f84c106479eb3e161b74a88228755144`.
+- `git diff torrentino/pre-WP-13 --stat`: 17 files, +1332/-191.
+- `git diff --check`: clean (0 whitespace errors).
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED** (0 errors, 0 warnings, Swift 6 strict concurrency complete).
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED** (all XCTest targets green, including WP13DiagnosticsSecurityTests).
+- QA scripts verified & executed:
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp09_sec_secret_hygiene.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp08_keychain.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp05_*.sh` (12 scripts): **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_*.sh` (13 scripts): **PASS**
+- `otool -L` on built binaries (`Torrentino.app` and `TorrentinoEngineAgent`): **VERIFIED** — zero dynamic links to Homebrew, Cellar, `/usr/local`, or `/opt/homebrew`. All third-party native libraries (libtorrent, OpenSSL, Boost) are self-contained and statically linked.
+- Legacy detection (`git diff torrentino/pre-WP-13 --name-only -- Legacy/`): 8 files detected. Identified as pre-existing human-owned dirt (waived per instructions; not blocking).
+
+### 2. WP compliance (WP-13 gates)
+1. **Diagnostic bundle scrubbing & privacy:** `ExportDiagnosticsRequest` / `handleExportDiagnostics` in `TransferCoordinator.swift` collects system_info, health_metrics, engine_settings, recent_logs, and persistence_status. `RedactedLogFileManager.redact()` scrubs user home paths (`/Users/<user>` -> `~`), proxy passwords (`password=<redacted>`), bearer tokens (`Authorization: Bearer <redacted>`), and magnet passkeys from system info, engine settings, and recent logs. Export path defaults to temporary directory or user-specified folder. Verified via `WP13DiagnosticsSecurityTests.testDiagnosticExportCreatesBundleWithoutSecrets`.
+2. **No secrets:** `RedactedLogFileManager` ensures log entries written to disk are sanitized. `ProxyConfiguration` in `State.swift` implements custom `description` and `debugDescription` to prevent accidental credential leakage in string formatting. Structured `TorrentinoLog` facade passes sanitized messages with `privacy: .public` to `OSLog`. `TorrentinoSignposts` emits signposts with no sensitive payload data.
+3. **XPC peer verification:** `AgentRuntime.swift` `ListenerDelegate.listener(_:shouldAcceptNewConnection:)` enforces fail-closed peer UID verification (`connection.effectiveUserIdentifier == getuid()`) in addition to code signing requirement (`setCodeSigningRequirement`). No early returns or bypass paths exist prior to security validation. Invalid connections log non-sensitive diagnostics and return `false` cleanly without crashing the daemon.
+4. **Re-audit input-limit/parser/path & Keychain/redaction:** Executed QA test suite for WP-05 (commands, limits, handshake, settings), WP-07 (metainfo parser, magnet parser, path validator corpus, HTTP source limits, file selection), WP-08 (keychain security boundary), WP-09 (secret hygiene), and WP-13 (diagnostics & security). All scripts pass cleanly.
+5. **SBOM & CVE review:** `Native/ThirdParty/SBOM.md` updated and verified against `Native/ThirdParty/versions.lock`. Pinned versions: libtorrent `2.1.0` (tag `v2.1.0`, commit `578e06824c3546f3371ab43967ab288a7e253eca`, SHA-256 `ceed657606b8df453ec5e775326e3c759a2779e1202fa04abe42ed262e7bf0b6`), OpenSSL `3.5.7` (`openssl-3.5.7`), Boost `1.91.0` (`1a80576db6b7...`). License compliance verified (BSD-3-Clause, Apache-2.0, BSL-1.0; zero copyleft code). Documented 0 Critical/High relevant CVEs with vulnerability review structure.
+6. **Entitlements minimal:** `Native/Config/Entitlements/Torrentino.entitlements` and `TorrentinoEngineAgent.entitlements` contain empty property dictionaries (`<dict></dict>`), matching `ENTITLEMENTS_AUDIT.md`. Hardened Runtime enabled (`ENABLE_HARDENED_RUNTIME = YES`), `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`, no App Sandbox in v1 (LaunchAgent architecture).
+7. **Release build self-contained:** Verified static linking of libtorrent-rasterbar, OpenSSL (libssl, libcrypto), and header-only Boost. `otool -L` confirms zero Homebrew runtime links.
+8. **Scope & attribution:** Changes in `TransferCoordinator.swift`, `State.swift`, `project.pbxproj`, `run_qa_suite.sh`, and `test_bridge_swift.sh` directly support WP-13 diagnostic export command handling, proxy credential redaction, test runner integration, and standalone agent compilation. `test_bridge_swift.sh` correctly includes the new `RedactedLogFileManager.swift` and `DiagnosticsLogging.swift` sources. Zero leakage of future WP features (perf/soak/signing).
+
+### 3. Architecture invariants
+- Swift 6 strict concurrency mode (`complete`) enforced with zero warnings (`SWIFT_TREAT_WARNINGS_AS_ERRORS = YES`).
+- Thread safety: `RedactedLogFileManager` is implemented as a Swift `actor` protecting log file handles and rotation state.
+- Fail-closed security design on XPC connection acceptance (`AgentRuntime.swift`).
+- Clean separation between DTOs, domain models, IPC commands, and agent execution environment.
+
+### 4. Comments & readability
+- Code is well-structured, clear, and thoroughly documented with layer headers, roles, and invariants.
+- Test cases in `WP13DiagnosticsSecurityTests.swift` cleanly exercise redaction, rotation, export, and path safety limits.
+
+### 5. If changes_requested — concrete list
+None. All WP-13 gate criteria, security posture requirements, and test suites are satisfied.
+
+---
+**RESULT:** APPROVED
+
 # FEEDBACK — WP-13 Diagnostics, security, dependencies (RELEASE track)
 
 ### 1. Build & tests

@@ -39,21 +39,23 @@ implementation:
     test_wp13_diagnostics_security.sh reported green. Handoff lacked RESULT
     line and was in root FEEDBACK.md; normalized by Orchestrator.
 review:
-  status: waiting_review
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: pending
+  verdict: approved
   note: >-
-    Reviewer verifies WP-13 gates independently: redaction completeness,
-    diagnostic-export scrubbing, XPC peer verification fail-closed behavior,
-    SBOM/CVE evidence, entitlements minimality, self-contained release build,
-    and scope of TransferCoordinator/State/test_bridge_swift.sh changes.
+    WP-13 APPROVED: all gates independently verified (redaction, export
+    scrubbing, XPC peer verification fail-closed, SBOM vs versions.lock,
+    minimal entitlements, otool self-contained check, re-audit QA green).
 qa:
-  status: pending
+  status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
   bugs_open: none
-  note: Blocked until WP-13 implementation receives Reviewer APPROVED.
-next_actor: reviewer
+  note: >-
+    Tester QA phase: functional gap-hunt for diagnostics export, redacted
+    logging/rotation, XPC peer verification; full regression XCTest +
+    run_qa_suite.sh.
+next_actor: tester
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
