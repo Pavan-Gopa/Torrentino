@@ -26,37 +26,32 @@ completed_steps:
 - WP-11
 - WP-12
 implementation:
-  status: done
+  status: in_progress
   attempts: 0
   note: >-
-    Fix round complete: BUG-001 live status recovery (statusProvider seam,
-    didBecomeActive, bounded 2s polling while degraded, onStatusRestored ->
-    transfers.start); BUG-002 desired-state enforcement in restore/commitAdd/
-    pumpOnce (running -> queued/fetchingMetadata/downloading; offline keeps
-    desiredState with waitingForNetwork) + localized userFacingMessage/
-    recoverySuggestion surfaced in list tooltip and Inspector banner; BUG-003
-    durable file selection (session_state + journal checkpoints), Files tab
-    outline tree with tri-state checkboxes, per-file progress, Reveal,
-    Select/Deselect All, EN/RU. XCTest 289/289; QA scripts green; headless
-    CLI proof for BUG-001.
+    Fix round 1 closed BUG-001/002 (live-verified: app recovered without
+    restart; localized storage fault surfaced). Human real run on fresh
+    build opened fix round 2 (BUG_REPORT.md top blocks): BUG-003 REOPENED
+    (No files in real GUI despite persisted metainfo), BUG-004 no add-time
+    disk preflight (25.38 GB admitted onto 15 GB volume), BUG-005 Remove
+    failed for faulted record, BUG-006 phantom duplicate UI row, BUG-007
+    observability blind (command/transfer paths never logged).
 review:
-  status: approved
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: approved
-  note: >-
-    Fix round APPROVED: BUG-001/002/003 verified with independent evidence
-    (headless CLI flow, code paths, XCTests, QA scripts); WP-13 gates and
-    invariants intact; 289/289 XCTest; run_qa_suite PASS.
+  verdict: pending
+  note: Re-review after fix round 2.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
-  bugs_open: WP13-BUG-001, WP13-BUG-002, WP13-BUG-003
+  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007
   note: >-
-    Tester QA phase: WP-13 feature gap-hunt + closure verification of the
-    three bugs (live GUI run with real multi-file torrent included) + full
-    regression; close bugs in BUG_REPORT.md on green evidence.
-next_actor: tester
+    After fix round 2 + Reviewer APPROVED, Tester must run REAL-GUI
+    scenarios (real torrent file, real disk constraints, remove/retry flows)
+    in addition to scripted suites; Human flagged scripted-only QA as
+    insufficient.
+next_actor: coder
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -76,11 +71,12 @@ reviewer_brief: |
   chain (durable selection, tri-state outline, Reveal); regression of WP-13
   gates and invariants.
 coder_brief: |
-  Fix round for three Human-found bugs (BUG_REPORT.md top blocks): BUG-001
-  live engine-status recovery without restart; BUG-002 diagnose+fix added
-  torrent stuck Idle (desired-state enforcement / localized fault surfacing);
-  BUG-003 complete fetchFiles/setFileSelection chain end-to-end with Inspector
-  Files outline tree, tri-state checkboxes (skip|normal), progress, Reveal,
-  durable selection, EN/RU.
+  Fix round 2 (BUG_REPORT.md top blocks): BUG-007 wire redacted logging into
+  all command/transfer/persistence paths first (diagnostics for everything
+  else); BUG-004 add-time disk preflight with actionable localized fault and
+  destination choice; BUG-005 removal must succeed from any record state;
+  BUG-006 engine-authoritative list (no optimistic rows; duplicate info_hash
+  typed fault); BUG-003 reopened — Files tree from metainfo for faulted
+  records in real GUI, distinct no-selection hint.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

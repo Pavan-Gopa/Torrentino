@@ -1,3 +1,148 @@
+# BUG REPORT — WP13-BUG-007 observability blind: command/transfer paths never logged
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run + log forensics)
+Scope: Native/TorrentinoEngineAgent (DiagnosticsLogging wiring),
+Native/TorrentinoApp (EngineClient logging)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- `~/Library/Logs/com.torrentino.app.engine-agent/engine_log_current.log`
+  contains ONLY `[xpc] Exported diagnostic bundle` entries (all from QA test
+  runs); zero entries for add/remove/fetchFiles/setFileSelection/transfer/
+  lifecycle during real Human sessions.
+- `log show --last 2h --predicate 'process == "TorrentinoEngineAgent" OR
+  process == "Torrentino"'` => empty.
+- Human explicitly requested a logging system to trace "where the connection
+  is missing and who is at fault"; current logs cannot answer that.
+
+## Required product-side follow-up
+
+Wire TorrentinoLog (redacted) into every XPC command handler (add/commit,
+remove/prepareRemoval, fetchFiles, setFileSelection, pause/resume, reannounce),
+transfer state transitions (desired vs activity vs health changes, libtorrent
+error alerts with redacted paths), persistence checkpoints, and XPC
+connect/peer-verification events on both sides. Levels: lifecycle/state
+transitions and faults at notice/error; per-command at info. Keep redaction
+(home paths, tokens, passkeys). Add a QA script asserting the log file gains
+entries for each command class during a scripted session (redaction checked).
+
+---
+
+# BUG REPORT — WP13-BUG-006 phantom duplicate row: UI not engine-authoritative on add
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run + persistence read)
+Scope: Native/TorrentinoApp (TorrentListViewModel add/snapshot merge),
+Native/TorrentinoEngineAgent (commitAdd duplicate info_hash handling)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- UI shows TWO rows "Шугар (Sugar) Сезон 2"; engine DB (`torrents` table)
+  contains ONE record (id FB74E629-9721-4F73-A394-992F61DC9DE1).
+- Second add of the same info_hash produced an in-memory UI row although the
+  engine did not admit a second record (duplicate rejection or persistence
+  collision), i.e. UI projected a non-authoritative row.
+
+## Required product-side follow-up
+
+- Engine: duplicate info_hash add must return a typed, localized fault
+  (e.g. torrentAlreadyExists) or explicit idempotent attach semantics — one
+  documented behavior.
+- UI: never insert rows optimistically; the list is rebuilt from engine
+  snapshot/events only; on duplicate fault show a localized banner, no
+  phantom row. Regression test: add same torrent twice => one row + message.
+
+---
+
+# BUG REPORT — WP13-BUG-005 Remove failed for faulted record; user cannot delete
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run)
+Scope: Native/TorrentinoEngineAgent (prepareRemoval/removal manifest path),
+Native/TorrentinoApp (remove flow projection)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Human: status bar shows "Remove failed" when removing the stuck
+  "Insufficient disk space" record; the row remains.
+- Record state in DB: desired `running`, libtorrent storage-faulted; removal
+  of a never-started/faulted record must still work (WP-10 contract: removal
+  is a first-class, recoverable flow for ANY record state).
+
+## Required product-side follow-up
+
+- Diagnose via new logs (BUG-007) + journal tables (operation_journal,
+  removal_tokens, trash_journal) why prepareRemoval/confirm fails for
+  faulted/never-admitted records; fix so removal succeeds from every state
+  (no files on disk => manifest trivially empty, keep-data and delete-data
+  both work). Localized actionable error only for genuine persistence faults.
+- Acceptance: remove the Human's stuck record successfully (keep-data), and
+  scripted removal of faulted/paused/downloading records in tests.
+
+---
+
+# BUG REPORT — WP13-BUG-004 no add-time preflight: 25.38 GB admitted onto 15 GB volume
+
+Date: 2026-08-06
+Role: Orchestrator record (Human manual verification run + df forensics)
+Scope: Native/TorrentinoEngineAgent (inspectAddSource/commitAdd preflight),
+Native/TorrentinoApp (add sheet UX)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- `df -h /`: 15 Gi available on the destination volume; torrent size
+  25.38 GB; save_path `/Users/pavan/Downloads` (same volume).
+- Record admitted with desired=running, then latched into
+  "Insufficient disk space" fault; download can never start. Plan acceptance:
+  "Add magnet/file/URL + preflight ... работают".
+
+## Required product-side follow-up
+
+- inspectAddSource/commitAdd preflight: compute required size (total or
+  selected files) vs available space on the resolved destination volume;
+  fail closed BEFORE record admission with a localized, actionable fault
+  (needed vs free, suggestion to pick another destination).
+- Add sheet: show destination volume free space + required size live; allow
+  choosing another destination before commit; after a storage fault, offer
+  "change destination & retry" recovery in the Inspector banner.
+- Acceptance: adding an oversized torrent is refused at add time with the
+  actionable message; after freeing space or changing destination, retry
+  succeeds; existing faulted record recovery path works.
+
+---
+
+# BUG REPORT — WP13-BUG-003 (REOPENED) Inspector still shows "No files" in real run
+
+Date: 2026-08-06 (reopen addendum; original block below)
+Role: Orchestrator record (Human manual verification run)
+Verdict: **REOPENED — assigned to Coder (fix round 2)**
+
+## Reopen evidence
+
+- Human's record has metainfo persisted on disk
+  (`.../Engine/generations/metainfo-FB74E629-...-2.bin`), yet the Inspector
+  Files area shows "No files" for the selected/only record in a real GUI
+  session on the fresh build that contained the round-1 fix.
+- Round-1 fix verified by Reviewer via code paths and scripted tests, but the
+  real-GUI scenario (faulted record, selected row) was not proven.
+
+## Required product-side follow-up
+
+- Trace fetchFiles for a faulted, metainfo-present record end-to-end (agent
+  handler source = metainfo regardless of activity/health; UI must request on
+  selection change and render; empty state only for genuinely no-metainfo
+  magnets pre-metadata, with a localized "metadata not fetched yet" hint).
+- Distinguish "no selection" hint from "no files" empty state.
+- Acceptance: real run — select the Human-like faulted record => file tree
+  with checkboxes appears; unchecking a file persists and is honored.
+
+---
+
 # BUG REPORT — WP13-BUG-003 Inspector "No files"; per-file selection missing end-to-end
 
 Date: 2026-08-06
@@ -104,6 +249,37 @@ agent (ServiceRegistration must-not stands: no registration without explicit
 user intent). No launchd/XPC IO on the main actor. Add regression coverage
 (XCTest via an injectable status/connection seam and/or QA script). QA does
 not apply the fix; Tester will verify closure after Coder + Reviewer.
+
+---
+
+## WP-13 QA Closure Attempt — 2026-08-06
+
+Command: `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_bug_closure.sh`
+
+Result: **FAIL — no Human bug closed**.
+
+- Disposable regression evidence passed: `7/7` targeted tests, including
+  `testCommitAddImmediateStartRunningNotIdle`,
+  `testMultiFileRunningDesiredStateAndOfflineRecovery`, file paging, selection
+  round-trip, restart durability, and EN/RU health messages.
+- WP13-BUG-001 remains open. The conditional seam
+  `testEngineViewModelStatusRefreshAndReconnect` exists, but live launchd
+  lifecycle was not run. Enabling the seam in the current target graph produced
+  `warning: TorrentinoAppTests is missing a dependency on Torrentino` and
+  `Linker command failed with exit code 1`.
+- WP13-BUG-002 remains open. Stub-engine desired-state/offline tests pass, but
+  they do not prove the Human record against live libtorrent.
+- WP13-BUG-003 remains open. Persistence and paging tests pass, but
+  `TransferEngine` has no live file-selection/priority method in
+  `Native/TorrentinoEngineAgent/Transfer/TransferRecord.swift:194-228`, and
+  `FileEntry` has no per-file progress field in
+  `Native/TorrentinoIPC/Pagination.swift:65-80`. The current agent handler at
+  `Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift:897-925`
+  persists selection and publishes invalidation only.
+
+No `--cli register` or `--cli unregister` command was executed. The Human's
+`"Шугар (Sugar) Сезон 2"` record, production Application Support, and download
+payload were not modified.
 
 ---
 
