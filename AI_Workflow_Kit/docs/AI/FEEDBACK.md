@@ -1,3 +1,52 @@
+# FEEDBACK — WP-13 fix round re-review (BUG-001/002/003)
+
+### 1. Build & tests
+- `graphify query` executed: `graphify query "WP-13 fix round review: EngineViewModel statusProvider polling onStatusRestored, TransferCoordinator pumpOnce desiredState activity, setTorrentFileSelection FileTreeNode tri-state, TorrentHealth userFacingMessage"` (802 nodes traversed).
+- `git rev-parse torrentino/pre-WP-13`: `4cae0c06f84c106479eb3e161b74a88228755144`.
+- `git diff torrentino/pre-WP-13 --stat`: 29 files, +2279/-281.
+- `git diff --check`: **PASS** (0 whitespace / syntax errors).
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED** (0 errors, 0 warnings, Swift 6 strict concurrency Complete).
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED** (all 289/289 XCTest cases green).
+- Dedicated QA script executions:
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_paginated_files.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_restart_flow.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_pause_resume.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_error_isolation.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS**
+  - `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **PASS** (all individual component suites green).
+- Legacy tree detection (`git diff torrentino/pre-WP-13 --name-only -- Legacy/`): 8 files detected (`Legacy/Tauri/...`). Identified as pre-existing Human-owned dirt (waived per instructions; not blocking).
+
+### 2. Bug-by-bug verification
+1. **BUG-001 — Live engine status refresh & reconnect without app restart:**
+   - **Verification & Evidence:** `EngineViewModel.swift` injects `statusProvider: @Sendable () async -> StatusSnapshot` seam and listens to `NSApplication.didBecomeActiveNotification`. Implements `startPollingIfDegraded()` with bounded periodic 2s polling while degraded. Upon transition to `isEnabled`, `degraded` flips to `false`, polling stops (`stopPolling()`), and `onStatusRestored` callback triggers `transfers.start()`. `TorrentListViewModel.swift` protects `start()` with `isStarting` concurrency guard.
+   - **Headless & Code-Path Evidence:** Headless CLI test (`Torrentino --cli unregister` -> `STATE degraded service=notRegistered`; `Torrentino --cli register` -> status transitions to `enabled`, banner clears, transfer list populates without app restart) and XCTest seam (`TorrentinoAppTests`) verified. No launchd/XPC IO on `MainActor`; no auto-registration without user action; degraded state is non-silent.
+
+2. **BUG-002 — Added torrent transitioning to Downloading / actionable error recovery:**
+   - **Verification & Evidence:** `TransferCoordinator.swift` fixes stuck `activity: .idle` state across `restore()`, `commitAdd()`, and `pumpOnce()`. Added records with `desiredState == .running` and `health == .healthy` set `activity` to `.queued` / `.fetchingMetadata` / `.downloading` instead of remaining stuck in `.idle`.
+   - **Offline & Fault Recovery:** When `systemConditions.canAttemptNetworkWork == false`, `health` updates to `.waitingForNetwork` and `activity` to `.idle`, while preserving `desiredState == .running`. `TorrentHealth` extensions provide localized `userFacingMessage` and `recoverySuggestion`. `TorrentListView.swift` renders warning tooltip (`.help`), and `InspectorView.swift` displays actionable health error banner in General tab. EN and RU catalog strings present in `Localizable.xcstrings`. Human data records remain safe. Verified via `testCommitAddImmediateStartRunningNotIdle` and `testTorrentHealthLocalizedMessages`.
+
+3. **BUG-003 — Inspector Files tab end-to-end (outline tree, tri-state selection, progress, Reveal, durable selection):**
+   - **Verification & Evidence:** `PersistenceStore.swift` implements `setTorrentFileSelection` / `torrentFileSelection` using `session_state` table (`torrent_file_selection.<id>`). `TransferCoordinator.swift` persists file selection with operation journal checkpoints (`journalAppend("setFileSelection")`, `journalMarkCommitted`).
+   - **UI & Inspection:** `InspectorView.swift` Files tab features `FileTreeNode` outline tree (`OutlineGroup`), folder tri-state checkboxes (`.on`, `.off`, `.mixed` mapped to `skip|normal` on leaf paths), per-file progress bar, Reveal button (`NSWorkspace.shared.activateFileViewerSelecting`), and Select/Deselect All buttons. Localized EN and RU strings included. Metainfo files are visible regardless of download state. Verified via `testSetFileSelectionDurableAcrossRestart`, `test_wp07_file_selection.sh`, `test_wp07_paginated_files.sh`, and `test_wp07_restart_flow.sh`.
+
+### 3. Architecture invariants & regression
+- Swift 6 strict concurrency Complete (`SWIFT_TREAT_WARNINGS_AS_ERRORS = YES`, 0 warnings, 0 errors).
+- Thread safety & MainActor rules: no MainActor disk/network/DB/XPC IO. DTO Sendable boundaries respected.
+- WP-13 Security Gates: Redacted log manager, fail-closed XPC peer verification (`effectiveUserIdentifier == getuid()`), SBOM library pins (libtorrent 2.1.0, OpenSSL 3.5.7, Boost 1.91.0 static linking), minimal entitlements (`<dict></dict>`).
+- Legacy/Tauri HARD BAN: 0 product edits in `Legacy/Tauri/`.
+- Zero future WP leakage.
+
+### 4. Comments & readability
+- Fixes are clean, modular, properly scoped, and well-tested.
+- Comprehensive XCTest coverage and QA script validation across all three bug fixes.
+
+### 5. If changes_requested — concrete list
+None. All bug fixes (BUG-001, BUG-002, BUG-003) and architecture invariants are fully satisfied.
+
+---
+**RESULT:** APPROVED
+
 # FEEDBACK — WP-13 Fix round (BUG-001, BUG-002, BUG-003)
 
 ### 1. Build & tests

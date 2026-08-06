@@ -40,22 +40,23 @@ implementation:
     Select/Deselect All, EN/RU. XCTest 289/289; QA scripts green; headless
     CLI proof for BUG-001.
 review:
-  status: waiting_review
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: pending
+  verdict: approved
   note: >-
-    Re-review of the three-bug fix round: verify each fix against its
-    BUG_REPORT block with independent evidence, plus regression of WP-13
-    gates and invariants.
+    Fix round APPROVED: BUG-001/002/003 verified with independent evidence
+    (headless CLI flow, code paths, XCTests, QA scripts); WP-13 gates and
+    invariants intact; 289/289 XCTest; run_qa_suite PASS.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
   bugs_open: WP13-BUG-001, WP13-BUG-002, WP13-BUG-003
   note: >-
-    Tester QA phase deferred until the fix round is Reviewer-approved; then
-    QA covers WP-13 features plus regression and closure of the three bugs.
-next_actor: reviewer
+    Tester QA phase: WP-13 feature gap-hunt + closure verification of the
+    three bugs (live GUI run with real multi-file torrent included) + full
+    regression; close bugs in BUG_REPORT.md on green evidence.
+next_actor: tester
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
