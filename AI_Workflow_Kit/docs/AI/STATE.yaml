@@ -10,6 +10,8 @@ target_files:
 - Native/TorrentinoIPC/
 - Native/Config/
 - Native/Tests/
+- Native/TorrentinoEngineBridge/bridge/
+- Native/TorrentinoEngineBridge/adapter/
 - Native/TorrentinoEngineBridge/scripts/qa/
 completed_steps:
 - WP-00
@@ -29,18 +31,21 @@ implementation:
   status: in_progress
   attempts: 0
   note: >-
-    Fix round 1 closed BUG-001/002 (live-verified: app recovered without
-    restart; localized storage fault surfaced). Human real run on fresh
-    build opened fix round 2 (BUG_REPORT.md top blocks): BUG-003 REOPENED
-    (No files in real GUI despite persisted metainfo), BUG-004 no add-time
-    disk preflight (25.38 GB admitted onto 15 GB volume), BUG-005 Remove
-    failed for faulted record, BUG-006 phantom duplicate UI row, BUG-007
-    observability blind (command/transfer paths never logged).
+    Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
+    duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
+    BUG-003 files-from-metainfo UI (302/302 XCTest). Residual: selection is
+    persisted/dispatched but BridgeTransferEngine is a no-op — native bridge
+    lacks a file-priority API, so skip|normal is not applied to libtorrent.
+    ORCHESTRATOR DECISION: scope extension APPROVED — Native/
+    TorrentinoEngineBridge/bridge/ + adapter/ join target files for round 2b
+    (real priority application) plus live evidence (launchd recovery,
+    disposable faulted-record removal, live priorities). Human-record removal
+    remains a Human action on the fresh build.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
-  note: Re-review after fix round 2.
+  note: Re-review after round 2b (bridge priority API + live evidence).
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
@@ -71,12 +76,11 @@ reviewer_brief: |
   chain (durable selection, tri-state outline, Reveal); regression of WP-13
   gates and invariants.
 coder_brief: |
-  Fix round 2 (BUG_REPORT.md top blocks): BUG-007 wire redacted logging into
-  all command/transfer/persistence paths first (diagnostics for everything
-  else); BUG-004 add-time disk preflight with actionable localized fault and
-  destination choice; BUG-005 removal must succeed from any record state;
-  BUG-006 engine-authoritative list (no optimistic rows; duplicate info_hash
-  typed fault); BUG-003 reopened — Files tree from metainfo for faulted
-  records in real GUI, distinct no-selection hint.
+  Round 2b (scope extension approved): add setFilePriorities to the C++
+  EngineBridge + ObjC++ adapter (libtorrent file priorities from skip|normal),
+  wire BridgeTransferEngine to apply persisted selection on add/restore/edit;
+  live evidence via new logs: launchd recovery flow, disposable faulted-
+  record removal, live priority application; make test_wp13_bug_closure.sh
+  green with disposable equivalents (Human-record removal = Human action).
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

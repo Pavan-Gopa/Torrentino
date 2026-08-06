@@ -1,3 +1,40 @@
+# FEEDBACK — WP-13 fix round 2 follow-up (BUG-003/004/005/006/007)
+
+### 1. Build & tests
+- `graphify query "native file selection, add preflight, file progress, duplicate admission, faulted removal, and transfer logging"` executed; graph context was used before the follow-up changes.
+- `git diff --check`: **PASS**.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED (302/302)**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS** (5/5 targeted tests).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_bug_closure.sh`: disposable tests **11/11 PASS**; runner correctly **FAIL** with 3 live evidence gaps.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: started, then interrupted at `test_wp12_02_benchmarks.sh` after the 600s execution limit; no final suite verdict was emitted.
+- Human-owned `Legacy/Tauri/` changes were left untouched; no Human torrent record or production payload was accessed.
+
+### 2. Bug-by-bug verification
+1. **BUG-003 — Inspector Files tab:** metainfo-present faulted records expose files; magnets report `metadataNotFetched`; selection persists/checkpoints and the coordinator dispatches it to the engine surface; existing payload bytes produce best-effort per-file progress. The production `BridgeTransferEngine` remains a no-op because the current native bridge has no file-priority API.
+2. **BUG-004 — Add-time storage preflight:** inspect and commit both calculate required bytes, include selected-file accounting, surface available/destination data, and return typed `insufficientSpace` before persistence or engine admission. Add sheet renders required/available bytes and commit errors.
+3. **BUG-005 — Faulted removal:** empty manifests are accepted for faulted/never-admitted records and native cleanup failure no longer strands a record after payload cleanup; WP-10 removal regression tests remain green.
+4. **BUG-006 — Duplicate admission:** duplicate content identity returns typed `.duplicateAdd` with the existing record ID; duplicate XCTest coverage is green.
+5. **BUG-007 — Observability:** command handlers, transfer transitions, persistence checkpoints, and bridge alerts use redacted structured logging; diagnostics/security tests remain green.
+
+### 3. Architecture invariants & residual evidence
+- Swift 6 strict concurrency Complete, warnings-as-errors, and 302/302 scheme tests green.
+- No disk/network/DB/hash work was moved onto `MainActor`; file progress is read inside the agent actor.
+- DTOs remain immutable/Codable/Sendable; persistence checkpoints remain journaled.
+- `test_wp13_bug_closure.sh` intentionally remains fail-closed for live launchd recovery (BUG-001), live libtorrent evidence for the Human record (BUG-002), and native priority application (BUG-003).
+- Implementing actual skip/normal priority requires a method in `Native/TorrentinoEngineBridge/bridge` plus its adapter, which is outside the current product target-file scope.
+
+### 4. Comments & readability
+- Added only targeted helpers/tests and kept the native bridge limitation explicit rather than claiming live selection was applied.
+- Updated WP-07/WP-13 QA contracts, coverage, and report to match the verified state.
+
+### 5. If changes_requested — concrete list
+- Approve the native bridge scope or provide an existing priority API so BUG-003 can be closed against live libtorrent.
+- Run the protected live launchd/Human-record verification separately; it was not performed here.
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK — WP-13 fix round re-review (BUG-001/002/003)
 
 ### 1. Build & tests
