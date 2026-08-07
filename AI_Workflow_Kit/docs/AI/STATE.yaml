@@ -89,11 +89,19 @@ implementation:
     type names mapped. XCTest green; live observability still refused over
     Human state by design. Human live acceptance on round-5 build: one
     episode torrent downloaded successfully (full pipeline works), but live
-    run opened round 6: BUG-013 (preflight blocks on TOTAL size; selection
+    run opened     round 6: BUG-013 (preflight blocks on TOTAL size; selection
     must exist inside the add flow), BUG-014 (preflight rejects 2 KB =>
     available-bytes computation broken), BUG-015 (invalidEnvelope rejections
     silent), BUG-016 (double-click .torrent => kAEOpenDocuments unhandled,
     empty window proliferation, no pickup).
+    Round 6 delivered: add-sheet tri-state file tree with selected-bytes
+    accounting and selection-aware preflight (commit sends initial selection
+    before resume); preflight resolves aliases via resource values + statfs;
+    envelope rejections logged with redacted reason/provenance/request-ID and
+    client-side validation; AppDelegate forwards Finder .torrent opens to the
+    existing window + Add sheet (magnet stays onOpenURL). XCTest green.
+    Standing rule recorded in ORCHESTRATOR.md: build refresh cycle after
+    every Coder round.
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -112,7 +120,7 @@ qa:
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:

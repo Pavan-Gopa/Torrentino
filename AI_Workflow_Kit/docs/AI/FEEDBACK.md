@@ -1,3 +1,42 @@
+# FEEDBACK - WP-13 round 6 (BUG-013 + BUG-014 + BUG-015 + BUG-016)
+
+### 1. Build & tests
+- The required round-6 Graphify query ran first and supplied the scoped context before editing.
+- `graphify update .`: **PASS**; current code graph updated to 5388 nodes, 13078 edges, 390 communities. The installed package-version warning, two zero-node JSON warnings, community-label refresh warning, and fail-closed retained-node warning were non-fatal; curated graph data was backed up and preserved.
+- `git diff --check`: **PASS**.
+- `bash -n` passed for the exercised round-6 QA runners.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`: **BUILD SUCCEEDED**.
+- Full scheme `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`: **TEST SUCCEEDED**, including the new WP-13 tests and the previously race-sensitive delta-continuity test.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS**; secret-hygiene contract and the full WP-13 diagnostics/security XCTest suite were green.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**; native priority marker remained `files=3 skip=1 normal=2 skipped_allocated=false`.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_bug_closure.sh`: targeted disposable XCTest and source-contract checks **PASS**; live launchd phase **REFUSED** at its fail-closed precondition because the pre-existing Human Engine directory exists.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_observability.sh`: **REFUSED** before launch because a pre-existing Human Engine directory exists. No Human state was changed.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **REFUSED** at its fail-closed precondition for the same pre-existing Human Engine/job/agent state. No suite count is claimed.
+
+### 2. BUG-013 - selection-aware add flow
+- `AddSourceInspection.files` and `AddSourceFile` carry the bounded file tree across IPC, with backward-compatible decoding for older inspection payloads.
+- `AddTorrentSheet` renders a tri-state tree, defaults every file to selected, shows selected bytes, and re-preflights when selection changes.
+- Multi-file inspection exposes the tree before a provisional total-space decision; commit calculates required bytes from the selected paths.
+- Commit sends the initial selection before resuming a paused admission, so the engine cannot start with an unintended all-files priority set.
+- `TransferSmokeTests` and `TorrentinoIPCTests` cover tree round-trip, unknown-path rejection, inspection invalidation, selected-byte accounting, and initial-selection ordering.
+
+### 3. BUG-014, BUG-015, and BUG-016
+- Storage preflight resolves symlink/path aliases and uses Foundation resource values plus `statfs`; real capacity failures remain fail-closed.
+- Client and agent envelope rejection logs now include redacted reasons, provenance, and correlated request IDs. Malformed envelopes preserve request correlation, and client replies are validated before use.
+- Live-log diagnosis identified the old `name=invalid` rejection records without adjacent add-command markers; the new diagnostics distinguish malformed, oversized, wrong-kind, wrong-request, and provenance failures.
+- Finder `.torrent` opens are forwarded to the existing window and Add sheet through `AppDelegate`; magnet URLs remain handled by `TorrentinoApp.onOpenURL`.
+- App localization and source-contract tests cover the document-open and add-flow boundaries.
+
+### 4. Human acceptance boundary
+- Required GUI check: with the Human engine state left intact, double-click a disposable `.torrent` in Finder and confirm the existing window receives it without opening a second window; verify the Add sheet tree, partial selection, selected bytes, preflight refresh, and commit behavior using disposable data only.
+- Confirm the existing round-5 add-flow checks: localized insufficient-space and duplicate faults keep the sheet open, and successful commit alone dismisses it.
+- Verify Files and removal flows against disposable records. Do not delete or alter Human record `59043FE0` (`Ted Lasso`) or its payload.
+- The live observability and launchd closure phases remain intentionally pending until they can run from a clean disposable Engine directory and launchd state.
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK - WP-13 round 5 (BUG-011 + BUG-012 + BUG-010 tail)
 
 ### 1. Build & tests
