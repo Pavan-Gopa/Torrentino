@@ -1,3 +1,46 @@
+# FEEDBACK — WP-13 rounds 2+2b re-review
+
+### 1. Build & tests
+- Graphify was run first with the required round 2b review query.
+- `git rev-parse torrentino/pre-WP-13`: `4cae0c06f84c106479eb3e161b74a88228755144`.
+- `git diff --check`: **PASS**.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED** (full scheme).
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**; native marker was `priority evidence: files=3 skip=1 normal=2 skipped_allocated=false`.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_bug_closure.sh`: **PASS** when run from its clean fail-closed fixture; targeted XCTest, launchd register/unregister/re-register cycle, native priority proof, and Swift -> ObjC++ -> C++ proof all passed.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS** (5/5 targeted tests).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS** (9/9 diagnostics/security tests plus secret-hygiene contract).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **120/122 PASS** in this run. `test_wp03_legacy_untouched.sh` is the waived Human-owned Legacy failure. `test_wp13_bug_closure.sh` also refused to run because an earlier suite step left the pre-existing user `Engine` directory; this is correct fail-closed behavior, but means the full suite result is not the claimed 121/122.
+- `git diff torrentino/pre-WP-13 --name-only -- Legacy/`: 8 paths detected; treated as Human-owned dirt per the HARD BAN waiver and not as a product finding.
+
+### 2. Bug-by-bug verification (003..007 + round 2b bridge)
+- **BUG-003 / round 2b bridge: PASS for disposable/native evidence.** `EngineBridge::setFilePriorities` validates the complete value-only batch, rejects duplicate and unknown keys before `prioritize_files`, and exposes value-only readback. `EngineBridge.h` contains no libtorrent/Boost type; `EngineBridgeAdapter.h` remains Foundation-only. `BridgeTransferEngine` forwards selection on add, restore/re-add, and `handleSetFileSelection`; selection persistence and `inspectionInvalidated(files)` are covered. The pinned native smoke and Swift adapter integration both passed. Human GUI verification remains outside this disposable run.
+- **BUG-004 preflight: PASS at agent/UI code and XCTest level.** Inspect and commit calculate required bytes from metainfo selection before persistence or engine admission, return typed `insufficientSpace` with required/available values, the Add sheet renders both values, and Inspector exposes destination-change recovery. The targeted preflight tests passed. No real GUI/disk-constraint acceptance was performed against the Human record.
+- **BUG-005 removal: PASS for the tested disposable paths.** Removal accepts faulted/native-never-admitted records, an absent/untrusted metainfo payload produces an empty manifest, keep-data preserves bytes, and delete-data remains manifest-scoped Trash. The faulted keep/delete test passed and the WP-10 removal suite stayed green.
+- **BUG-006 duplicate admission: PASS.** Duplicate content identity returns typed `.duplicateAdd` with the existing record ID in `affectedRecord`; the app does not append an optimistic row and continues to consume snapshot/event authority. Duplicate and idempotency tests passed.
+- **BUG-007 observability: CHANGES REQUIRED.** Generic command start/complete logging and targeted transfer/persistence/bridge logging are present, and the redaction unit/export tests pass. However, critical paths still bypass the redacting facade: `TransferCoordinator.swift:375` sends absolute `fromPath`/`toPath` through raw `Logger`, and `TransferCoordinator.swift:2695` sends the native-removal error through raw `Logger` as well as the redacted facade. Other raw `Logger` calls interpolate `String(describing: error)` without the central sanitizer. Also, neither `test_wp13_diagnostics_security.sh` nor `test_wp13_bug_closure.sh` executes a scripted command matrix and asserts that the log file contains one record for each required command class. The current tests prove redaction mechanics, not end-to-end command observability.
+
+### 3. Architecture invariants & regression
+- Swift 6 strict concurrency, warnings-as-errors, full scheme tests, and native ObjC++/C++ `-Werror` compile checks passed.
+- C++/libtorrent types remain behind `EngineBridge::Impl`; Swift crosses the boundary only through immutable Codable/Sendable DTOs and Foundation adapter values.
+- Preflight remains before persistence/admission; removal remains token/journal/manifest scoped; no permanent native delete path was reintroduced.
+- Redacted diagnostic export, secret-hygiene checks, XPC peer UID/code-signing checks, SBOM, minimal entitlements, and no-Homebrew `otool` gates passed in the executed suite. No future-WP product leakage was found in the reviewed native scope.
+- The full-suite second failure is environmental fixture ordering/state, not a Legacy waiver and not evidence that the required suite is green. It must not be reported as 121/122 without a clean fail-closed rerun.
+- The remaining raw `Logger` paths are an architecture/security regression against the stated single redaction boundary and are the blocking finding for this review.
+
+### 4. Comments & readability
+- The bridge extension is narrowly scoped and documented; value-only DTOs and the PIMPL/adapter responsibilities are clear.
+- The disposable runner correctly refuses to run over an existing user Engine directory and the direct clean-fixture run provided authentic live evidence.
+- Observability is split between `TorrentinoLog` and direct `Logger` calls, which makes the redaction invariant easy to bypass and made the claimed QA coverage stronger than the actual executable checks.
+
+### 5. If changes_requested — concrete list
+- Route every command/transfer/persistence/bridge/lifecycle diagnostic through one redacting structured logger, or sanitize every raw `Logger` interpolation before emission. At minimum remove the raw path/error bypasses at `TransferCoordinator.swift:375` and `TransferCoordinator.swift:2695`, and audit all raw `String(describing: error)` logging for home paths, tokens, and passkeys.
+- Add a disposable scripted observability test wired into the WP-13 QA runner. It must exercise and assert log records for add/commit, prepare/commit removal, fetchFiles, setFileSelection, pause/resume, reannounce, persistence checkpoints, transfer state transitions, bridge alerts, and XPC connect/peer-verification classes, while asserting no home path/token/passkey leaks.
+- Re-run the full QA suite from a clean fail-closed fixture, without touching Human state, and report the actual result; do not claim 121/122 while `test_wp13_bug_closure.sh` is refused by a prior suite-created Engine directory.
+
+---
+**RESULT:** [CHANGES_REQUESTED]
+
 # FEEDBACK — WP-13 round 2b native priority and disposable live closure
 
 ### 1. Build & tests

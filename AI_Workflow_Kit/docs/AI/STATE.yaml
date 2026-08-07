@@ -29,7 +29,7 @@ completed_steps:
 - WP-12
 implementation:
   status: in_progress
-  attempts: 0
+  attempts: 1
   note: >-
     Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
     duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
@@ -49,16 +49,20 @@ implementation:
     Legacy env fail); full XCTest green.
     Fresh-build Human run opened BUG-008: Add sheet "Choose File..." never
     opens a picker (two stacked .fileImporter modifiers in
-    AddTorrentSheet.swift L116/L130). Fix round 3 open for Coder; Reviewer
-    will cover rounds 2+2b+3 in one pass afterwards.
+    AddTorrentSheet.swift L116/L130). Rounds 2+2b re-review came back
+    CHANGES_REQUESTED narrowly: 003-006 PASS; BUG-007 residual raw-Logger
+    redaction bypasses (TransferCoordinator.swift:375, :2695), missing
+    scripted per-command-class observability test, and an overclaimed QA
+    suite result (closure runner refused over a suite-left Engine dir).
+    Round 3 = BUG-008 + Reviewer §5 items; combined re-review afterwards.
 review:
-  status: waiting_review
+  status: changes_requested
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: pending
+  verdict: changes_requested
   note: >-
-    Re-review rounds 2+2b+3: bridge priority API PIMPL/value-type discipline,
-    fail-closed validation, live evidence authenticity, Add-sheet picker
-    fix, regression of rounds 0-2 fixes and WP-13 gates.
+    Round 3 scope: single redaction boundary (no raw Logger bypasses),
+    disposable scripted observability matrix in the WP-13 QA runner, honest
+    clean-fixture full-suite rerun, plus BUG-008 Add-sheet picker fix.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
@@ -89,11 +93,14 @@ reviewer_brief: |
   chain (durable selection, tri-state outline, Reveal); regression of WP-13
   gates and invariants.
 coder_brief: |
-  Round 3: BUG-008 — Add sheet "Choose File..." never presents a picker
-  because AddTorrentSheet.swift stacks two .fileImporter modifiers on one
-  view (L116/L130). Rework to one reliable presentation source (picker-mode
-  enum or disjoint attachment); both pickers must open in the real GUI;
-  .torrent pick feeds inspectAddSource preflight; keep add-flow regressions
-  (insufficientSpace, duplicateAdd) green.
+  Round 3 combined: (a) BUG-008 Add-sheet picker (two stacked .fileImporter,
+  L116/L130) — one reliable presentation source, both pickers open in real
+  GUI, .torrent pick feeds preflight; (b) Reviewer §5: route ALL diagnostics
+  through the single redacting facade (fix TransferCoordinator.swift:375 and
+  :2695 raw Logger bypasses; audit raw String(describing: error)
+  interpolations), add a disposable scripted observability matrix test wired
+  into the WP-13 QA runner, and re-run the full suite from a clean fail-
+  closed fixture (fix the suite step that leaves an Engine dir blocking
+  test_wp13_bug_closure.sh) reporting the honest number.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.
