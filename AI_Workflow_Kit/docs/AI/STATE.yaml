@@ -55,19 +55,31 @@ implementation:
     scripted per-command-class observability test, and an overclaimed QA
     suite result (closure runner refused over a suite-left Engine dir).
     Round 3 = BUG-008 + Reviewer §5 items; combined re-review afterwards.
+    Round 3 delivered: single mode-driven .fileImporter (AddTorrentPickerMode)
+    with security-scoped access and localized failures; raw Logger confined
+    to facades, String(describing: error) bypasses removed; observability
+    command-matrix XCTest + test_wp13_observability.sh; suite reordered
+    fail-closed (closure runner last). XCTest 308/308. Full QA suite and
+    observability live phase REFUSED over pre-existing Human Engine state by
+    design; no suite count claimed.
+    Live forensics on the round-3 build opened round 4: BUG-009 (app-side add
+    flow never emits inspectAddSource/commitAdd — zero add commands in live
+    agent log; death before XPC, suspect round-3 picker/commit wiring) and
+    BUG-010 (idle DEBUG spam count=0 at 2Hz; libtorrent alerts logged with
+    empty kind/error). Combined re-review of 2+2b+3 deferred until round 4
+    lands.
 review:
-  status: changes_requested
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: changes_requested
+  verdict: pending
   note: >-
-    Round 3 scope: single redaction boundary (no raw Logger bypasses),
-    disposable scripted observability matrix in the WP-13 QA runner, honest
-    clean-fixture full-suite rerun, plus BUG-008 Add-sheet picker fix.
+    Combined re-review rounds 2+2b+3+4: §5 closure, BUG-008/009/010 fixes,
+    suite isolation ruling, regression of 003-007 and WP-13 gates.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
-  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008
+  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008, WP13-BUG-009, WP13-BUG-010
   note: >-
     After fix round 2 + Reviewer APPROVED, Tester must run REAL-GUI
     scenarios (real torrent file, real disk constraints, remove/retry flows)
@@ -93,14 +105,12 @@ reviewer_brief: |
   chain (durable selection, tri-state outline, Reveal); regression of WP-13
   gates and invariants.
 coder_brief: |
-  Round 3 combined: (a) BUG-008 Add-sheet picker (two stacked .fileImporter,
-  L116/L130) — one reliable presentation source, both pickers open in real
-  GUI, .torrent pick feeds preflight; (b) Reviewer §5: route ALL diagnostics
-  through the single redacting facade (fix TransferCoordinator.swift:375 and
-  :2695 raw Logger bypasses; audit raw String(describing: error)
-  interpolations), add a disposable scripted observability matrix test wired
-  into the WP-13 QA runner, and re-run the full suite from a clean fail-
-  closed fixture (fix the suite step that leaves an Engine dir blocking
-  test_wp13_bug_closure.sh) reporting the honest number.
+  Round 4: BUG-009 — app-side add flow dies before XPC after the round-3
+  AddTorrentSheet refactor (live agent log has zero inspectAddSource/
+  commitAdd in the Human session): fix picker result -> fileURL -> security-
+  scoped read -> inspectAddSource -> preflight render -> commit chain, no
+  silent death, app-side redacted logging for each step; BUG-010 — kill idle
+  "drained count=0" spam (log only count>0) and capture libtorrent alert
+  kind/message/severity in redacted records.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.

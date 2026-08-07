@@ -1,3 +1,66 @@
+# BUG REPORT — WP13-BUG-010 log quality: idle DEBUG spam + empty libtorrent alert fields
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics)
+Scope: Native/TorrentinoEngineAgent (bridge alert drain loop, alert mapping)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence (engine_log_current.log, live session pid 74364)
+
+- `bridge alerts drained count=0` at ~2 Hz while idle (208 lines in a short
+  session) — floods the redacted log and buries command/state signal.
+- `[ERROR] libtorrent alert kind=session/unknown torrent= error=` — alert
+  kind and message not captured (empty fields), so real libtorrent errors
+  are unreadable; defeats BUG-007 observability purpose.
+
+## Required product-side follow-up
+
+- Log drain only when count > 0 (or rate-limit/trace-level); idle ticks must
+  be silent.
+- Map libtorrent alert type name + message + severity into the redacted
+  record (redact paths/tokens inside messages); ERROR-level alerts must
+  carry actionable text.
+- QA: observability matrix asserts absence of count=0 spam and presence of
+  non-empty alert kind/message for a forced libtorrent alert.
+
+---
+
+# BUG REPORT — WP13-BUG-009 app-side add flow never reaches XPC after round-3 refactor
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics + Human report)
+Scope: Native/TorrentinoApp (AddTorrentSheet picker-mode refactor, commit path)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Human: local .torrent files still "just don't get added" on the fresh
+  round-3 build.
+- Agent log, live session (bootstrap 05:28:25Z pid 74364): fetchSnapshot /
+  fetchPendingRemovals / health present, but ZERO inspectAddSource or
+  commitAdd entries after bootstrap. Last add commands in the log (04:52Z)
+  are QA fixtures. => the add flow dies inside the app before XPC.
+- Round 3 replaced two .fileImporter modifiers with one mode-driven
+  importer (AddTorrentPickerMode); suspicion: picker result -> fileURL /
+  scheduleInspection / commit wiring broken, canCommit never true, or
+  security-scoped read fails silently so inspection never schedules.
+
+## Required product-side follow-up
+
+- Trace and fix the app-side chain: picker result => fileURL set =>
+  security-scoped read of .torrent bytes => inspectAddSource => preflight
+  render => Add enabled => commitAdd. Every failure branch must surface a
+  localized error (no silent death).
+- Add app-side logging (redacted client facade) for picker result,
+  inspection schedule/finish, commit attempt/fault so the next failure is
+  visible in ~/Library/Logs.
+- Acceptance: real GUI run — Choose File... -> select local .torrent ->
+  preflight visible -> Add -> record appears and transitions per desired
+  state (or actionable localized fault, e.g. insufficientSpace with
+  destination change). Magnet path regression green.
+
+---
+
 # BUG REPORT — WP13-BUG-008 Add sheet: "Choose File..." never opens a picker
 
 Date: 2026-08-07
