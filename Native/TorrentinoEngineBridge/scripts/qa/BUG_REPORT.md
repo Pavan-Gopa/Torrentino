@@ -1,3 +1,42 @@
+# BUG REPORT — WP13-BUG-008 Add sheet: "Choose File..." never opens a picker
+
+Date: 2026-08-07
+Role: Orchestrator record (Human manual verification run, annotated screenshot)
+Scope: Native/TorrentinoApp/Features/AddTorrentSheet.swift
+Verdict: **OPEN — assigned to Coder**
+
+## Reproduction
+
+1. Cmd+N (Add Torrent sheet).
+2. Click "Choose File..." — nothing opens; a local .torrent cannot be added
+   through the UI. (Magnet/URL text path and Destination button exist; the
+   file path of the add flow is unusable.)
+
+## Suspected root cause (verify)
+
+- `AddTorrentSheet.swift` attaches TWO `.fileImporter` modifiers to the same
+  view node (L116 for the .torrent file, L130 for the destination folder).
+  Stacked `fileImporter` modifiers conflict in SwiftUI — one (or neither)
+  presents; `pickingFile = true` produces no panel.
+
+## Required product-side follow-up
+
+- Rework to a single presentation source (e.g. one `.fileImporter` driven by
+  a picker-mode enum, or attach importers on disjoint subviews) so BOTH
+  pickers reliably present in the real GUI.
+- On .torrent pick: set fileURL, clear URL text, run inspectAddSource
+  preflight (required/available bytes render), commit path unchanged.
+- On folder pick: destination updates and re-preflights (existing behavior
+  preserved).
+- Localized failure strings retained (pick_failed / destination_failed).
+- Acceptance: real-GUI run — "Choose File..." opens the panel, selecting a
+  local .torrent populates the sheet and shows preflight; "Destination..."
+  opens the folder panel; scripted UI-level or integration test where
+  feasible; add-flow regressions (preflight insufficientSpace, duplicateAdd)
+  stay green.
+
+---
+
 # BUG REPORT — WP13-BUG-007 observability blind: command/transfer paths never logged
 
 Date: 2026-08-06

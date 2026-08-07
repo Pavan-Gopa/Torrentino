@@ -47,25 +47,29 @@ implementation:
     launchd register/unregister cycle, disposable faulted removal keep-data
     and delete-data); test_wp13_bug_closure.sh 15/15 PASS; QA 121/122 (sole
     Legacy env fail); full XCTest green.
+    Fresh-build Human run opened BUG-008: Add sheet "Choose File..." never
+    opens a picker (two stacked .fileImporter modifiers in
+    AddTorrentSheet.swift L116/L130). Fix round 3 open for Coder; Reviewer
+    will cover rounds 2+2b+3 in one pass afterwards.
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
   note: >-
-    Re-review rounds 2+2b: bridge priority API PIMPL/value-type discipline,
-    fail-closed validation, live evidence authenticity, regression of rounds
-    0-2 fixes and WP-13 gates.
+    Re-review rounds 2+2b+3: bridge priority API PIMPL/value-type discipline,
+    fail-closed validation, live evidence authenticity, Add-sheet picker
+    fix, regression of rounds 0-2 fixes and WP-13 gates.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
-  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007
+  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008
   note: >-
     After fix round 2 + Reviewer APPROVED, Tester must run REAL-GUI
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: reviewer
+next_actor: coder
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -85,11 +89,11 @@ reviewer_brief: |
   chain (durable selection, tri-state outline, Reveal); regression of WP-13
   gates and invariants.
 coder_brief: |
-  Round 2b (scope extension approved): add setFilePriorities to the C++
-  EngineBridge + ObjC++ adapter (libtorrent file priorities from skip|normal),
-  wire BridgeTransferEngine to apply persisted selection on add/restore/edit;
-  live evidence via new logs: launchd recovery flow, disposable faulted-
-  record removal, live priority application; make test_wp13_bug_closure.sh
-  green with disposable equivalents (Human-record removal = Human action).
+  Round 3: BUG-008 — Add sheet "Choose File..." never presents a picker
+  because AddTorrentSheet.swift stacks two .fileImporter modifiers on one
+  view (L116/L130). Rework to one reliable presentation source (picker-mode
+  enum or disjoint attachment); both pickers must open in the real GUI;
+  .torrent pick feeds inspectAddSource preflight; keep add-flow regressions
+  (insufficientSpace, duplicateAdd) green.
 architect_brief: |
   Escalation packet completed; see ADR-017 and ARCHITECT_HANDOFF.md addendum.
