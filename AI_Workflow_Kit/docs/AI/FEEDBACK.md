@@ -1,3 +1,46 @@
+# FEEDBACK - WP-13 round 5 (BUG-011 + BUG-012 + BUG-010 tail)
+
+### 1. Build & tests
+- Graphify was run first with the required round-5 query: `graphify query "round 5: TorrentListViewModel snapshot fetch event sink merge, EngineClient event subscription restoreEventSubscription, AddTorrentSheet errorMessage inspection fault render, libtorrent alert type mapping"`.
+- `graphify update .`: **PASS**; current code graph updated to 5322 nodes, 12891 edges, 364 communities. The installed package-version warning and two zero-node JSON warnings were non-fatal. Existing curated graph nodes were preserved.
+- `git diff --check`: **PASS**.
+- `bash -n` passed for the exercised QA runners.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- Full scheme `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**; native priority marker remained `files=3 skip=1 normal=2 skipped_allocated=false`.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_duplicate_detection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_pause_resume.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_magnet_parser.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_removal_durable.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_observability.sh`: **REFUSED** before launch because a pre-existing Human Engine directory exists. No Human state was changed.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **REFUSED** at its fail-closed precondition for the same pre-existing Human Engine/job/agent state. No suite count is claimed.
+
+### 2. BUG-011 - authoritative torrent list projection
+- `TorrentListViewModel` registers the event sink before its first `fetchSnapshot`, refreshes immediately after a successful `commitAdd`, and refreshes again after `didBecomeActive` and reconnect recovery.
+- Event deltas and added/removed records are merged only across contiguous engine revisions. Stale events are ignored, revision gaps trigger a full snapshot, and fixture rows never accept engine events.
+- Full snapshots remain authoritative: snapshot data replaces the projection, stale snapshot responses cannot roll back a newer same-instance revision, and commit selection is applied only after the record is present in the fetched snapshot.
+- `EngineClient.restoreEventSubscription` re-installs the persistent sink handler and logs successful restoration before normal command delivery continues.
+- App-side picker, inspection, commit, snapshot, and fault boundaries continue to use the redacted client log facade.
+
+### 3. BUG-012 and BUG-010 tail
+- Every Add sheet inspection/commit fault remains local to the sheet. Insufficient-space faults render localized required/free byte values with the existing choose-another-destination hint; duplicate, invalid-source, and transport faults use localized catalog/fallback messages.
+- The sheet clears its inspected token on commit fault, keeps `errorMessage` visible, leaves `canCommit` false, and calls `dismiss()` only on commit success.
+- `TorrentinoAppTests.testAddTorrentSheetFaultPathKeepsSheetOpenAndDisablesCommit` covers the fault-path source contract; catalog checks cover English and Russian add-fault strings.
+- Alert redaction now preserves concrete type names and infers only evidence-backed legacy `unknown`/`session` categories such as `tracker_announce`, `storage`, and `error`; existing severity and readable-message fallback behavior is retained. Focused observability assertions passed.
+
+### 4. Human acceptance boundary
+- Required live GUI check: launch the built app with the Human engine state left intact, open Add Torrent, choose a disposable `.torrent` or use a disposable magnet, and confirm the row appears immediately with Name, State, Progress, Down, Up, and Size.
+- Restart the app without changing the Human record and confirm the same rows restore from the authoritative snapshot; allow progress/state events to update the visible row.
+- Use a disposable oversized fixture against a disposable constrained destination and confirm the sheet stays open with visible required-versus-available bytes, the destination-change hint, and a disabled Add button.
+- Submit a duplicate disposable source and confirm the localized duplicate fault remains visible without dismissing the sheet.
+- Verify the Files tab and removal flow against disposable records. Do not delete or alter Human record `59043FE0` (`Ted Lasso`) or its payload.
+- The live observability runner remains intentionally pending until it can run from a clean disposable Engine directory and launchd state.
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK — WP-13 round 4 (BUG-009 + BUG-010)
 
 ### 1. Build & tests

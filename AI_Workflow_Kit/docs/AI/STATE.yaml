@@ -81,6 +81,13 @@ implementation:
     record; no post-commit snapshot refresh / event merge) and BUG-012
     (inspectAddSource insufficientSpace fault reached the client but the
     sheet rendered nothing). BUG-010 residual: alert type still "unknown".
+    Round 5 delivered: snapshot-authoritative list (event sink registered
+    before first fetchSnapshot, refresh after commitAdd/didBecomeActive/
+    reconnect, revision-contiguous merge, stale events ignored, gap => full
+    snapshot), Add sheet keeps faults visible (localized insufficientSpace
+    with required/free + destination hint, dismiss only on success), alert
+    type names mapped. XCTest green; live observability still refused over
+    Human state by design. Human live acceptance pending on fresh build.
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -99,7 +106,7 @@ qa:
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
