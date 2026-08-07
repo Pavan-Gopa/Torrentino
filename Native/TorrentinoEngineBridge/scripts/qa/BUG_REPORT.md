@@ -1,3 +1,121 @@
+# BUG REPORT — WP13-BUG-016 double-click .torrent opens empty window; document-open event unhandled
+
+Date: 2026-08-07
+Role: Orchestrator record (Human manual verification run)
+Scope: Native/TorrentinoApp (AppDelegate document-open handling, window policy)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Human: double-clicking .torrent files in Finder opens a NEW empty
+  Torrentino window per file; the torrent is never picked up; no visual
+  confirmation. Info.plist declares CFBundleDocumentTypes/CFBundleURLTypes,
+  but only `.onOpenURL` (kAEGetURL) is handled; kAEOpenDocuments has no
+  `application(_:open:)` handler, so document events are dropped.
+
+## Required product-side follow-up
+
+- AppDelegate: implement `application(_:open urls:)` (NSApplicationDelegate)
+  forwarding .torrent file URLs into the same add flow as the sheet
+  (inspect -> preflight -> visible confirmation), magnet stays onOpenURL.
+- Single-window policy: document/open events activate the existing main
+  window and present the add flow with the incoming file; no window
+  proliferation.
+- Visual feedback: incoming file shows in the Add sheet (source label +
+  preflight) or the row appears immediately; localized strings EN/RU.
+- Acceptance: double-click a .torrent in Finder => existing window focuses,
+  add flow shows the file with preflight; Add => row appears and downloads.
+
+---
+
+# BUG REPORT — WP13-BUG-015 agent rejects commands as invalidEnvelope; UI silent
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics)
+Scope: Native/TorrentinoIPC (envelope validation), Native/TorrentinoApp
+(client error surfacing), Native/TorrentinoEngineAgent (rejection logging)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Agent log 10:08:37–10:36:20: five `command rejected name=invalidEnvelope`;
+  client log has NO entries at those times => the sending path neither logs
+  nor renders the rejection; Human sees "press Add and nothing happens".
+
+## Required product-side follow-up
+
+- Agent: log the envelope validation REASON (redacted) on rejection
+  (version mismatch / decode failure / size limit) with request provenance.
+- Client: every rejected/failed envelope must surface a localized error in
+  the active flow (sheet or banner) and be logged in the client facade.
+- Diagnose which command/payload triggered the rejections during the
+  10:08–10:36 window (correlate with Human add attempts; likely the
+  document-open/add path) and fix the payload/version mismatch.
+- Acceptance: scripted add of every source kind (file data, file URL,
+  magnet) produces either success or a visible localized fault; QA asserts
+  zero invalidEnvelope for supported commands.
+
+---
+
+# BUG REPORT — WP13-BUG-014 storage preflight rejects a 2 KB requirement
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics)
+Scope: Native/TorrentinoEngineAgent (inspectAddSource storage preflight)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Agent log 09:33:37Z: `inspectAddSource storage preflight failed
+  requiredBytes=2048` => `insufficientSpace` on a ~15 GB-free volume.
+  A 2 KB requirement can never exceed real free space => the available-bytes
+  computation is wrong for some destination/volume cases (statfs/URL resource
+  values failure, wrong volume resolution, or unit bug).
+
+## Required product-side follow-up
+
+- Diagnose and fix available-bytes: resolve the destination volume correctly
+  (including /tmp//var aliases, external volumes), fail closed only on
+  genuine shortage; never reject requiredBytes <= real free space.
+- Unit tests: tiny fixture vs real destination volume passes; oversized
+  fixture fails with accurate required/available numbers.
+
+---
+
+# BUG REPORT — WP13-BUG-013 preflight blocks add on TOTAL size; no file selection in add flow
+
+Date: 2026-08-07
+Role: Orchestrator record (Human manual verification run + plan contract)
+Scope: Native/TorrentinoApp (Add sheet file tree), Native/TorrentinoEngineAgent
+(inspectAddSource/commitAdd selection-aware preflight)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Human (legitimate product need): multi-episode torrents (25–31 GB) are
+  refused at add time on a 15 GB volume although the user only wants ONE
+  episode; the file list with checkboxes is unreachable because the add is
+  blocked before selection exists. Logs: insufficientSpace at
+  requiredBytes=31454533380 / 25381188247 before any selection.
+- Plan contract: line 223 flags "выбор происходит после запуска ... плохой
+  preflight" as the defect to fix; §7.4 has setFileSelection; acceptance:
+  "preflight/file selection работают".
+
+## Required product-side follow-up
+
+- After inspectAddSource succeeds, the Add sheet shows the torrent's file
+  tree with tri-state checkboxes (default all selected); toggling recomputes
+  preflight required bytes from the SELECTED subset (agent-side:
+  inspect/commit accept initial selection; setFileSelection semantics reused).
+- commitAdd carries the initial selection; engine applies it at admission
+  (skip|normal via round-2b bridge API).
+- insufficientSpace is evaluated against the selected subset; total-size
+  warning may remain informational but must not block a feasible selection.
+- Acceptance: on 15 GB free, add a 25 GB multi-file torrent, deselect all but
+  one small episode => preflight passes => Add => only that file downloads.
+
+---
+
 # BUG REPORT — WP13-BUG-012 Add sheet silently swallows inspection/commit faults
 
 Date: 2026-08-07
