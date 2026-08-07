@@ -1,3 +1,39 @@
+# FEEDBACK — WP-13 round 2b native priority and disposable live closure
+
+### 1. Build & tests
+- Graphify query executed: `graphify query "round 2b: EngineBridge setFilePriorities libtorrent prioritize_files adapter TrackerTiers pattern, BridgeTransferEngine selection dispatch, test_wp13_bug_closure live gaps"`.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED** (full scheme).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_bug_closure.sh`: **PASS**; 15/15 targeted XCTest, live launchd recovery, native priority smoke, and Swift/ObjC++ integration all green.
+- Native marker: `priority evidence: files=3 skip=1 normal=2 skipped_allocated=false`.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_restart_flow.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_duplicate_detection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS** (9/9 diagnostics tests).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **121/122 scripts PASS**. The only failure is the known environmental `test_wp03_legacy_untouched.sh` check against pre-existing Human-owned `Legacy/Tauri/` changes.
+- Live proof started only with an absent Engine directory, launchd job, and agent; it admitted no torrent record. Cleanup verification found all three absent. Human records and production payloads were untouched.
+
+### 2. Bug-by-bug verification
+1. **BUG-001 — Engine service recovery:** disposable live proof completed `register -> operational -> unregister -> degraded -> register -> operational` without app restart or an in-process fallback. The conditional AppKit seam remains source-level because it is not enabled in the shared target graph.
+2. **BUG-002 — Desired-state recovery:** desired-state/offline XCTest remains green; the isolated native libtorrent smoke confirms the bridge lifecycle and priority fixture operate against a real engine without touching the Human record.
+3. **BUG-003 — File selection:** `EngineBridge` now validates value-only index/path batches before `prioritize_files`, applies skip/normal priorities, and exposes readback. ObjC++ adapter, Swift DTO/coordinator boundary, `BridgeTransferEngine`, persistence, restore, invalid-path rejection, and inspection invalidation are covered.
+4. **BUG-004 — Add preflight:** inspect and commit required-byte checks remain green before persistence or engine admission.
+5. **BUG-005 — Faulted removal:** disposable faulted records support both keep-data and manifest-scoped delete-data removal; payload and Trash assertions are green.
+
+### 3. Architecture invariants & residual evidence
+- Swift 6 strict concurrency, warnings-as-errors, full scheme tests, and native C++/ObjC++ `-Werror` bridge checks are green.
+- C++ pointers and libtorrent types do not cross the Swift actor boundary; DTOs remain immutable/Codable/Sendable.
+- Priority batches are validated completely before native mutation; duplicate and unknown keys fail closed.
+- No Human record or production payload was read or mutated. The remaining Human acceptance step is verification against the Human's own record/session.
+- `Legacy/Tauri/` remained untouched; its pre-existing dirty state is the sole full-suite environmental failure.
+
+### 4. Comments & readability
+- Kept the native bridge scope small: facade, adapter, DTOs, coordinator call, production engine dispatch, smoke evidence, and focused regressions.
+- Replaced the old WP13 closure runner's permanent gaps with a fail-closed disposable live runner that refuses to run over pre-existing user state.
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK — WP-13 fix round 2 follow-up (BUG-003/004/005/006/007)
 
 ### 1. Build & tests

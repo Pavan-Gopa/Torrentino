@@ -41,11 +41,20 @@ implementation:
     (real priority application) plus live evidence (launchd recovery,
     disposable faulted-record removal, live priorities). Human-record removal
     remains a Human action on the fresh build.
+    Round 2b delivered: EngineBridge setFilePriorities (value-only validated
+    batches, prioritize_files, readback), adapter + BridgeTransferEngine
+    wiring on add/restore/edit; live proofs green (skipped_allocated=false,
+    launchd register/unregister cycle, disposable faulted removal keep-data
+    and delete-data); test_wp13_bug_closure.sh 15/15 PASS; QA 121/122 (sole
+    Legacy env fail); full XCTest green.
 review:
-  status: pending
+  status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
-  note: Re-review after round 2b (bridge priority API + live evidence).
+  note: >-
+    Re-review rounds 2+2b: bridge priority API PIMPL/value-type discipline,
+    fail-closed validation, live evidence authenticity, regression of rounds
+    0-2 fixes and WP-13 gates.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
@@ -56,7 +65,7 @@ qa:
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
