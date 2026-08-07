@@ -75,25 +75,31 @@ implementation:
     (~/Library/Logs/com.torrentino.app.engine-client/), idle count=0 spam
     removed, libtorrent alerts mapped with type/severity/message. XCTest
     green; live observability phase refused over Human state by design.
-    Human GUI acceptance pending on the fresh build.
+    Human live run on round-4 build: add flow reaches the engine (commitAdd
+    success, record persisted and announcing) but two UI projection bugs
+    opened round 5: BUG-011 (list shows "No torrents yet" despite live engine
+    record; no post-commit snapshot refresh / event merge) and BUG-012
+    (inspectAddSource insufficientSpace fault reached the client but the
+    sheet rendered nothing). BUG-010 residual: alert type still "unknown".
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: pending
   note: >-
-    Combined re-review rounds 2+2b+3+4: §5 closure, BUG-008/009/010 fixes,
-    suite isolation ruling, regression of 003-007 and WP-13 gates.
+    Combined re-review rounds 2..5 after round 5 lands: §5 closure,
+    BUG-008..012 fixes, suite isolation ruling, regression of 003-007 and
+    WP-13 gates.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
   suite: WP-13
-  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008, WP13-BUG-009, WP13-BUG-010
+  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008, WP13-BUG-009, WP13-BUG-010, WP13-BUG-011, WP13-BUG-012
   note: >-
     After fix round 2 + Reviewer APPROVED, Tester must run REAL-GUI
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: reviewer
+next_actor: coder
 track: RELEASE
 prior_track: RESEARCH
 working_roots:

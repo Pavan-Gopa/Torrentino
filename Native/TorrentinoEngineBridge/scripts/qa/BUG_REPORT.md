@@ -1,9 +1,60 @@
+# BUG REPORT — WP13-BUG-012 Add sheet silently swallows inspection/commit faults
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics + Human report)
+Scope: Native/TorrentinoApp (AddTorrentSheet fault projection)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Human: pressed Add on a 31.45 GB .torrent onto a ~15 GB volume; sheet
+  closed/blanked with no message ("пустота").
+- Client log 08:56:08Z: `command reply name=inspectAddSource result=fault
+  code=insufficientSpace` and `add inspection finished result=fault` — the
+  fault REACHED the app but was never rendered.
+
+## Required product-side follow-up
+
+- Render every inspection/commit fault in the sheet: localized
+  insufficientSpace with required vs available bytes and a destination-change
+  hint (wire the existing preflight UI to the fault path), duplicateAdd,
+  invalid source, transport errors. Sheet must stay open on fault (no silent
+  dismiss). XCTest: fault path sets errorMessage and keeps canCommit false.
+
+---
+
+# BUG REPORT — WP13-BUG-011 transfer list never projects engine records after add
+
+Date: 2026-08-07
+Role: Orchestrator record (live log forensics + Human screenshot)
+Scope: Native/TorrentinoApp (TorrentListViewModel snapshot/event merge)
+Verdict: **OPEN — assigned to Coder**
+
+## Evidence
+
+- Engine admitted record 59043FE0 (commitAdd success 08:55:31Z, present in
+  torrents table, libtorrent actively announcing); client log shows
+  `add commit reply result=success`.
+- UI shows "No torrents yet". Agent log: last fetchSnapshot 08:29:18Z —
+  BEFORE the add; no snapshot refresh after commitAdd and no event-driven
+  list update. Earlier boot log even showed `published 1 events to 0 sink(s)`.
+
+## Required product-side follow-up
+
+- After commitAdd success: refresh snapshot (and on didBecomeActive); ensure
+  the event subscription sink is registered before first snapshot and that
+  record-added/updated events mutate the list; list must be
+  snapshot-authoritative. Acceptance: real GUI — add a torrent => row appears
+  immediately with state/progress columns; restart app => rows restored.
+
+---
+
 # BUG REPORT — WP13-BUG-010 log quality: idle DEBUG spam + empty libtorrent alert fields
 
 Date: 2026-08-07
 Role: Orchestrator record (live log forensics)
 Scope: Native/TorrentinoEngineAgent (bridge alert drain loop, alert mapping)
-Verdict: **OPEN — assigned to Coder**
+Verdict: **FIXED IN CODE — waiting Human/live review**
 
 ## Evidence (engine_log_current.log, live session pid 74364)
 
@@ -23,6 +74,18 @@ Verdict: **OPEN — assigned to Coder**
 - QA: observability matrix asserts absence of count=0 spam and presence of
   non-empty alert kind/message for a forced libtorrent alert.
 
+## Round-4 implementation evidence (2026-08-07)
+
+- `BridgeTransferEngine.statusUpdate` now emits the drain marker only when the
+  batch is non-empty; idle `bridge alerts drained count=0` ticks are silent.
+- `EngineAlertDTO.alertLogMessage(for:)` keeps the existing mapped `kind`
+  boundary, derives a severity, and falls back from an empty `error` to the
+  non-empty alert message (or an explicit diagnostic fallback).
+- The alert formatter and the command/transfer observability matrix are covered
+  by `WP13DiagnosticsSecurityTests`; the XCTest matrix passed.
+- `test_wp13_observability.sh` was run and refused before launch because the
+  pre-existing Human Engine directory exists. No Human state was changed.
+
 ---
 
 # BUG REPORT — WP13-BUG-009 app-side add flow never reaches XPC after round-3 refactor
@@ -30,7 +93,7 @@ Verdict: **OPEN — assigned to Coder**
 Date: 2026-08-07
 Role: Orchestrator record (live log forensics + Human report)
 Scope: Native/TorrentinoApp (AddTorrentSheet picker-mode refactor, commit path)
-Verdict: **OPEN — assigned to Coder**
+Verdict: **FIXED IN CODE — waiting Human GUI review**
 
 ## Evidence
 
@@ -58,6 +121,20 @@ Verdict: **OPEN — assigned to Coder**
   preflight visible -> Add -> record appears and transitions per desired
   state (or actionable localized fault, e.g. insufficientSpace with
   destination change). Magnet path regression green.
+
+## Round-4 implementation evidence (2026-08-07)
+
+- `AddTorrentSheet` retains the picker mode until the result callback consumes
+  it, so a valid `.torrent` result cannot become `.ignored` during dismissal.
+- Picker failures, invalid sources, security-scope status, inspection
+  schedule/finish, commit attempt/finish, and transport faults now surface
+  through localized UI errors and the redacted app-side client facade.
+- App-side records are written to
+  `~/Library/Logs/com.torrentino.app.engine-client/client_log_current.log` by
+  default, with `TORRENTINO_LOG_DIRECTORY` available for disposable QA.
+- App source-contract tests and the full Torrentino scheme test run passed.
+- The required real-GUI flow has not been executed in this session; no Human
+  torrent record or production payload was read, modified, or deleted.
 
 ---
 
