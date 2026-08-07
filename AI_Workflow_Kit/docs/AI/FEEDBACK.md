@@ -1,3 +1,88 @@
+# FEEDBACK — WP-13 round 4 (BUG-009 + BUG-010)
+
+### 1. Build & tests
+- Graphify was run first with the required round-4 query: `graphify query "round 4: AddTorrentSheet AddTorrentPickerMode result handler scheduleInspection commit canCommit, EngineClient inspectAddSource commitAdd, bridge alert drain logging libtorrent alert mapping"`.
+- `graphify update .`: **PASS**; graphify rebuilt the current code graph (5295 nodes, 12845 edges, 371 communities). The installed skill/package version warning and existing zero-node/configuration warnings were non-fatal.
+- `git diff --check`: **PASS**.
+- `bash -n` passed for the round-4 QA scripts.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- Full scheme `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS** (10/10 diagnostics tests plus secret-hygiene contract).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS** (5/5 targeted tests).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_duplicate_detection.sh`: **PASS** (typed duplicate faults and idempotent replay).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_pause_resume.sh`: **PASS** (start-paused/immediate-start and pause/resume transitions).
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_removal_durable.sh`: **PASS** (durable manifest, keep/delete, replay, safety and adversarial gates).
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_observability.sh`: **REFUSED (exit 1)** before launch: `refusing observability proof over pre-existing Engine directory`. No Human state was changed.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **REFUSED (exit 2)** at its fail-closed gate for the same pre-existing Torrentino Engine/job/agent state. No suite count is claimed.
+
+### 2. BUG-009 — app-side local torrent add flow
+- The round-3 single-importer binding could clear `pickerMode` before the result callback, routing a valid file to `.ignored`; the binding now retains mode until callback consumption.
+- `.torrent` results clear the text source and schedule agent-side inspection; destination results invalidate stale inspection and re-preflight.
+- Inspection generations reject stale asynchronous results. Security-scoped access is opened only around file inspection and is always stopped.
+- Picker failure, invalid source, inspection failure, commit failure, and transport faults have localized UI paths and redacted app-side logs.
+- `TorrentinoClientLog` writes the same redacted records to OSLog and the app file sink at `~/Library/Logs/com.torrentino.app.engine-client/client_log_current.log`; `TORRENTINO_LOG_DIRECTORY` supports disposable QA.
+- The app source-contract tests and full scheme tests passed. The real GUI acceptance remains pending.
+
+### 3. BUG-010 — bridge alert diagnostics
+- Idle alert drains no longer emit `bridge alerts drained count=0`.
+- Non-empty alert batches emit mapped type, derived severity, and a non-empty readable message; empty `error` falls back to the alert `message`.
+- Alert records still pass through the agent redaction facade before OSLog/file output. The existing `EngineAlertDTO.kind` mapped boundary and C++ ABI were preserved.
+- `WP13DiagnosticsSecurityTests.testObservabilityCommandMatrixWritesEveryRequiredClass` passed, including alert markers, redaction markers, and required command/transfer classes.
+- The disposable live XPC/log-file phase could not run because the script correctly refused the current Human Engine state. No live alert record is claimed.
+
+### 4. Human acceptance boundary
+- Pending GUI checks: choose a local `.torrent`, verify source label/text clearing and visible preflight, press Add, verify record projection; choose a destination folder and verify preflight refresh; cancel both panels and verify localized errors/no crash.
+- Pending live observability check: run `test_wp13_observability.sh` only from a clean disposable fixture where its fail-closed precondition passes.
+- No Human torrent record or production payload was read, modified, or deleted.
+- Pre-existing `Legacy/Tauri/` changes remain untouched under the HARD BAN.
+
+---
+**RESULT:** waiting_review
+
+# FEEDBACK — WP-13 round 3 (BUG-008 + Reviewer section 5)
+
+### 1. Build & tests
+- Graphify was run first with the required round 3 query: `graphify query "round 3: AddTorrentSheet fileImporter conflict, TorrentinoLog redaction facade raw Logger bypasses TransferCoordinator, observability QA matrix, run_qa_suite fixture ordering"`.
+- `git diff --check`: **PASS**.
+- `bash -n` passed for `test_wp13_diagnostics_security.sh`, `test_wp13_observability.sh`, and `run_qa_suite.sh`.
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **BUILD SUCCEEDED**.
+- Full scheme `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64'`: **TEST SUCCEEDED (308/308)**.
+- `TorrentinoAppTests.testAddTorrentSheetUsesOneModeDrivenImporterAndPreflightsSelections`: **PASS (1/1)**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh`: **PASS (10/10 diagnostics tests plus secret-hygiene contract)**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS (5/5 targeted tests)**.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh`: **PASS**; native marker was `priority evidence: files=3 skip=1 normal=2 skipped_allocated=false`.
+- `bash Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_fail_closed_contract.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_manifest_safety_contract.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_observability.sh`: **REFUSED (exit 1)** before launch because the pre-existing Human Engine directory was detected. No Human state was changed.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`: **REFUSED (exit 2)** at the initial fail-closed gate for the same pre-existing Human Engine/job/agent state; no suite count is claimed.
+
+### 2. BUG-008 — AddTorrentSheet
+- `AddTorrentSheet` now owns one mode-driven `.fileImporter` instead of competing file panels.
+- `AddTorrentPickerMode` routes `.torrent` and destination-folder results through the same result handler.
+- Selecting a `.torrent` clears the text source and schedules agent-side inspection/preflight.
+- Selecting a destination stores the folder, invalidates stale inspection, and re-runs preflight when a source is present.
+- Security-scoped access is opened only around file inspection and is always stopped.
+- Picker cancellation/failure is surfaced through localized error keys; commit remains disabled until inspection succeeds.
+- XCTest coverage verifies the source contract; executable picker routing tests remain conditional on the existing `WP13_APP_SEAM` target seam.
+
+### 3. Reviewer section 5 — diagnostics and observability
+- Raw `Logger` construction is confined to the agent diagnostics facade and the app-side client facade; command, transfer, persistence, bridge, and lifecycle paths route through redaction before OSLog.
+- Raw `String(describing: error)` logging outside those facades was removed from the reviewed native scope.
+- `testObservabilityCommandMatrixWritesEveryRequiredClass` passed and covers add/commit, removal, fetchFiles, selection, pause/resume, reannounce, checkpoint, state transition, bridge alerts, and redaction markers.
+- `test_wp13_observability.sh` adds the live XPC connect/peer-verification log assertions in a disposable directory, but its live phase could not run against the current Human state and therefore is not reported as green.
+- `run_qa_suite.sh` now refuses pre-existing state before any script and runs the WP-13 closure runner last, preventing earlier fixture residue from poisoning the final proof.
+
+### 4. Human acceptance boundary
+- Required GUI checks remain pending: choose a `.torrent`, verify the source label/text clearing and visible preflight; choose a destination folder and verify preflight refresh; cancel both panels and verify localized errors/no crash.
+- No Human torrent record or production payload was read, modified, or deleted.
+- Pre-existing `Legacy/Tauri/` changes remain untouched under the HARD BAN.
+
+---
+**RESULT:** waiting_review
+
 # FEEDBACK — WP-13 rounds 2+2b re-review
 
 ### 1. Build & tests

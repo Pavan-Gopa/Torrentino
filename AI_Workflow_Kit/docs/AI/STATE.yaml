@@ -68,6 +68,14 @@ implementation:
     BUG-010 (idle DEBUG spam count=0 at 2Hz; libtorrent alerts logged with
     empty kind/error). Combined re-review of 2+2b+3 deferred until round 4
     lands.
+    Round 4 delivered: root cause found (importer binding cleared pickerMode
+    before result callback, routing valid .torrent to .ignored; mode now
+    retained until consumed), stale inspection generations rejected, every
+    failure branch localized + redacted app-side client log sink
+    (~/Library/Logs/com.torrentino.app.engine-client/), idle count=0 spam
+    removed, libtorrent alerts mapped with type/severity/message. XCTest
+    green; live observability phase refused over Human state by design.
+    Human GUI acceptance pending on the fresh build.
 review:
   status: waiting_review
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -85,7 +93,7 @@ qa:
     scenarios (real torrent file, real disk constraints, remove/retry flows)
     in addition to scripted suites; Human flagged scripted-only QA as
     insufficient.
-next_actor: coder
+next_actor: reviewer
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
