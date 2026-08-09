@@ -416,6 +416,12 @@ NSDictionary* alertToJSON(const EngineAlertDTO& alert)
 		jsonKey("state") : @(alert.state),
 		jsonKey("error") : [NSString stringWithUTF8String:alert.error.c_str()],
 		jsonKey("message") : [NSString stringWithUTF8String:alert.message.c_str()],
+		jsonKey("download-rate") : @(alert.download_rate),
+		jsonKey("upload-rate") : @(alert.upload_rate),
+		jsonKey("downloaded-bytes") : @(alert.downloaded_bytes),
+		jsonKey("uploaded-bytes") : @(alert.uploaded_bytes),
+		jsonKey("peers-connected") : @(alert.peers_connected),
+		jsonKey("seeds-total") : @(alert.seeds_total),
 	};
 }
 

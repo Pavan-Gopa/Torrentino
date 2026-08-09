@@ -20,17 +20,39 @@ struct TorrentListView: View {
     var body: some View {
         NavigationSplitView {
             filterSidebar
-                .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+                .navigationSplitViewColumnWidth(min: 140, ideal: 180, max: 240)
         } detail: {
-            VSplitView {
-                transferTable
-                    .frame(minHeight: 200)
-                filesPane
-                    .frame(minHeight: 120)
+            ZStack {
+                VSplitView {
+                    transferTable
+                        .frame(minHeight: 180)
+                    if showsFilesPane {
+                        filesPane
+                            .frame(
+                                minHeight: FilesPaneSizing.minimumHeight,
+                                idealHeight: idealFilesPaneHeight,
+                                maxHeight: FilesPaneSizing.maxHeight
+                            )
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .onDrop(of: [.fileURL, .url, .item, .data, .plainText], isTargeted: nil) { providers in
+                handleDrop(providers)
             }
             .searchable(text: $viewModel.searchText, prompt: String(localized: "torrents.search.prompt"))
             .background(SearchFieldFocusBridge(request: viewModel.searchFocusRequest))
             .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+                    } label: {
+                        Image(systemName: "sidebar.leading")
+                    }
+                    .help(String(localized: "torrents.sidebar.library"))
+                    .accessibilityLabel(String(localized: "torrents.sidebar.library"))
+                }
+
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         viewModel.showAddSheet = true
@@ -58,7 +80,7 @@ struct TorrentListView: View {
                 }
             }
         }
-        .navigationTitle(String(localized: "torrents.title"))
+        .navigationTitle("Torrentino")
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 removalRecoveryBanner
@@ -68,8 +90,8 @@ struct TorrentListView: View {
         .sheet(isPresented: $viewModel.showInspector) {
             InspectorView(torrent: viewModel.selectedTorrent, viewModel: viewModel)
         }
-        .onDrop(of: [.fileURL, .plainText], isTargeted: nil) { providers in
-            handleDrop(providers)
+        .onChange(of: viewModel.selection) { _ in
+            viewModel.selectionDidChange()
         }
         .onChange(of: viewModel.searchFocusRequest) { _ in
             SearchFieldFocusBridge.focusFirstResponder()
@@ -120,52 +142,71 @@ struct TorrentListView: View {
         )
     }
 
+    // MARK: - Files pane sizing (WP13-LIVE-PANE-UX-001)
+
+    private var selectedTorrentIsVisible: Bool {
+        guard let selectedTorrent = viewModel.selectedTorrent else { return false }
+        return filteredTorrents.contains { $0.id == selectedTorrent.id }
+    }
+
+    private var showsFilesPane: Bool {
+        FilesPaneSizing.hasContext(
+            selectedTorrentIsVisible: selectedTorrentIsVisible,
+            fileCount: viewModel.files.count,
+            filesLoading: viewModel.filesLoading
+        )
+    }
+
+    private var idealFilesPaneHeight: CGFloat {
+        FilesPaneSizing.idealHeight(fileCount: viewModel.files.count)
+    }
+
     // MARK: - Table
 
     private var transferTable: some View {
         Table(filteredTorrents, selection: $viewModel.selection, sortOrder: $sortOrder) {
             TableColumn(String(localized: "torrents.col.name"), value: \.displayName) { torrent in
-                HStack(spacing: 8) {
-                    if torrent.health != .healthy {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .accessibilityHidden(true)
+                TorrentRowNameView(torrent: torrent)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        viewModel.revealTorrentFolder(torrent)
                     }
-                    Text(torrent.displayName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .accessibilityLabel("\(String(localized: "torrents.accessibility.torrent")): \(torrent.displayName)")
+                    .accessibilityLabel("\(String(localized: "torrents.accessibility.torrent")): \(torrent.displayName)")
             }
-            .width(min: 200, ideal: 320)
+            .width(min: 100, ideal: 240)
 
             TableColumn(String(localized: "torrents.col.state"), value: \.stateSortKey) { torrent in
                 Text(Self.stateText(for: torrent))
                     .foregroundStyle(torrent.desiredState == .paused ? .secondary : .primary)
             }
-            .width(110)
+            .width(min: 65, ideal: 90)
 
             TableColumn(String(localized: "torrents.col.progress"), value: \.progress.fraction) { torrent in
                 ProgressView(value: torrent.progress.fraction)
                     .progressViewStyle(.linear)
                     .frame(maxWidth: 160)
             }
-            .width(170)
+            .width(min: 60, ideal: 120)
 
             TableColumn(String(localized: "torrents.col.down"), value: \.rates.downloadBytesPerSec) { torrent in
                 Text(Self.byteRate(torrent.rates.downloadBytesPerSec))
             }
-            .width(80)
+            .width(min: 55, ideal: 75)
 
             TableColumn(String(localized: "torrents.col.up"), value: \.rates.uploadBytesPerSec) { torrent in
                 Text(Self.byteRate(torrent.rates.uploadBytesPerSec))
             }
-            .width(80)
+            .width(min: 55, ideal: 75)
 
             TableColumn(String(localized: "torrents.col.size"), value: \.progress.totalBytes) { torrent in
                 Text(Self.byteCount(torrent.progress.totalBytes))
             }
-            .width(90)
+            .width(min: 55, ideal: 75)
+        }
+        .onTapGesture(count: 2) {
+            if let torrent = viewModel.selectedTorrent {
+                viewModel.revealTorrentFolder(torrent)
+            }
         }
         .overlay {
             RoundedRectangle(cornerRadius: 6)
@@ -175,16 +216,16 @@ struct TorrentListView: View {
                 )
         }
         .contextMenu(forSelectionType: TorrentRecordID.self) { ids in
+            let targetIDs = ids.isEmpty ? viewModel.selection : ids
             Button(String(localized: "torrents.action.pause")) {
-                viewModel.pauseSelected()
+                viewModel.pauseIDs(targetIDs)
             }
-            .disabled(!viewModel.canPauseSelected)
+            .disabled(!viewModel.canPause(targetIDs))
 
             Button(String(localized: "torrents.action.resume")) {
-                viewModel.resumeSelected()
+                viewModel.resumeIDs(targetIDs)
             }
-            .disabled(!viewModel.canResumeSelected)
-
+            .disabled(!viewModel.canResume(targetIDs))
             Button(String(localized: "torrents.action.remove")) {
                 viewModel.removeSelected()
             }
@@ -230,6 +271,9 @@ struct TorrentListView: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
+        // Layer: App (Features).
+        // Role: native VSplitView files pane.
+        // Why: remove static hit-test capturing overlay so native NSSplitView divider drags freely.
     }
 
     private func panePlaceholder(title: String, icon: String) -> some View {
@@ -253,12 +297,24 @@ struct TorrentListView: View {
                 onUp: { viewModel.goUpDirectory() },
                 onToggle: { path, priority in
                     Task { await viewModel.setSelection(path, priority: priority) }
+                },
+                onOpenFile: { entry in
+                    viewModel.openSelectedFile(entry)
                 }
             )
         }
-        .overlay(alignment: .topLeading) {
-            if !viewModel.directoryStack.isEmpty {
-                HStack(spacing: 6) {
+        .safeAreaInset(edge: .top) {
+            filesHeaderBar
+        }
+    }
+
+    private var filesHeaderBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                // Layer: App (Features).
+                // Role: native files pane header bar.
+                // Why: remove fake drag icon so header bar relies cleanly on native split view divider.
+                if !viewModel.directoryStack.isEmpty {
                     Button(action: { viewModel.goUpDirectory() }) {
                         Label(String(localized: "torrents.files.up"), systemImage: "arrow.up")
                     }
@@ -268,9 +324,30 @@ struct TorrentListView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                } else {
+                    Text(String(localized: "torrents.files.header"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(8)
+                Spacer()
+                Button(String(localized: "torrents.files.select_all")) {
+                    Task { await viewModel.selectAllFiles() }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+
+                Button(String(localized: "torrents.files.deselect_all")) {
+                    Task { await viewModel.deselectAllFiles() }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .help(String(localized: "torrents.files.resize_help"))
+
+            Divider()
         }
     }
 
@@ -344,7 +421,12 @@ struct TorrentListView: View {
 
     private var statusBar: some View {
         let stats = viewModel.statusBar
-        return HStack(spacing: 16) {
+        return HStack(spacing: 14) {
+            Text("Torrentino v0.1")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Divider()
+                .frame(height: 12)
             Label {
                 Text("\(stats.downloading + stats.seeding)")
             } icon: {
@@ -390,9 +472,12 @@ struct TorrentListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "square.stack.3d.up.slash")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.secondary)
+            Image(nsImage: AppLogo.image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .accessibilityHidden(true)
             Text(String(localized: "empty.no_torrents"))
                 .font(.title3.weight(.semibold))
@@ -411,14 +496,31 @@ struct TorrentListView: View {
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var accepted = false
         for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            if provider.canLoadObject(ofClass: URL.self) {
                 accepted = true
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    guard let url = Self.fileURL(from: item),
-                          url.isFileURL,
-                          url.pathExtension.lowercased() == "torrent" else { return }
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, TorrentDropRouting.isTorrentDropURL(url) else { return }
                     Task { @MainActor in
-                        await viewModel.addTorrentFile(url, startPaused: false)
+                        viewModel.importIncomingTorrent(url)
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) ||
+                      provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) ||
+                      provider.hasItemConformingToTypeIdentifier(UTType.item.identifier) ||
+                      provider.hasItemConformingToTypeIdentifier(UTType.data.identifier) {
+                accepted = true
+                let typeId = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                    ? UTType.fileURL.identifier
+                    : (provider.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+                        ? UTType.url.identifier
+                        : (provider.hasItemConformingToTypeIdentifier(UTType.item.identifier)
+                            ? UTType.item.identifier
+                            : UTType.data.identifier))
+                provider.loadItem(forTypeIdentifier: typeId, options: nil) { item, _ in
+                    guard let url = Self.fileURL(from: item),
+                          TorrentDropRouting.isTorrentDropURL(url) else { return }
+                    Task { @MainActor in
+                        viewModel.importIncomingTorrent(url)
                     }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
@@ -446,11 +548,19 @@ struct TorrentListView: View {
             return URL(dataRepresentation: data as Data, relativeTo: nil)
         }
         if let string = item as? String {
+            if let url = URL(string: string), url.isFileURL { return url }
             return URL(fileURLWithPath: string)
+        }
+        if let string = item as? NSString {
+            let value = string as String
+            if let url = URL(string: value), url.isFileURL { return url }
+            return URL(fileURLWithPath: value)
         }
         return nil
     }
 
+    /// `.torrent` gate now lives in the dependency-free shared helper
+    /// (`TorrentDropRouting`) so the app tests run the identical logic.
     nonisolated private static func text(from item: NSSecureCoding?) -> String? {
         if let text = item as? String { return text }
         if let text = item as? NSString { return text as String }
@@ -478,6 +588,9 @@ struct TorrentListView: View {
     private static func stateText(for torrent: TorrentSnapshot) -> String {
         if torrent.desiredState == .paused {
             return String(localized: "torrents.status.paused")
+        }
+        if torrent.desiredState == .running && torrent.activity == .downloading && torrent.rates.downloadBytesPerSec == 0 && torrent.peers.connected == 0 {
+            return String(localized: "torrents.status.connecting")
         }
         switch torrent.activity {
         case .pendingAdd: return String(localized: "torrents.status.pending_add")
@@ -556,6 +669,16 @@ private struct FileRow: View {
     let onEnter: (String) -> Void
     let onUp: () -> Void
     let onToggle: (String, FileSelectionPriority) -> Void
+    let onOpenFile: (FileEntry) -> Void
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
+
+    private static func byteCount(_ bytes: Int64) -> String {
+        byteFormatter.string(fromByteCount: bytes)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -589,17 +712,26 @@ private struct FileRow: View {
         .onTapGesture(count: 2) {
             if entry.kind == .directory {
                 onEnter(entry.name)
+            } else {
+                onOpenFile(entry)
             }
         }
     }
+}
 
-    private static let byteFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter
-    }()
+private struct TorrentRowNameView: View {
+    let torrent: TorrentSnapshot
 
-    private static func byteCount(_ bytes: Int64) -> String {
-        byteFormatter.string(fromByteCount: bytes)
+    var body: some View {
+        HStack(spacing: 8) {
+            if torrent.health != .healthy {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+            }
+            Text(torrent.displayName)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 }

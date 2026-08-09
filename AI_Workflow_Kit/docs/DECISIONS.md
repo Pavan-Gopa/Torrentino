@@ -307,3 +307,125 @@ outcome for a failed gate, not a dead end.
 - The experimental Swift Metal/CORPUS bench tooling stays in the repo as the
   measurement harness for any future re-evaluation (e.g. M-series with larger
   GPUs), with the same gate criteria.
+
+---
+
+## ADR-019 — Engine session lifecycle: explicit state machine, single-writer health, unified admission, session-scoped shutdown
+
+**Date:** 2026-08-09
+**Status:** Accepted (WP-13 architectural escalation, Human decision 2026-08-09)
+
+**Context:** The WP-13 Coder fix cycle for engine behavior produced a systemic
+pattern: each live lane fixed one symptom and regressed a neighbor. Forensics
+across ENGINE-001/ENGINE-002 established six recurring failures: (1) restore
+rebuilt 0 records over a `verified=9` store because strict decode silently
+skipped records carrying extra/changed fields from rejected lanes; (2) record
+health latched `recoverableError(internalError)` on working torrents and stuck
+`waitingForSpace` on seeding ones; (3) idle limbo — admitted records with
+`desired=running` showing `activity=idle`; (4) the agent diagnostics sink dead
+in fresh binaries (no file entries, empty OSLog) — observability regressing per
+lane; (5) agent lifecycle churn — `shutdown requested via xpc` immediately
+after bootstrap with no defined keepalive owner; (6) `event_bus_unavailable`
+boot-order race on first connect. Structural inspection confirmed the root
+causes: `TransferCoordinator.swift` is a 3214-line god actor mixing restore,
+admission, command dispatch, health projection, preflight and persistence;
+health/activity/rates are projected in at least four places
+(`TransferCoordinator`, `BridgeTransferEngine`, `StatusCache`,
+`TorrentListViewModel.projectHealth`) with no single-writer rule; there is no
+explicit engine session state machine even though `EngineLifecycleState` and
+`EngineLifecycleChangedEvent` are already frozen in the IPC vocabulary but
+never implemented or emitted; the XPC `shutdown` method is a global, unscoped
+agent kill; and the event bus is constructed only after persistence opens, so
+early subscriptions are refused by timing. The uncommitted ENGINE-002 diff is
+untrusted evidence of the per-lane pattern, not a design input.
+
+**Decision:**
+- **One explicit session state machine in the agent**, implemented over the
+  already-frozen `EngineLifecycleState` vocabulary (`starting → openingStore →
+  restoringSession → reconcilingRecords → ready`, plus `degraded`,
+  `checkpointing → stopping → stopped`). Every transition has fail-closed
+  semantics; every transition is logged (file + OSLog) and published as
+  `EngineLifecycleChangedEvent`. Invariant **R0**: a restore that rebuilds 0
+  records over a non-empty verified store is never served silently — the
+  session enters `degraded(restoreAnomaly)`, library commands fail closed with
+  typed faults, and an empty snapshot is never published as truth.
+- **One restore/admission contract.** Tolerant decode is a design rule, not a
+  per-lane patch: core identity fields decode strict, everything else is
+  `decodeIfPresent`-style with typed fallbacks; partial per-record failures
+  produce typed per-record health, never silent skips; a mandatory
+  rebuilt/skipped summary is part of the contract (log + health payload). All
+  admission paths (commitAdd, restore re-add, resume, pump re-add, safe
+  restart) converge into ONE admission function with one gate order and
+  postconditions: admitted + `desired=running` ⇒ activity is
+  `fetchingMetadata`/`checking` (never `idle`); admitted + paused ⇒
+  `idle`+healthy; deferred ⇒ typed non-healthy health. `desired=running ∧
+  activity=idle ∧ health=healthy` is an invariant violation by construction.
+- **Single-writer health ownership.** `TransferCoordinator` is the only writer
+  of record `health/activity/rates/progress`, and only through one pure
+  `HealthPolicy` (storage→health, engine-error→health, conditions→health,
+  transient-suppression, triangle classification). `BridgeTransferEngine`/
+  `StatusCache` produce telemetry samples, not record truth: cached fault
+  evidence is live-derived with a bounded TTL so a one-shot alert can never
+  latch a triangle on a healthy torrent. The UI never writes or rewrites
+  health semantics — presentation mapping only; the view-model
+  `projectHealth` rewrite is removed and its rule moves into `HealthPolicy`.
+  Warning triangles are reserved for truthful actionable faults
+  (space/permission/volume/fatal); environment states are status text.
+- **Session-scoped agent shutdown and boot-order guarantees.** launchd owns
+  the agent process (on-demand Mach spawn, `KeepAlive.SuccessfulExit=false` —
+  unchanged); while any UI connection is live, the UI holds a shutdown veto:
+  the XPC `shutdown` is honored only when the requesting connection is the
+  last active one, otherwise it is refused (`false`) and the agent stays up.
+  This eliminates the bootstrap churn (a stale instance's shutdown can no
+  longer kill a freshly spawned agent that already serves a new UI). The
+  `TransferEventBus` is constructed before the Mach listener resumes, so
+  `subscribeEvents` can never be refused for timing; commands arriving before
+  the coordinator is wired keep the existing fail-closed typed
+  `engineNotReady` fault, covered by the client's bounded retry.
+- **Bootstrap-verified diagnostics.** The redacted file sink + OSLog are
+  initialized synchronously as the first statement of the agent entry point,
+  with a write+readback self-test and mandatory bootstrap marker lines; the
+  fresh-build gate asserts those markers in both sinks. The sink physically
+  lives in the agent target (`RedactedLogFileManager` behind the
+  `TorrentinoLog` facade) and is a bootstrap-verified service, not a lazy
+  side effect, so no refactor can silently kill it again.
+- **Incremental god-object decomposition, not big-bang.** After the lifecycle
+  lane lands, `TransferCoordinator` is decomposed in a fixed minimal sequence
+  of behavior-preserving extractions: `HealthPolicy` (pure) →
+  `AdmissionController` → `RestorePipeline` → `RecordLedger` → lane handler
+  file splits. Each step keeps the full behavioral contract and test suite
+  green; no step changes observable behavior.
+
+**Rationale:** The six recurring failures are symptoms of missing ownership
+boundaries, not six independent bugs: four health writers, five admission
+paths, zero session states, one global kill switch, and a lazy observability
+sink. Fixing them per lane provably oscillates (each lane touches the same hot
+files and breaks a neighbor). The IPC vocabulary for the state machine already
+exists frozen and unused; implementing it is convergence, not invention.
+Fail-closed degradation (typed faults + loud `degraded`) is chosen over silent
+empty/partial results everywhere because a BitTorrent client that quietly
+pretends an empty library or a healthy idle transfer destroys user trust worse
+than a visible fault. Session-scoped shutdown is the minimal change that makes
+agent lifetime deterministic under launchd without touching the frozen plist
+contract (ADR-004 budgets remain).
+
+**Consequences:**
+- The agent gains one authoritative session phase, exposed via plist-only
+  additive keys in the existing `health()` reply and via
+  `EngineLifecycleChangedEvent`; the XPC v1 wire contract is otherwise
+  unchanged. `shutdown` may now legitimately reply `false` (refused); callers
+  already treat the ack as best-effort (ADR-004: UI terminates within its 5 s
+  budget regardless).
+- The UI loses two behaviors by design: the demo-fixture fallback when the
+  agent is reachable but degraded (fixture remains only for transport-level
+  unavailability), and the view-model health rewrite. Both are replaced by
+  truthful agent-owned state plus a degraded banner.
+- Restore becomes loud: any future schema drift that breaks every record
+  surfaces as `degraded(restoreAnomaly)` with evidence, instead of an empty
+  library. Tolerant decode is now the standing rule for all persisted
+  side-tables (limits, location, topology envelopes, metainfo).
+- The untrusted ENGINE-002 diff is evidence only; the implementation lane
+  evaluates it against this contract and keeps, rewrites or removes hunks
+  accordingly. No commit/tag/branch work is part of the design packet.
+- Decomposition is deliberately deferred to a second lane so the lifecycle
+  fix lands as one coherent, reviewable unit on the hot files.

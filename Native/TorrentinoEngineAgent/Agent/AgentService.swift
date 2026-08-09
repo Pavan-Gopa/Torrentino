@@ -27,26 +27,41 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     /// AFTER its own stored properties are fully initialized (Swift phase-1
     /// init rule forbids capturing self inside its own property initializers).
     var shutdownHook: (@Sendable () -> Void)?
+    /// ListenerDelegate owns the session connection count and supplies the
+    /// last-UI veto. A missing authorizer fails closed.
+    var shutdownAuthorization: (@Sendable () -> Bool)?
     /// WP-07: the transfer coordinator + event bus, wired by AgentRuntime once
     /// the persistence store is open. Nil while booting: sendCommand answers
     /// with a typed engineNotReady fault envelope.
     var coordinator: TransferCoordinator?
-    var eventBus: TransferEventBus?
-    private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
+    private let eventBus: TransferEventBus
+    private let log = TorrentinoLog.logger(category: "xpc")
     /// Single active event sink (the UI process). Guarded by sinkLock.
     private let sinkLock = NSLock()
     private var eventSink: TorrentinoEventSink?
+    private var eventSinkConnectionID: UUID?
     private var busSinkID: UUID?
 
-    init(store: CounterStore, persistence: PersistenceStore, healthLane: AgentHealthLane = AgentHealthLane()) {
+    init(
+        store: CounterStore,
+        persistence: PersistenceStore,
+        healthLane: AgentHealthLane = AgentHealthLane(),
+        eventBus: TransferEventBus
+    ) {
         self.store = store
         self.persistence = persistence
         self.healthLane = healthLane
+        self.eventBus = eventBus
     }
 
     func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
         let pid = Int64(ProcessInfo.processInfo.processIdentifier)
         log.notice("hello from ui pid=\(pid)")
+        TorrentinoLog.record(
+            category: "xpc",
+            level: "info",
+            message: "xpc connect hello pid=\(pid)"
+        )
         // §7.4 handshake: the agent advertises its supported protocol via
         // health() (ipcVersion + protocolRange); the CLIENT negotiates its own
         // supported range against that advertisement (WP-05 Handshake). The
@@ -85,8 +100,8 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
             } catch {
                 // Persistence failed: report the sentinel -1, keep serving.
                 // The UI treats -1 as an error; the agent logs the cause.
-                Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
-                    .error("increment failed: \(String(describing: error), privacy: .public)")
+                TorrentinoLog.logger(category: "xpc")
+                    .error("increment failed: \(TorrentinoLog.redactedDescription(error))")
                 reply(-1)
             }
         }
@@ -100,7 +115,14 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     }
 
     func shutdown(reply: @escaping @Sendable (Bool) -> Void) {
+        guard shutdownAuthorization?() == true else {
+            log.warning("shutdown refused: another UI connection is active")
+            TorrentinoLog.record(category: "lifecycle", level: "warning", message: "command shutdown refused activeConnections>1")
+            reply(false)
+            return
+        }
         log.notice("shutdown requested via xpc; acking then stopping")
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "command shutdown start acknowledged=true")
         // Ack first: the runtime delays exit long enough for this reply to be
         // drained by the client connection.
         reply(true)
@@ -110,39 +132,45 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     // MARK: - WP-07 command lane
 
     func sendCommand(commandData: Data, reply: @escaping @Sendable (Data) -> Void) {
+        let commandName = Self.commandName(from: commandData)
+        TorrentinoLog.record(category: "xpc", level: "info", message: "command start name=\(commandName)")
         guard let coordinator = coordinator else {
+            TorrentinoLog.record(category: "xpc", level: "warning", message: "command complete name=\(commandName) result=engineNotReady")
             reply(Self.faultEnvelope(EngineFault.engineNotReady(details: "agent booting")))
             return
         }
         guard healthLane.tryBeginCommand() else {
+            TorrentinoLog.record(category: "xpc", level: "warning", message: "command complete name=\(commandName) result=commandLaneFull")
             reply(Self.faultEnvelope(.resourceLimitExceeded(resource: "command_lane", limit: AgentHealthLane.commandLimit)))
             return
         }
         Task {
             defer { healthLane.endCommand() }
-            reply(await coordinator.processCommand(commandData))
+            let result = await coordinator.processCommand(commandData)
+            TorrentinoLog.record(
+                category: "xpc",
+                level: "info",
+                message: "command complete name=\(commandName) result=\(Self.resultClass(from: result))"
+            )
+            reply(result)
         }
     }
 
     func subscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
-        let bus = eventBus
+        TorrentinoLog.record(category: "xpc", level: "info", message: "event subscription start")
         let id = UUID()
         sinkLock.lock()
         let previousID = busSinkID
         busSinkID = id
         sinkLock.unlock()
         Task {
-            guard let bus else {
-                sinkLock.withLock { busSinkID = nil }
-                reply(false)
-                return
-            }
             if let previousID {
-                await bus.unregister(id: previousID)
+                await eventBus.unregister(id: previousID)
             }
-            await bus.register(TransferEventBus.Sink(id: id) { [weak self] events in
+            await eventBus.register(TransferEventBus.Sink(id: id) { [weak self] events in
                 await self?.deliver(events)
             })
+            TorrentinoLog.record(category: "xpc", level: "info", message: "event subscription complete result=success")
             reply(true)
         }
     }
@@ -152,21 +180,32 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         let id = busSinkID
         busSinkID = nil
         sinkLock.unlock()
-        guard let bus = eventBus, let id else {
+        guard let id else {
             reply(false)
             return
         }
         Task {
-            await bus.unregister(id: id)
+            await eventBus.unregister(id: id)
             reply(true)
         }
     }
 
-    /// Replaces the connection-side sink (called by the listener on accept)
-    /// or clears it (called on interruption/invalidation).
-    func setEventSink(_ sink: TorrentinoEventSink?) {
+    /// Replaces the connection-side sink (called by the listener on accept).
+    func setEventSink(_ sink: TorrentinoEventSink?, connectionID: UUID) {
         sinkLock.lock()
         eventSink = sink
+        eventSinkConnectionID = connectionID
+        sinkLock.unlock()
+    }
+
+    /// Clears only the sink belonging to the connection that ended. An old UI
+    /// connection must not erase a newer session's live event sink.
+    func clearEventSink(connectionID: UUID) {
+        sinkLock.lock()
+        if eventSinkConnectionID == connectionID {
+            eventSink = nil
+            eventSinkConnectionID = nil
+        }
         sinkLock.unlock()
     }
 
@@ -183,6 +222,27 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     private static func faultEnvelope(_ fault: EngineFault) -> Data {
         let envelope = IPCEnvelope.result(requestID: RequestID(), result: .failure(fault))
         return (try? JSONEncoder().encode(envelope)) ?? Data()
+    }
+
+    private static func commandName(from data: Data) -> String {
+        guard let envelope = try? JSONDecoder().decode(IPCEnvelope.self, from: data),
+              let command = envelope.command else {
+            return "invalid"
+        }
+        return command.name
+    }
+
+    private static func resultClass(from data: Data) -> String {
+        guard let envelope = try? JSONDecoder().decode(IPCEnvelope.self, from: data),
+              let result = envelope.result else {
+            return "invalidReply"
+        }
+        switch result {
+        case .success:
+            return "success"
+        case .failure(let fault):
+            return "fault:\(fault.code.rawValue)"
+        }
     }
 }
 
@@ -207,6 +267,12 @@ final class AgentHealthLane: @unchecked Sendable, EngineHealthReporter {
     private var quarantined = 0
     private var reconciliation = "none"
     private var safeRecovery = false
+    private var sessionPhase = EngineLifecycleState.starting.rawValue
+    private var sessionRevision: UInt64 = 1
+    private var degradedReason: String?
+    private var restoreRebuilt = 0
+    private var restoreSkipped = 0
+    private var observabilityDegraded = false
 
     func tryBeginCommand() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -275,10 +341,31 @@ final class AgentHealthLane: @unchecked Sendable, EngineHealthReporter {
         lock.unlock()
     }
 
+    func updateLifecycle(_ phase: EngineLifecycleState, reason: String?, revision: UInt64) {
+        lock.lock()
+        sessionPhase = phase.rawValue
+        degradedReason = reason
+        sessionRevision = revision
+        lock.unlock()
+    }
+
+    func updateRestoreSummary(rebuilt: Int, skipped: Int) {
+        lock.lock()
+        restoreRebuilt = max(0, rebuilt)
+        restoreSkipped = max(0, skipped)
+        lock.unlock()
+    }
+
+    func updateObservability(_ degraded: Bool) {
+        lock.lock()
+        observabilityDegraded = degraded
+        lock.unlock()
+    }
+
     func snapshot(counter: Int64, counterFormat: String) -> [String: Any] {
         lock.lock()
         let conditions = self.conditions
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "uptimeSeconds": NSNumber(value: Date().timeIntervalSince(startedAt)),
             "counter": NSNumber(value: counter),
             "counterFormat": counterFormat,
@@ -303,7 +390,15 @@ final class AgentHealthLane: @unchecked Sendable, EngineHealthReporter {
             "memoryPressure": conditions.memoryPressure.rawValue,
             "lowPower": NSNumber(value: conditions.lowPower),
             "sleeping": NSNumber(value: conditions.sleeping),
+            "sessionPhase": sessionPhase,
+            "sessionRevision": NSNumber(value: sessionRevision),
+            "restoreRebuilt": NSNumber(value: restoreRebuilt),
+            "restoreSkipped": NSNumber(value: restoreSkipped),
+            "observability": observabilityDegraded ? "degraded" : "ready",
         ]
+        if let degradedReason {
+            payload["degradedReason"] = degradedReason
+        }
         lock.unlock()
         return payload
     }

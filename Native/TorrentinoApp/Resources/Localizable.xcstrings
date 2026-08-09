@@ -950,6 +950,23 @@
         }
       }
     },
+    "error.duplicate_add": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This torrent is already in the library."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот торрент уже есть в библиотеке."
+          }
+        }
+      }
+    },
     "error.internal": {
       "extractionState": "manual",
       "localizations": {
@@ -999,6 +1016,41 @@
             "value": "Служба движка недоступна."
           }
         }
+      }
+    },
+    "engine.degraded.generic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine session is degraded." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Сеанс движка работает в ограниченном режиме." } }
+      }
+    },
+    "engine.degraded.observability": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Engine diagnostics are degraded." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Диагностика движка работает с ограничениями." } }
+      }
+    },
+    "engine.degraded.persistence_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine could not open its library." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Движок не смог открыть библиотеку." } }
+      }
+    },
+    "engine.degraded.restore_anomaly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine found a restore anomaly; no empty library was published." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "При восстановлении найдена ошибка; пустая библиотека не опубликована." } }
+      }
+    },
+    "engine.degraded.safe_recovery": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The engine is in safe recovery mode." } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Движок находится в безопасном режиме восстановления." } }
       }
     },
     "files.failed": {
@@ -1273,6 +1325,74 @@
         }
       }
     },
+    "torrents.add.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Destination…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место назначения…"
+          }
+        }
+      }
+    },
+    "torrents.add.destination_default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default download location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место загрузки по умолчанию"
+          }
+        }
+      }
+    },
+    "torrents.add.destination_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The destination could not be selected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось выбрать место назначения"
+          }
+        }
+      }
+    },
+    "torrents.add.files_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files to download"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файлы для загрузки"
+          }
+        }
+      }
+    },
     "torrents.add.help": {
       "extractionState": "manual",
       "localizations": {
@@ -1286,6 +1406,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Добавьте торрент по magnet-ссылке, из торрент-файла или по URL"
+          }
+        }
+      }
+    },
+    "torrents.add.inspection_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The torrent could not be inspected"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить торрент"
           }
         }
       }
@@ -1358,6 +1495,40 @@
         }
       }
     },
+    "torrents.add.reading_torrent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading torrent…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтение торрента…"
+          }
+        }
+      }
+    },
+    "torrents.add.selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрано: %@"
+          }
+        }
+      }
+    },
     "torrents.add.start_paused": {
       "extractionState": "manual",
       "localizations": {
@@ -1371,6 +1542,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Начать на паузе"
+          }
+        }
+      }
+    },
+    "torrents.add.total": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Всего: %@"
           }
         }
       }
@@ -1579,6 +1767,108 @@
         }
       }
     },
+    "torrents.files.deselect_all": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect All"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Снять выделение"
+          }
+        }
+      }
+    },
+    "torrents.files.header": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файлы"
+          }
+        }
+      }
+    },
+    "torrents.files.hide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide Files"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрыть файлы"
+          }
+        }
+      }
+    },
+    "torrents.files.resize_help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag the divider to resize the files pane"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перетащите разделитель, чтобы изменить размер панели файлов"
+          }
+        }
+      }
+    },
+    "torrents.files.select_all": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select All"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать все"
+          }
+        }
+      }
+    },
+    "torrents.files.show": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Files"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показать файлы"
+          }
+        }
+      }
+    },
     "torrents.filter.all": {
       "extractionState": "manual",
       "localizations": {
@@ -1694,6 +1984,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверка"
+          }
+        }
+      }
+    },
+    "torrents.status.connecting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ищет пиров..."
           }
         }
       }
@@ -3662,6 +3969,20 @@
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "The engine could not complete this operation" } },
         "ru": { "stringUnit": { "state": "translated", "value": "Движок не смог выполнить эту операцию" } }
+      }
+    },
+    "openfile.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "File is not downloaded yet — showing the torrent folder instead" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Файл ещё не загружен — показана папка торрента" } }
+      }
+    },
+    "reveal.missingPath": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Downloaded content is not available at the saved location yet" } },
+        "ru": { "stringUnit": { "state": "translated", "value": "Содержимое пока недоступно в папке загрузки" } }
       }
     },
     "reannounce.failed": {

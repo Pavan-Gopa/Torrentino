@@ -27,7 +27,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
-#include <cmath>
+#include <iostream>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -346,6 +346,16 @@ bool valid_tracker_url(std::string_view url)
 constexpr lt::alert_category_t kAlertMask = lt::alert_category::error
 	| lt::alert_category::status | lt::alert_category::storage
 	| lt::alert_category::performance_warning;
+static std::string expand_tilde(const std::string& path) {
+	if (path.empty()) return path;
+	if (path[0] == '~') {
+		const char* home = std::getenv("HOME");
+		if (home) {
+			return std::string(home) + path.substr(1);
+		}
+	}
+	return path;
+}
 
 lt::settings_pack make_settings(const SessionConfiguration& config)
 {
@@ -560,7 +570,7 @@ struct EngineBridge::Impl {
 		// The boot report must reflect what the engine actually runs with, so
 		// the configured peer-id prefix (not the default) is what gets reported.
 		last_peer_id_ = config.peer_id_prefix;
-		default_download_dir_ = config.download_dir;
+		default_download_dir_ = expand_tilde(config.download_dir);
 		timeout_ = Millis{config.operation_timeout_ms > 0
 			? config.operation_timeout_ms : kDefaultTimeoutMs};
 		started = Clock::now();
@@ -621,7 +631,7 @@ struct EngineBridge::Impl {
 			// apply_settings is asynchronous inside libtorrent, but the call itself
 			// is the documented live configuration boundary and does not drop handles.
 			session_->apply_settings(make_settings(config));
-			default_download_dir_ = config.download_dir;
+			default_download_dir_ = expand_tilde(config.download_dir);
 			last_peer_id_ = config.peer_id_prefix;
 			timeout_ = Millis{config.operation_timeout_ms > 0
 				? config.operation_timeout_ms : kDefaultTimeoutMs};
@@ -677,6 +687,26 @@ struct EngineBridge::Impl {
 
 	// --- alert pumping -----------------------------------------------------
 
+	static void fill_progress_dto(const lt::torrent_handle& h, EngineAlertDTO& dto)
+	{
+		try {
+			const lt::torrent_status status = h.status(lt::torrent_handle::query_accurate_download_counters);
+			dto.progress = static_cast<double>(status.progress);
+			dto.state = static_cast<int>(status.state);
+			dto.download_rate = static_cast<std::int64_t>(status.download_payload_rate > 0 ? status.download_payload_rate : status.download_rate);
+			dto.upload_rate = static_cast<std::int64_t>(status.upload_payload_rate > 0 ? status.upload_payload_rate : status.upload_rate);
+			dto.downloaded_bytes = static_cast<std::int64_t>(status.total_done > 0 ? status.total_done : status.total_download);
+			dto.uploaded_bytes = static_cast<std::int64_t>(status.total_upload);
+			dto.peers_connected = static_cast<int>(status.num_peers);
+			dto.seeds_total = static_cast<int>(status.num_seeds);
+			if (status.errc) {
+				dto.error = status.errc.message();
+			}
+		} catch (...) {
+			// a handle that died mid-conversion keeps the -1 sentinel
+		}
+	}
+
 	void pumpLocked()
 	{
 		scratch_.clear();
@@ -684,6 +714,14 @@ struct EngineBridge::Impl {
 		for (const lt::alert* alert : scratch_) {
 			alerts_seen_++;
 			pending_.push_back(convertAlert(*alert));
+		}
+		for (const auto& [id, handle] : handles_) {
+			if (!handle.is_valid()) continue;
+			EngineAlertDTO dto;
+			dto.kind = EngineAlertKind::state_changed;
+			dto.torrent_id = id;
+			fill_progress_dto(handle, dto);
+			pending_.push_back(std::move(dto));
 		}
 	}
 
@@ -727,17 +765,9 @@ struct EngineBridge::Impl {
 		// the alert only carries state/error, so a per-alert status() poll is
 		// the only truthful source (and it is cheap: no disk or network work).
 		const auto fill_progress = [&dto](const lt::torrent_handle& h) {
-			try {
-				const lt::torrent_status status = h.status();
-				dto.progress = static_cast<double>(status.progress);
-			} catch (...) {
-				// a handle that died mid-conversion keeps the -1 sentinel
-			}
+			fill_progress_dto(h, dto);
 		};
 
-		// torrent_alert::alert_type only exists under ABI v1 and would be a
-		// [[deprecated]] dejure global base, so per-case extracts take the
-		// handle from each concrete alert instead of casting to the base.
 		switch (alert.type()) {
 		case lt::state_changed_alert::alert_type: {
 			const auto* a = static_cast<const lt::state_changed_alert*>(&alert);
@@ -881,8 +911,8 @@ struct EngineBridge::Impl {
 		if (!started.is_ok()) {
 			return Result<AddResult>::failed(started.error_code(), started.error_message());
 		}
-		const std::string savePath = spec.save_path.empty()
-			? default_download_dir_ : spec.save_path;
+		const std::string savePath = expand_tilde(spec.save_path.empty()
+			? default_download_dir_ : spec.save_path);
 		if (savePath.empty()) {
 			return Result<AddResult>::failed(BridgeError::invalid_argument,
 				"add: save_path and configured download_dir must not both be empty");
@@ -894,12 +924,17 @@ struct EngineBridge::Impl {
 				"add: provide exactly one of torrent_file or magnet_uri");
 		}
 
+		lt::add_torrent_params atp;
+		lt::info_hash_t targetHashes;
 		try {
-			lt::add_torrent_params atp;
 			if (has_file) {
 				atp = lt::load_torrent_buffer(spec.torrent_file);
 			} else {
 				atp = lt::parse_magnet_uri(spec.magnet_uri);
+			}
+			targetHashes = atp.info_hashes;
+			if (!targetHashes.has_v1() && !targetHashes.has_v2() && atp.ti) {
+				targetHashes = atp.ti->info_hashes();
 			}
 			atp.save_path = savePath;
 			// Deterministic flags: the coordinator owns the state machine, so
@@ -954,13 +989,63 @@ struct EngineBridge::Impl {
 			result.total_size = status.total_wanted > 0 ? status.total_wanted : -1;
 			return Result<AddResult>::ok(std::move(result));
 		} catch (const lt::system_error& e) {
-			if (e.code() == lt::errors::duplicate_torrent) {
-				return Result<AddResult>::failed(BridgeError::engine_failure,
-					std::string("duplicate torrent: ") + e.what());
+			lt::torrent_handle handle;
+			if (targetHashes.has_v1()) {
+				handle = session_->find_torrent(targetHashes.v1);
+			}
+			if (!handle.is_valid() && targetHashes.has_v2()) {
+				handle = session_->find_torrent(targetHashes.v2);
+			}
+			if (!handle.is_valid()) {
+				for (const auto& h : session_->get_torrents()) {
+					if (h.is_valid() && h.info_hashes() == targetHashes) {
+						handle = h;
+						break;
+					}
+				}
+			}
+			if (handle.is_valid()) {
+				const lt::info_hash_t hashes = handle.info_hashes();
+				const TorrentRecordID id = id_string(hashes);
+				handles_[id] = handle;
+				AddResult result;
+				result.torrent_id = id;
+				result.info_hash = describe_hashes(hashes);
+				const lt::torrent_status status = handle.status();
+				result.name = status.name.empty() ? "(unknown)" : status.name;
+				result.total_size = status.total_wanted > 0 ? status.total_wanted : -1;
+				return Result<AddResult>::ok(std::move(result));
 			}
 			return Result<AddResult>::failed(BridgeError::engine_failure,
 				std::string("add failed: ") + e.what());
 		} catch (const std::exception& e) {
+			lt::torrent_handle handle;
+			if (targetHashes.has_v1()) {
+				handle = session_->find_torrent(targetHashes.v1);
+			}
+			if (!handle.is_valid() && targetHashes.has_v2()) {
+				handle = session_->find_torrent(targetHashes.v2);
+			}
+			if (!handle.is_valid()) {
+				for (const auto& h : session_->get_torrents()) {
+					if (h.is_valid() && h.info_hashes() == targetHashes) {
+						handle = h;
+						break;
+					}
+				}
+			}
+			if (handle.is_valid()) {
+				const lt::info_hash_t hashes = handle.info_hashes();
+				const TorrentRecordID id = id_string(hashes);
+				handles_[id] = handle;
+				AddResult result;
+				result.torrent_id = id;
+				result.info_hash = describe_hashes(hashes);
+				const lt::torrent_status status = handle.status();
+				result.name = status.name.empty() ? "(unknown)" : status.name;
+				result.total_size = status.total_wanted > 0 ? status.total_wanted : -1;
+				return Result<AddResult>::ok(std::move(result));
+			}
 			return Result<AddResult>::failed(BridgeError::internal,
 				std::string("add failed: ") + e.what());
 		} catch (...) {

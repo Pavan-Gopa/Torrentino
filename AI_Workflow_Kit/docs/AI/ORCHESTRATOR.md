@@ -57,10 +57,16 @@ Workers **не** планируют pipeline и **не** выдают промп
 
 1. Read `STATE.yaml` + `FEEDBACK.md` (+ test reports if relevant).
 2. Sync STATE if worker finished but STATE still stale.
-3. Branch **and always end with a full kick prompt** when `next_actor` is a worker:
+3. After every Coder handoff with product changes, run the **fresh-build Human
+   live-review gate** before Reviewer: close old app/agent → rebuild → relaunch
+   → verify status → let Human live-check the fresh build. Human live review is
+   additional evidence only: it never replaces mandatory code review or Tester.
+4. Branch **and always end with a full kick prompt** when `next_actor` is a worker:
 
 ### A) `review.status == approved` and implementation done
 - After review **approved** and tests not yet green → `next_actor: tester` → **kick Tester**.
+  Tester is mandatory: create/update focused tests for new behavior and run old
+  regression tests/suites; Human live review is not a QA substitute.
 - After tests **green** → POST checkpoint → **`/graphify . --update`** → advance / PRE next → `next_actor: coder` → **kick Coder**.
 - After tests **bugs** → do **not** advance:
   1. Read `BUG_REPORT.md`
@@ -83,11 +89,15 @@ Workers **не** планируют pipeline и **не** выдают промп
 - Reset attempts for clean retry
 
 ### D) `waiting_review` / `next_actor: reviewer`
-- **Kick Reviewer** (scope, target_files, Done checklist, commands)
+- **Kick Reviewer** (scope, target_files, Done checklist, commands). Reviewer is
+  mandatory after every Coder fix round that reaches Human-accepted fresh build.
 
 ### E) `pending` / `next_actor: coder`
 - Ensure PRE tag exists
 - **Kick Coder** (goal, target_files, requirements, out of scope, verify cmds)
+- When Coder returns, do not go straight to Reviewer from stale app state: perform
+  the build refresh cycle, let Human live-review the fresh build, then either
+  route new Human findings back to Coder or kick Reviewer.
 
 ### F) Architect handoff / design needed
 - Architect packet (design-only) или прими handoff и открой WP
@@ -115,10 +125,28 @@ Scope: **only** Torrentino git root.
 - Plan (`TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md`) is authoritative.
 - **`Legacy/Tauri/` HARD BAN:** never modify, never use as implementation reference, never stage in product commits. Human-only research tree. If workers dirty it, Orchestrator restores `git checkout -- Legacy/` and does **not** include Legacy in commits. Every kick prompt must restate this ban. Reviewer/Tester may only *detect* Legacy diffs, never edit Legacy.
 - Worker sessions are **stateless fresh windows** — never assume prior chat memory.
-- **Build refresh cycle (standing rule):** after every Coder fix round, before
-  handing the build to Human or kicking Reviewer, Orchestrator performs:
-  shutdown old app/agent (`--cli shutdown` + pkill) → rebuild Debug → relaunch
-  → verify `--cli status` operational. Human must never test a stale build.
+- **Build refresh cycle / Human live-review gate (standing rule):** after every
+  Coder fix round, before handing the app to Human for live review or kicking
+  Reviewer, Orchestrator performs: shutdown old app/agent (`--cli shutdown` +
+  pkill) → rebuild Debug → relaunch → verify `--cli status` operational. Human
+  must never test a stale build. If rebuild/relaunch/status fails, do not kick
+  Reviewer; route the failure back to Coder with the exact evidence.
+- Human live review is **not** a replacement for workflow roles. If Human accepts
+  the fresh build, next mandatory step is **Reviewer**. If Reviewer approves, next
+  mandatory step is **Tester**, who must add/update tests for new behavior and run
+  the old regression suite before WP closure.
+- **Behavioral acceptance contract (standing rule, 2026-08-09):** каждый Coder kick
+  содержит (a) контракт пользовательского поведения: фикс + ВСЕ ранее принятые
+  поведения в трогаемых файлах, сформулированные как наблюдаемые исходы;
+  (b) обязательное disposable-instance live-доказательство для engine-поведений
+  (restore/admission/resume/rates/health/logs) на изолированном store, без Human
+  state; (c) regression sweep по каждому трогаемому hot-файлу (TorrentListView,
+  TorrentListViewModel, TransferCoordinator, PersistenceStore): список поведений
+  файла + доказательство, что каждое живо после правки. Orchestrator в fresh-build
+  gateHeadlessly проверяет пункты контракта (snapshot: health/activity/rates;
+  наличие agent-логов; CLI команды) ДО Human live review; любой красный пункт =
+  возврат Coder'у, не handoff. Микро-lane'ы по одному hot-файлу подряд запрещены:
+  связанные правки идут одним lane'ом.
 - Swift 6 strict concurrency from day one.
 - No Homebrew runtime dependencies in release.
 - No App Sandbox in v1.

@@ -160,6 +160,12 @@ struct EngineAlertDTO {
 	int state = -1;             // raw libtorrent state code when available
 	std::string error;          // message for error alerts
 	std::string message;        // human-readable summary for logging
+	std::int64_t download_rate = 0;
+	std::int64_t upload_rate = 0;
+	std::int64_t downloaded_bytes = 0;
+	std::int64_t uploaded_bytes = 0;
+	int peers_connected = 0;
+	int seeds_total = 0;
 };
 
 struct HealthDTO {

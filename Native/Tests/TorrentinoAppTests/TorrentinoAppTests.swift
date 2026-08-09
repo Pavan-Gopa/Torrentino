@@ -3,6 +3,7 @@
 // Must-not: launch network peers or write production Application Support.
 
 import XCTest
+import UniformTypeIdentifiers
 import TorrentinoDomain
 import TorrentinoIPC
 
@@ -322,6 +323,110 @@ final class TorrentinoAppTests: TestProfileCase {
             _ = TorrentListProjection.project(rows100, query: "Archive", filter: .all, sortOrder: sortOrder)
             _ = TorrentListProjection.project(rows500, query: "Archive", filter: .all, sortOrder: sortOrder)
         }
+    }
+
+    // MARK: - WP13-LIVE-DND-UI-001 / WP13-LIVE-PANE-UX-001
+
+    /// Dropped `.torrent` URLs pass the same gate used by Finder
+    /// open-document (extension / exported `com.bittorrent.torrent` UTI).
+    func testTorrentDropURLGate() {
+        XCTAssertTrue(TorrentDropRouting.isTorrentDropURL(URL(fileURLWithPath: "/tmp/a.torrent")))
+        XCTAssertTrue(TorrentDropRouting.isTorrentDropURL(URL(fileURLWithPath: "/tmp/A.TORRENT")))
+        XCTAssertFalse(TorrentDropRouting.isTorrentDropURL(URL(fileURLWithPath: "/tmp/a.zip")))
+        XCTAssertFalse(TorrentDropRouting.isTorrentDropURL(URL(fileURLWithPath: "/tmp/a.turn")))
+        XCTAssertFalse(TorrentDropRouting.isTorrentDropURL(URL(string: "magnet:?xt=urn:btih:abc")!))
+    }
+
+    /// The Info.plist-declared document type must resolve by extension and UTI
+    /// so Finder open / window drop both recognize the torrent file type.
+    func testTorrentUTTypeMatchesExportedDeclaration() throws {
+        let byExtension = try XCTUnwrap(UTType(filenameExtension: "torrent"))
+        XCTAssertEqual(byExtension.identifier, "com.bittorrent.torrent")
+
+        let plistURL = Self.locateInfoPlist()
+        let plistData = try Data(contentsOf: try XCTUnwrap(plistURL))
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any])
+        let docTypes = try XCTUnwrap(plist["CFBundleDocumentTypes"] as? [[String: Any]])
+        let docType = try XCTUnwrap(docTypes.first)
+        XCTAssertTrue((docType["CFBundleTypeExtensions"] as? [String])?.contains("torrent") == true)
+        XCTAssertTrue((docType["LSItemContentTypes"] as? [String])?.contains("com.bittorrent.torrent") == true)
+    }
+
+    /// Files-pane sizing: tiny file lists size to content, large lists cap.
+    func testFilesPaneIdealHeightSizing() {
+        let one = FilesPaneSizing.idealHeight(fileCount: 1)
+        let two = FilesPaneSizing.idealHeight(fileCount: 2)
+        let many = FilesPaneSizing.idealHeight(fileCount: 200)
+        XCTAssertGreaterThan(one, FilesPaneSizing.baseHeight)
+        XCTAssertEqual(two - one, FilesPaneSizing.rowHeight, accuracy: 0.5)
+        XCTAssertEqual(many, FilesPaneSizing.maxHeight)
+        XCTAssertLessThanOrEqual(FilesPaneSizing.idealHeight(fileCount: 50), FilesPaneSizing.maxHeight)
+        XCTAssertGreaterThanOrEqual(one, FilesPaneSizing.minimumHeight)
+    }
+
+    func testFilesPaneVisibilityRequiresVisibleSelectionAndContent() {
+        XCTAssertFalse(
+            FilesPaneSizing.hasContext(
+                selectedTorrentIsVisible: false,
+                fileCount: 3,
+                filesLoading: false
+            )
+        )
+        XCTAssertFalse(
+            FilesPaneSizing.hasContext(
+                selectedTorrentIsVisible: true,
+                fileCount: 0,
+                filesLoading: false
+            )
+        )
+        XCTAssertTrue(
+            FilesPaneSizing.hasContext(
+                selectedTorrentIsVisible: true,
+                fileCount: 0,
+                filesLoading: true
+            )
+        )
+        XCTAssertTrue(
+            FilesPaneSizing.hasContext(
+                selectedTorrentIsVisible: true,
+                fileCount: 3,
+                filesLoading: false
+            )
+        )
+    }
+
+    func testFilesPaneCollapseHidesContextWithoutDiscardingIt() {
+        XCTAssertTrue(
+            FilesPaneSizing.isVisible(
+                selectedTorrentIsVisible: true,
+                fileCount: 3,
+                filesLoading: false,
+                collapsed: false
+            )
+        )
+        XCTAssertFalse(
+            FilesPaneSizing.isVisible(
+                selectedTorrentIsVisible: true,
+                fileCount: 3,
+                filesLoading: false,
+                collapsed: true
+            )
+        )
+    }
+
+    private static func locateInfoPlist() -> URL? {
+        let fm = FileManager.default
+        let thisFile = URL(fileURLWithPath: #filePath)
+        var dir = thisFile.deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = dir.appendingPathComponent("TorrentinoApp/Info.plist")
+            if fm.fileExists(atPath: candidate.path) { return candidate }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        return nil
     }
 
     private func notificationSnapshot(

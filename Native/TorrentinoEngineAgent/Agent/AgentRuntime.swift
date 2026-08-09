@@ -30,10 +30,11 @@ final class AgentRuntime: @unchecked Sendable {
         #endif
     }()
 
-    private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "runtime")
+    private let log = TorrentinoLog.logger(category: "runtime")
     private let stateQueue = DispatchQueue(label: "com.torrentino.app.engine-agent.runtime")
     private let store: CounterStore
     private let persistence: PersistenceStore
+    private let eventBus: TransferEventBus
     private let service: AgentService
     private let healthLane: AgentHealthLane
     private let crashLoopGuard: CrashLoopGuard
@@ -44,6 +45,9 @@ final class AgentRuntime: @unchecked Sendable {
     private var lockDescriptor: CInt = -1
     private var advisoryLock: AdvisoryLockHandle?
     private var stopInitiated = false
+    private var sessionPhase: EngineLifecycleState = .starting
+    private var sessionRevision: UInt64 = 1
+    private var degradedReason: String?
     /// WP-07 transfer lane, built after persistence opens (set-once, on
     /// stateQueue). Stopped before the clean-shutdown pipeline in initiateStop.
     private var transferCoordinator: TransferCoordinator?
@@ -54,6 +58,11 @@ final class AgentRuntime: @unchecked Sendable {
     /// the persistence single-writer advisory lock, and loads the durable
     /// counter. Throws CounterStoreError on state problems.
     init() throws {
+        TorrentinoLog.record(
+            category: "lifecycle",
+            level: "notice",
+            message: "agent bootstrap start version=\(Self.agentVersion)"
+        )
         let engineDirectory = try Self.makeEngineDirectory()
         var descriptor: CInt = -1
         try Self.takeInstanceLock(engineDirectory: engineDirectory, descriptor: &descriptor)
@@ -73,19 +82,50 @@ final class AgentRuntime: @unchecked Sendable {
         self.safeRecovery = crashGuard.isSafeRecovery
         self.store = try CounterStore(engineDirectory: engineDirectory)
         self.persistence = PersistenceStore(dataDirectory: engineDirectory)
-        self.healthLane = AgentHealthLane()
-        self.healthLane.markSafeRecovery(safeRecovery)
-        self.service = AgentService(store: store, persistence: persistence, healthLane: healthLane)
+        let healthLane = AgentHealthLane()
+        healthLane.markSafeRecovery(safeRecovery)
+        healthLane.updateLifecycle(.starting, reason: nil, revision: 1)
+        healthLane.updateObservability(TorrentinoLog.observabilityDegraded)
+        self.healthLane = healthLane
+        let eventBus = TransferEventBus(healthReporter: healthLane)
+        self.eventBus = eventBus
+        self.service = AgentService(
+            store: store,
+            persistence: persistence,
+            healthLane: healthLane,
+            eventBus: eventBus
+        )
         // Phase 1 is complete: capturing self weakly is now legal.
         service.shutdownHook = { [weak self] in
             self?.initiateStop(reason: "xpc-shutdown", exitDelayNanoseconds: 250_000_000)
         }
-        log.notice("agent bootstrapped version=\(Self.agentVersion, privacy: .public) pid=\(ProcessInfo.processInfo.processIdentifier)")
+        log.notice("agent bootstrapped version=\(Self.agentVersion) pid=\(ProcessInfo.processInfo.processIdentifier)")
+        TorrentinoLog.record(
+            category: "lifecycle",
+            level: "notice",
+            message: "agent bootstrapped version=\(Self.agentVersion) pid=\(ProcessInfo.processInfo.processIdentifier)"
+        )
+        TorrentinoLog.record(
+            category: "lifecycle",
+            level: "notice",
+            message: "lifecycle transition from=unregistered to=starting reason=bootstrap"
+        )
+        Task {
+            await eventBus.publish([
+                .engineLifecycleChanged(EngineLifecycleChangedEvent(
+                    from: .unregistered,
+                    to: .starting,
+                    degradedReason: nil,
+                    revision: 1
+                ))
+            ], urgent: true)
+        }
     }
 
     /// Installs signal handlers, checks into the Mach service, and returns.
     /// The caller then parks the process with dispatchMain().
     func beginServing() {
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "agent begin serving")
         // Named Mach services can only be vended by launchd-managed jobs: a
         // directly executed process gets EPERM on listener activation
         // ("listener failed to activate: xpc_error=[1: Operation not
@@ -104,23 +144,12 @@ final class AgentRuntime: @unchecked Sendable {
         }
 
         installSignalHandlers()
+        transition(to: .openingStore, reason: "listener bootstrap")
 
-        // WP-06: open the durable store in the background (schema/migrations,
-        // WAL recovery, startup reconciliation). A corrupt database degrades
-        // to a rebuilt/limited store — the agent never fails to serve.
-        Task {
-            do {
-                let report = try await persistence.open()
-                healthLane.updatePersistence(await persistence.healthSnapshot())
-                log.notice("persistence ready: \(report.message, privacy: .public)")
-            } catch {
-                healthLane.updatePersistenceFailure()
-                log.error("persistence open failed, serving degraded: \(String(describing: error), privacy: .public)")
-            }
-            await wireTransferLanes()
+        let delegate = ListenerDelegate(service: service, stateQueue: stateQueue)
+        service.shutdownAuthorization = { [weak delegate] in
+            delegate?.authorizeShutdown() ?? false
         }
-
-        let delegate = ListenerDelegate(service: service)
         let machListener = NSXPCListener(machServiceName: TorrentinoXPCSecurity.machServiceName)
         machListener.delegate = delegate
 
@@ -129,7 +158,43 @@ final class AgentRuntime: @unchecked Sendable {
             self.listener = machListener
         }
         machListener.resume()
-        log.notice("mach listener resumed service=\(TorrentinoXPCSecurity.machServiceName, privacy: .public)")
+        log.notice("mach listener resumed service=\(TorrentinoXPCSecurity.machServiceName)")
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "mach listener resumed service=\(TorrentinoXPCSecurity.machServiceName)")
+
+        // WP-06: open the durable store in the background (schema/migrations,
+        // WAL recovery, startup reconciliation). A corrupt database degrades
+        // to a rebuilt/limited store — the agent never fails to serve.
+        Task {
+            do {
+                TorrentinoLog.record(category: "persistence", level: "info", message: "persistence restore start")
+                let report = try await persistence.open()
+                healthLane.updatePersistence(await persistence.healthSnapshot())
+                healthLane.updateObservability(TorrentinoLog.observabilityDegraded)
+                log.notice("persistence ready: \(report.message)")
+                TorrentinoLog.record(
+                    category: "persistence",
+                    level: report.degraded ? "warning" : "notice",
+                    message: "persistence open report=\(report.message) verified=\(report.checksumsVerified) quarantined=\(report.quarantined)"
+                )
+                if report.degraded {
+                    transition(to: .degraded, reason: "persistenceUnavailable")
+                } else {
+                    transition(to: .restoringSession, reason: "persistence opened")
+                }
+                await wireTransferLanes(persistenceReady: true, startupReport: report)
+            } catch {
+                healthLane.updatePersistenceFailure()
+                healthLane.updateObservability(TorrentinoLog.observabilityDegraded)
+                log.error("persistence open failed, serving degraded: \(TorrentinoLog.redactedDescription(error))")
+                TorrentinoLog.record(
+                    category: "persistence",
+                    level: "error",
+                    message: "persistence open failed verified=0 quarantined=0 error=\(TorrentinoLog.redactedDescription(error))"
+                )
+                transition(to: .degraded, reason: "persistenceUnavailable")
+                await wireTransferLanes(persistenceReady: false, startupReport: nil)
+            }
+        }
     }
 
     // MARK: - WP-07 transfer lane
@@ -140,13 +205,13 @@ final class AgentRuntime: @unchecked Sendable {
     /// through the same store). Restore and pump are best-effort: a failed
     /// restore leaves the coordinator empty; the pump re-adds running torrents
     /// on the next tick.
-    private func wireTransferLanes() async {
-        let bus = TransferEventBus(healthReporter: healthLane)
+    private func wireTransferLanes(persistenceReady: Bool, startupReport: StartupReport?) async {
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "transfer lane bootstrap start")
         let bridge = BridgeTransferEngine(coordinator: EngineCoordinator())
         let coordinator = TransferCoordinator(
             engine: bridge,
             persistence: persistence,
-            eventBus: bus,
+            eventBus: eventBus,
             agentVersion: AgentRuntime.agentVersion,
             defaultSaveLocation: PersistedLocation(path: Self.defaultDownloadsPath),
             pumpIntervalNanoseconds: 500_000_000,
@@ -159,14 +224,51 @@ final class AgentRuntime: @unchecked Sendable {
         stateQueue.sync {
             self.transferCoordinator = coordinator
             service.coordinator = coordinator
-            service.eventBus = bus
         }
         let conditions = stateQueue.sync { latestConditions }
         await coordinator.applySystemConditions(conditions)
-        await coordinator.restoreFromPersistence()
+        let restoreSummary: RestoreSummary
+        if persistenceReady {
+            await coordinator.setSessionPhase(.restoringSession, reason: nil)
+            restoreSummary = await coordinator.restoreFromPersistence()
+        } else {
+            restoreSummary = RestoreSummary(
+                stored: 0,
+                rebuilt: 0,
+                skipped: 0,
+                engineRevision: await coordinator.currentEngineRevision,
+                failure: "persistenceUnavailable"
+            )
+        }
+        healthLane.updateRestoreSummary(rebuilt: restoreSummary.rebuilt, skipped: restoreSummary.skipped)
+        TorrentinoLog.record(
+            category: "persistence",
+            level: "notice",
+            message: "restore summary rebuilt=\(restoreSummary.rebuilt) skipped=\(restoreSummary.skipped) engineRevision=\(restoreSummary.engineRevision)"
+        )
+        let persistenceFailure = startupReport?.degraded == true ? "persistenceUnavailable" : nil
+        if let failure = restoreSummary.failure ?? persistenceFailure {
+            await coordinator.setSessionPhase(.degraded, reason: failure)
+            transition(to: .degraded, reason: failure)
+        } else if restoreSummary.stored > 0 && restoreSummary.rebuilt == 0 {
+            await coordinator.setSessionPhase(.degraded, reason: "restoreAnomaly")
+            transition(to: .degraded, reason: "restoreAnomaly")
+        } else {
+            transition(to: .reconcilingRecords, reason: "restore summary ready")
+            await coordinator.setSessionPhase(.reconcilingRecords, reason: nil)
+        }
         await coordinator.startPump()
+        if restoreSummary.failure == nil && persistenceFailure == nil
+            && !(restoreSummary.stored > 0 && restoreSummary.rebuilt == 0) {
+            // A failed native start is deliberately non-fatal: the pump owns
+            // retry/backoff and records a typed deferred health instead.
+            await coordinator.pumpOnce()
+            await coordinator.setSessionPhase(.ready, reason: nil)
+            transition(to: .ready, reason: "first pump scheduled")
+        }
         startConditionMonitoring()
         log.notice("transfer lane wired (bus + coordinator + bridge engine)")
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "transfer lane wired and status pump started")
     }
 
     private func startConditionMonitoring() {
@@ -191,6 +293,72 @@ final class AgentRuntime: @unchecked Sendable {
             crashLoopGuard.clearHistory()
             healthLane.markSafeRecovery(false)
         }
+        TorrentinoLog.record(category: "lifecycle", level: "notice", message: "safe recovery cleared after explicit restart")
+    }
+
+    private func transition(to next: EngineLifecycleState, reason: String?) {
+        stateQueue.sync {
+            transitionLocked(to: next, reason: reason)
+        }
+    }
+
+    private func transitionLocked(to next: EngineLifecycleState, reason: String?) {
+        guard sessionPhase != next else { return }
+        guard Self.isAllowedTransition(from: sessionPhase, to: next) else {
+            TorrentinoLog.record(
+                category: "lifecycle",
+                level: "error",
+                message: "lifecycle transition rejected from=\(sessionPhase.rawValue) to=\(next.rawValue) reason=non-monotonic"
+            )
+            return
+        }
+
+        let previous = sessionPhase
+        sessionPhase = next
+        sessionRevision &+= 1
+        degradedReason = next == .degraded ? reason : nil
+        healthLane.updateLifecycle(next, reason: degradedReason, revision: sessionRevision)
+        healthLane.updateObservability(TorrentinoLog.observabilityDegraded)
+        TorrentinoLog.record(
+            category: "lifecycle",
+            level: next == .degraded ? "error" : "notice",
+            message: "lifecycle transition from=\(previous.rawValue) to=\(next.rawValue) reason=\(reason ?? "none")"
+        )
+        let event = EngineLifecycleChangedEvent(
+            from: previous,
+            to: next,
+            degradedReason: degradedReason,
+            revision: sessionRevision
+        )
+        let eventBus = self.eventBus
+        Task {
+            await eventBus.publish([.engineLifecycleChanged(event)], urgent: true)
+        }
+    }
+
+    private static func isAllowedTransition(from: EngineLifecycleState, to: EngineLifecycleState) -> Bool {
+        if to == .degraded {
+            return from != .checkpointing && from != .stopping && from != .stopped
+        }
+        if from == .degraded {
+            return to == .checkpointing
+        }
+        func rank(_ phase: EngineLifecycleState) -> Int {
+            switch phase {
+            case .unregistered, .registering: return 0
+            case .starting: return 1
+            case .openingStore: return 2
+            case .migratingStore: return 3
+            case .restoringSession: return 4
+            case .reconcilingRecords: return 5
+            case .ready: return 6
+            case .checkpointing: return 7
+            case .stopping: return 8
+            case .stopped: return 9
+            case .degraded: return 6
+            }
+        }
+        return rank(to) > rank(from)
     }
 
     /// Default torrent save location: the current user's Downloads folder.
@@ -207,7 +375,9 @@ final class AgentRuntime: @unchecked Sendable {
         stateQueue.async { [self] in
             guard !stopInitiated else { return }
             stopInitiated = true
-            log.notice("graceful shutdown initiated reason=\(reason, privacy: .public)")
+            transitionLocked(to: .checkpointing, reason: reason)
+            log.notice("graceful shutdown initiated reason=\(reason)")
+            TorrentinoLog.record(category: "lifecycle", level: "notice", message: "graceful shutdown initiated reason=\(reason)")
             let store = store
             let persistence = persistence
             let coordinator = transferCoordinator // captured on stateQueue
@@ -218,7 +388,7 @@ final class AgentRuntime: @unchecked Sendable {
                 } catch {
                     // Still exit 0: the in-memory value was already persisted
                     // on every increment; flush is a belt-and-braces checkpoint.
-                    log.error("final flush failed: \(String(describing: error), privacy: .public)")
+                    log.error("final flush failed: \(TorrentinoLog.redactedDescription(error))")
                 }
                 // Stop the WP-07 status pump so no engine/persistence work
                 // overlaps the clean-shutdown pipeline.
@@ -226,17 +396,23 @@ final class AgentRuntime: @unchecked Sendable {
                     await coordinator.stop()
                 }
                 stateQueue.sync { conditionMonitor?.stop() }
+                transition(to: .stopping, reason: "pump stopped")
                 // WP-06 clean shutdown: WAL flush -> TRUNCATE checkpoint ->
                 // journal truncation -> clean flag -> close. Any failure here
                 // still exits 0; the next boot runs startup reconciliation.
                 do {
                     try await persistence.close(clean: true)
                     log.notice("persistence clean shutdown complete")
+                    TorrentinoLog.record(category: "persistence", level: "notice", message: "persistence clean shutdown complete")
                 } catch {
-                    log.error("persistence clean shutdown failed, WAL left for replay: \(String(describing: error), privacy: .public)")
+                    log.error("persistence clean shutdown failed, WAL left for replay: \(TorrentinoLog.redactedDescription(error))")
+                    TorrentinoLog.record(category: "persistence", level: "error", message: "persistence clean shutdown failed: \(TorrentinoLog.redactedDescription(error))")
                 }
                 crashLoopGuard.markClean()
                 healthLane.markCheckpoint()
+                transition(to: .stopped, reason: "clean shutdown complete")
+                TorrentinoLog.record(category: "lifecycle", level: "notice", message: "checkpoint complete clean shutdown")
+                await TorrentinoLog.flush()
                 // Short delay lets the XPC shutdown ack drain to the client.
                 try? await Task.sleep(nanoseconds: exitDelayNanoseconds)
                 exit(0)
@@ -269,6 +445,20 @@ final class AgentRuntime: @unchecked Sendable {
     /// This is the spike's engine dir; WP-06 extends it with the real store.
     private static func makeEngineDirectory() throws -> URL {
         let fileManager = FileManager.default
+#if DEBUG
+        // Test-only seam: a disposable launchd proof may redirect the entire
+        // agent Engine directory without touching Human Application Support.
+        if let override = ProcessInfo.processInfo.environment["TORRENTINO_ENGINE_DIRECTORY"], !override.isEmpty {
+            let engine = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+            do {
+                try fileManager.createDirectory(at: engine, withIntermediateDirectories: true)
+                try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: engine.path)
+            } catch {
+                throw CounterStoreError.ioFailure(reason: "cannot create test engine dir: \(error)")
+            }
+            return engine
+        }
+#endif
         let base = try fileManager.url(for: .applicationSupportDirectory,
                                        in: .userDomainMask,
                                        appropriateFor: nil,
@@ -309,23 +499,56 @@ final class AgentRuntime: @unchecked Sendable {
 
     // MARK: - XPC listener delegate
 
+    private final class ConnectionLease: @unchecked Sendable {
+        private let lock = NSLock()
+        private var released = false
+        private let releaseAction: @Sendable () -> Void
+
+        init(releaseAction: @escaping @Sendable () -> Void) {
+            self.releaseAction = releaseAction
+        }
+
+        func releaseOnce() {
+            lock.lock()
+            guard !released else {
+                lock.unlock()
+                return
+            }
+            released = true
+            lock.unlock()
+            releaseAction()
+        }
+    }
+
     /// Validates the connecting UI process against the frozen code-signing
     /// requirement BEFORE any payload is decoded (plan §23).
     private final class ListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         private let service: AgentService
+        private let stateQueue: DispatchQueue
         private let uiAppRequirement: SecRequirement?
-        private let log = Logger(subsystem: TorrentinoXPCSecurity.agentBundleIdentifier, category: "xpc")
+        private let log = TorrentinoLog.logger(category: "xpc")
+        private var activeConnections = 0
 
-        init(service: AgentService) {
+        init(service: AgentService, stateQueue: DispatchQueue) {
             self.service = service
+            self.stateQueue = stateQueue
             self.uiAppRequirement = TorrentinoXPCSecurity.makeRequirement(
                 TorrentinoXPCSecurity.expectedUIAppExpression)
+        }
+
+        func authorizeShutdown() -> Bool {
+            stateQueue.sync { activeConnections <= 1 }
         }
 
         func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
             guard uiAppRequirement != nil else {
                 log.error("rejecting connection: invalid ui requirement expression")
                 return false
+            }
+            stateQueue.sync { activeConnections += 1 }
+            let connectionID = UUID()
+            let lease = ConnectionLease { [weak self] in
+                self?.releaseConnection()
             }
             // macOS 13+: peer must satisfy this or the connection is invalidated
             // before any message decode. The API takes a requirement-language
@@ -344,18 +567,34 @@ final class AgentRuntime: @unchecked Sendable {
             // connection; we push event batches through the remote proxy. The
             // client-side exportedInterface must declare the same protocol.
             connection.remoteObjectInterface = NSXPCInterface(with: TorrentinoEventSink.self)
-            connection.interruptionHandler = { [weak service] in
-                self.log.notice("ui connection interrupted")
-                service?.setEventSink(nil)
+            connection.interruptionHandler = { [weak service, weak self] in
+                self?.log.notice("ui connection interrupted")
+                service?.clearEventSink(connectionID: connectionID)
+                lease.releaseOnce()
             }
-            connection.invalidationHandler = { [weak service] in
-                self.log.notice("ui connection invalidated")
-                service?.setEventSink(nil)
+            connection.invalidationHandler = { [weak service, weak self] in
+                self?.log.notice("ui connection invalidated")
+                service?.clearEventSink(connectionID: connectionID)
+                lease.releaseOnce()
             }
             connection.resume()
-            service.setEventSink(connection.remoteObjectProxy as? TorrentinoEventSink)
+            service.setEventSink(
+                connection.remoteObjectProxy as? TorrentinoEventSink,
+                connectionID: connectionID
+            )
             log.notice("accepted ui connection effectiveUserIdentifier=\(connection.effectiveUserIdentifier)")
+            TorrentinoLog.record(
+                category: "xpc",
+                level: "notice",
+                message: "xpc connect peer verification accepted effectiveUserIdentifier=\(connection.effectiveUserIdentifier)"
+            )
             return true
+        }
+
+        private func releaseConnection() {
+            stateQueue.sync {
+                activeConnections = max(0, activeConnections - 1)
+            }
         }
     }
 }

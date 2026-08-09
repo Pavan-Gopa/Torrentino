@@ -19,7 +19,19 @@ enum AgentServiceRegistration {
     /// (first registration may land in .requiresApproval until the user
     /// toggles it in System Settings > Login Items).
     static func register() async throws {
-        try SMAppService.agent(plistName: plistName).register()
+        let agent = SMAppService.agent(plistName: plistName)
+        // BTM self-heal: if launchd still pairs this label with a stale app
+        // copy (prior build moved/removed), register() alone does not
+        // re-anchor BackgroundTaskManagement and the agent spawn later fails
+        // inside launchd with copy_bundle_path 0x6f / exit 78 (EX_CONFIG) even
+        // though this binary starts fine. Re-writing the entry
+        // (unregister + register) while status == .enabled forces BTM to
+        // re-resolve against the current app bundle. Fresh registrations skip
+        // the extra pair.
+        if agent.status == .enabled {
+            try await agent.unregister()
+        }
+        try agent.register()
     }
 
     static func unregister() async throws {

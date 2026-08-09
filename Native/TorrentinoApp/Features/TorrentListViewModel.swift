@@ -14,6 +14,7 @@
 
 import Foundation
 import AppKit
+import TorrentinoDomain
 import TorrentinoIPC
 
 @MainActor
@@ -23,6 +24,8 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var instanceID: UUID?
     @Published private(set) var usingFixture = false
     @Published private(set) var connectionNote: String?
+    @Published private(set) var lifecyclePhase: EngineLifecycleState?
+    @Published private(set) var lifecycleDegradedReason: String?
     @Published private(set) var commandError: String?
     /// Table row selection; single-selection UI keeps at most one element.
     @Published var selection: Set<TorrentRecordID> = []
@@ -64,6 +67,33 @@ final class TorrentListViewModel: ObservableObject {
     /// WP-10 (Gate 4/9): unsettled removal batches from a previous session
     /// (guided recovery), discovered via fetchPendingRemovals on connect.
     @Published private(set) var pendingRemovals: [PendingRemovalSummary] = []
+    @Published var pendingAddFileURL: URL? = nil
+    @Published private(set) var lastAddError: String? = nil
+    @Published private(set) var defaultDownloadLocation: String? = nil
+
+    func presentIncomingTorrent(_ url: URL) {
+        guard TorrentDropRouting.isTorrentDropURL(url) else { return }
+        guard acceptIncomingTorrentURL(url) else { return }
+        pendingAddFileURL = url
+        showAddSheet = true
+    }
+
+    private var recentImportURLs: [URL: Date] = [:]
+
+    func importIncomingTorrent(_ url: URL) {
+        // Finder, SwiftUI openURL, and window DnD all use the same preview path.
+        presentIncomingTorrent(url)
+    }
+
+    private func acceptIncomingTorrentURL(_ url: URL) -> Bool {
+        let now = Date()
+        if let last = recentImportURLs[url], now.timeIntervalSince(last) < 2.0 {
+            return false
+        }
+        recentImportURLs[url] = now
+        recentImportURLs = recentImportURLs.filter { now.timeIntervalSince($0.value) < 10.0 }
+        return true
+    }
 
     let client: EngineClient
     private(set) var directoryStack: [String] = []
@@ -113,29 +143,50 @@ final class TorrentListViewModel: ObservableObject {
     // MARK: - Lifecycle
 
     /// Connects, subscribes to the event stream, and pulls the full snapshot.
-    /// Any transport failure switches to the demo fixture so the UI remains
-    /// fully interactive without an agent.
+    /// Fixtures are used only after bounded transport reconnect is exhausted;
+    /// a reachable degraded agent remains visible as a truthful empty/list
+    /// state with a lifecycle note.
     func start() async {
-        do {
-            await client.setReconnectHandler { [weak self] in
-                Task { @MainActor [weak self] in
-                    await self?.recoverAfterReconnect()
-                }
+        await client.setReconnectHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.recoverAfterReconnect()
             }
-            _ = try await client.hello()
-            try await subscribe()
-            try await fetchFullSnapshot()
-            await refreshPendingRemovals()
-            usingFixture = false
-            connectionNote = nil
-            connectionGeneration &+= 1
-        } catch {
-            usingFixture = true
-            connectionNote = String(localized: "fixture.note")
-            torrents = FixtureLibrary.snapshot(count: 100)
-            engineRevision = UInt64(torrents.count)
-            if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
         }
+
+        for _ in 0..<5 {
+            do {
+                _ = try await client.hello()
+                try await subscribe()
+                try await fetchFullSnapshot()
+                await refreshPendingRemovals()
+                usingFixture = false
+                lifecyclePhase = .ready
+                lifecycleDegradedReason = nil
+                connectionNote = nil
+                connectionGeneration &+= 1
+                return
+            } catch let error as EngineClientError {
+                if case .fault(let fault) = error, fault.code == .engineNotReady {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+                if Self.isTransportFailure(error) {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+                applyReachableFault(error)
+                return
+            } catch {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        usingFixture = true
+        lifecyclePhase = nil
+        lifecycleDegradedReason = nil
+        connectionNote = String(localized: "fixture.note")
+        torrents = FixtureLibrary.snapshot(count: 100)
+        engineRevision = UInt64(torrents.count)
+        if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
     }
 
     /// Registers the event handler on the XPC queue; batches hop to MainActor.
@@ -165,6 +216,21 @@ final class TorrentListViewModel: ObservableObject {
             } catch {
                 surfaceCommandError(error, fallback: "recovery.restart_failed")
             }
+        }
+    }
+
+    /// Reads the agent-owned setting so the Add sheet can show the actual
+    /// default destination instead of presenting a guessed path.
+    func loadDefaultDownloadLocation() async {
+        do {
+            let command = EngineCommandV1.fetchSettings(FetchSettingsRequest(requestID: RequestID()))
+            guard case .settingsFetch(let result) = try await client.sendCommand(command) else {
+                throw EngineClientError.protocolMismatch(details: "unexpected fetchSettings reply")
+            }
+            let path = (result.settings.downloadDirectory as NSString).expandingTildeInPath
+            defaultDownloadLocation = path.isEmpty ? nil : path
+        } catch {
+            defaultDownloadLocation = nil
         }
     }
 
@@ -206,6 +272,15 @@ final class TorrentListViewModel: ObservableObject {
                 // published lets the presentation layer show offline/sleep/
                 // pressure recovery without polling the heavy command lane.
                 systemConditions = payload.conditions
+            case .engineLifecycleChanged(let payload):
+                lifecyclePhase = payload.to
+                lifecycleDegradedReason = payload.to == .degraded ? payload.degradedReason : nil
+                if payload.to == .degraded {
+                    usingFixture = false
+                    connectionNote = Self.localizedLifecycleReason(payload.degradedReason)
+                } else if payload.to == .ready, !usingFixture {
+                    connectionNote = nil
+                }
             case .operationProgress(let payload):
                 guard let creatorOperationID else {
                     guard awaitingCreatorOperationID else { break }
@@ -258,7 +333,7 @@ final class TorrentListViewModel: ObservableObject {
                     creatorError = creatorUserMessage(for: fault)
                     creatorTerminalCancellation = false
                 }
-            case .engineHealthChanged, .engineLifecycleChanged, .recoverableIssue, .settingsChanged:
+            case .engineHealthChanged, .recoverableIssue, .settingsChanged:
                 break
             }
         }
@@ -284,13 +359,56 @@ final class TorrentListViewModel: ObservableObject {
 
     private func fetchFullSnapshot() async throws {
         let command = EngineCommandV1.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
-        guard case .snapshot(let snapshot) = try await client.sendCommand(command) else { return }
-        torrents = snapshot.torrents.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        guard case .snapshot(let snapshot) = try await client.sendCommand(command) else {
+            throw EngineClientError.protocolMismatch(details: "unexpected fetchSnapshot reply")
+        }
+        torrents = snapshot.torrents
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         engineRevision = snapshot.engineRevision
         instanceID = snapshot.instanceID
         usingFixture = false
-        connectionNote = nil
+        if lifecyclePhase != .degraded {
+            connectionNote = nil
+        }
         NotificationManager.shared.processSnapshots(torrents)
+    }
+
+    private func applyReachableFault(_ error: EngineClientError) {
+        usingFixture = false
+        lifecyclePhase = .degraded
+        torrents.removeAll()
+        selection.removeAll()
+        engineRevision = 0
+        if case .fault(let fault) = error {
+            lifecycleDegradedReason = fault.code.rawValue
+            connectionNote = Self.localizedLifecycleReason(fault.code.rawValue)
+        } else {
+            connectionNote = String(localized: "engine.degraded.generic")
+        }
+    }
+
+    private static func isTransportFailure(_ error: EngineClientError) -> Bool {
+        switch error {
+        case .unavailable, .interrupted, .peerValidationFailed:
+            return true
+        case .protocolMismatch, .fault:
+            return false
+        }
+    }
+
+    private static func localizedLifecycleReason(_ reason: String?) -> String {
+        switch reason {
+        case "persistenceUnavailable", "storeError":
+            return String(localized: "engine.degraded.persistence_unavailable")
+        case "restoreAnomaly", "internalError":
+            return String(localized: "engine.degraded.restore_anomaly")
+        case "crashLoopSafeMode":
+            return String(localized: "engine.degraded.safe_recovery")
+        case "observability":
+            return String(localized: "engine.degraded.observability")
+        default:
+            return String(localized: "engine.degraded.generic")
+        }
     }
 
     private func recoverFromFullSnapshot() async {
@@ -300,6 +418,16 @@ final class TorrentListViewModel: ObservableObject {
         do {
             try await fetchFullSnapshot()
             connectionGeneration &+= 1
+        } catch let error as EngineClientError {
+            if Self.isTransportFailure(error) {
+                usingFixture = true
+                connectionNote = String(localized: "fixture.note")
+                torrents = FixtureLibrary.snapshot(count: 100)
+                engineRevision = UInt64(torrents.count)
+                if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
+            } else {
+                applyReachableFault(error)
+            }
         } catch {
             connectionNote = String(localized: "snapshot.failed")
         }
@@ -314,34 +442,161 @@ final class TorrentListViewModel: ObservableObject {
         await refreshPendingRemovals()
     }
 
-    func addMagnet(_ uri: String, startPaused: Bool) async {
+    @discardableResult
+    func addMagnet(_ uri: String, startPaused: Bool) async -> Bool {
         do {
             let inspection = try await inspect(source: .magnet(uri))
-            await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            try await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            lastAddError = nil
+            return true
+        } catch EngineClientError.fault(let fault) {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
+        } catch let fault as EngineFault {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
         } catch {
+            lastAddError = String(localized: "add.failed")
             connectionNote = String(localized: "add.failed")
+            return false
         }
     }
 
-    func addTorrentFile(_ url: URL, startPaused: Bool) async {
+    @discardableResult
+    func addTorrentFile(_ url: URL, startPaused: Bool) async -> Bool {
         do {
-            // File IO off the main actor; the bytes travel through the v1 lane.
-            let data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: url)
-            }.value
+            let data = try await readTorrentData(from: url)
             let inspection = try await inspect(source: .torrentFileData(data))
-            await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            try await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            lastAddError = nil
+            return true
+        } catch EngineClientError.fault(let fault) {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
+        } catch let fault as EngineFault {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
         } catch {
+            lastAddError = String(localized: "add.failed")
             connectionNote = String(localized: "add.failed")
+            return false
         }
     }
 
-    func addTorrentFileURL(_ urlString: String, startPaused: Bool) async {
+    @discardableResult
+    func addTorrentFileURL(_ urlString: String, startPaused: Bool) async -> Bool {
         do {
             let inspection = try await inspect(source: .torrentFileURL(urlString))
-            await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            try await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
+            lastAddError = nil
+            return true
+        } catch EngineClientError.fault(let fault) {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
+        } catch let fault as EngineFault {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
         } catch {
+            lastAddError = String(localized: "add.failed")
             connectionNote = String(localized: "add.failed")
+            return false
+        }
+    }
+
+    /// Performs the same agent inspection used by commit, then builds a local
+    /// file preview from the inspected source bytes for the Add sheet.
+    func inspectTorrentFile(_ url: URL) async -> AddTorrentPreview? {
+        do {
+            let data = try await readTorrentData(from: url)
+            let inspection = try await inspect(source: .torrentFileData(data))
+            let metainfo = try await Task.detached(priority: .userInitiated) {
+                try MetainfoParser.parse(data)
+            }.value
+            let files = metainfo.files.map { file in
+                FileEntry(
+                    relativePath: file.path,
+                    name: file.path.split(separator: "/").last.map(String.init) ?? file.path,
+                    sizeBytes: file.sizeBytes,
+                    kind: .file,
+                    selection: .normal
+                )
+            }
+            lastAddError = nil
+            return AddTorrentPreview(inspection: inspection, files: files)
+        } catch EngineClientError.fault(let fault) {
+            lastAddError = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            connectionNote = lastAddError
+            return nil
+        } catch let fault as EngineFault {
+            lastAddError = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            connectionNote = lastAddError
+            return nil
+        } catch {
+            lastAddError = String(localized: "torrents.add.inspection_failed")
+            connectionNote = lastAddError
+            return nil
+        }
+    }
+
+    @discardableResult
+    func commitInspectedTorrent(
+        _ preview: AddTorrentPreview,
+        saveLocation: PersistedLocation?,
+        fileSelection: [FileSelectionItem],
+        startPaused: Bool
+    ) async -> Bool {
+        do {
+            try await commitAdd(
+                operationID: preview.inspection.operationID,
+                saveLocation: saveLocation,
+                fileSelection: fileSelection,
+                startPaused: startPaused
+            )
+            lastAddError = nil
+            return true
+        } catch EngineClientError.fault(let fault) {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
+        } catch let fault as EngineFault {
+            lastAddError = localizedFaultDescription(fault)
+            connectionNote = lastAddError
+            return false
+        } catch {
+            lastAddError = String(localized: "add.failed")
+            connectionNote = lastAddError
+            return false
+        }
+    }
+
+    private func readTorrentData(from url: URL) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            return try Data(contentsOf: url)
+        }.value
+    }
+
+    private func localizedFaultDescription(_ fault: EngineFault, fallback: String = "add.failed") -> String {
+        switch fault.code {
+        case .insufficientSpace:
+            return String(localized: "error.insufficient_space")
+        case .duplicateAdd:
+            return String(localized: "error.duplicate_add", defaultValue: "This torrent has already been added")
+        case .permissionDenied:
+            return String(localized: "error.permission_denied")
+        case .volumeUnavailable:
+            return String(localized: "error.volume_unavailable")
+        case .networkUnavailable:
+            return String(localized: "error.network_unavailable")
+        default:
+            return String(localized: String.LocalizationValue(fallback))
         }
     }
 
@@ -354,57 +609,92 @@ final class TorrentListViewModel: ObservableObject {
         return inspection
     }
 
-    private func commitAdd(operationID: AddOperationID, startPaused: Bool) async {
+    private func commitAdd(
+        operationID: AddOperationID,
+        saveLocation: PersistedLocation? = nil,
+        fileSelection: [FileSelectionItem] = [],
+        startPaused: Bool
+    ) async throws {
         let command = EngineCommandV1.commitAdd(
             CommitAddRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 operationID: operationID,
                 desiredName: nil,
-                saveLocation: nil,
-                fileSelection: [],
+                saveLocation: saveLocation,
+                fileSelection: fileSelection,
                 startPaused: startPaused
             )
         )
+        guard case .commitAdd(let result) = try await client.sendCommand(command) else {
+            throw EngineClientError.protocolMismatch(details: "unexpected commitAdd reply")
+        }
+        selection = [result.recordID]
         do {
-            guard case .commitAdd(let result) = try await client.sendCommand(command) else { return }
+            try await fetchFullSnapshot()
             selection = [result.recordID]
         } catch {
-            connectionNote = String(localized: "add.failed")
+            connectionNote = String(localized: "snapshot.failed")
         }
     }
 
     func pause(_ recordID: TorrentRecordID) async {
         let command = EngineCommandV1.pause(PauseRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
-        _ = try? await client.sendCommand(command)
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "pause.failed")
+        }
     }
 
     func resume(_ recordID: TorrentRecordID) async {
         let command = EngineCommandV1.resume(ResumeRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
-        _ = try? await client.sendCommand(command)
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "resume.failed")
+        }
     }
 
     var canPauseSelected: Bool {
-        torrents.contains { selection.contains($0.id) && $0.desiredState == .running }
+        canPause(selection)
     }
 
     var canResumeSelected: Bool {
-        torrents.contains { selection.contains($0.id) && $0.desiredState == .paused }
+        canResume(selection)
+    }
+
+    func canPause(_ ids: Set<TorrentRecordID>) -> Bool {
+        torrents.contains { ids.contains($0.id) && $0.desiredState == .running }
+    }
+
+    func canResume(_ ids: Set<TorrentRecordID>) -> Bool {
+        torrents.contains { ids.contains($0.id) && $0.desiredState == .paused }
     }
 
     func pauseSelected() {
-        let selectedIDs = Array(selection)
+        pauseIDs(selection)
+    }
+
+    func resumeSelected() {
+        resumeIDs(selection)
+    }
+
+    func pauseIDs(_ ids: Set<TorrentRecordID>) {
+        let targets = torrents.filter { ids.contains($0.id) && $0.desiredState == .running }.map(\.id)
         Task {
-            for id in selectedIDs {
+            for id in targets {
                 await pause(id)
             }
         }
     }
 
-    func resumeSelected() {
-        let selectedIDs = Array(selection)
+    func resumeIDs(_ ids: Set<TorrentRecordID>) {
+        let targets = torrents.filter { ids.contains($0.id) && $0.desiredState == .paused }.map(\.id)
         Task {
-            for id in selectedIDs {
+            for id in targets {
                 await resume(id)
             }
         }
@@ -491,8 +781,77 @@ final class TorrentListViewModel: ObservableObject {
 
     func revealSelected() {
         guard let torrent = selectedTorrent else { return }
-        let url = URL(fileURLWithPath: torrent.saveLocation.path)
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        revealTorrentFolder(torrent)
+    }
+
+    /// WP-13: opens the torrent content in Finder on row activation.
+    /// Multi-file torrents reveal their content folder; a single-file torrent
+    /// reveals/selects the file itself; anything missing falls back to the
+    /// closest existing ancestor and, failing everything, surfaces a
+    /// non-destructive localized status note instead of failing silently.
+    func revealTorrentFolder(_ torrent: TorrentSnapshot) {
+        let base = URL(fileURLWithPath: torrent.saveLocation.path)
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+
+        // Directory layout: <saveLocation>/<torrent name>/ (classic multi-file
+        // bundles that keep their root folder).
+        let namedFolder = base.appendingPathComponent(torrent.displayName)
+        if fileManager.fileExists(atPath: namedFolder.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: namedFolder.path)
+            return
+        }
+
+        // Flat layout: files live directly under saveLocation (single-file
+        // torrent named after the torrent itself, or flattened multi-file).
+        let candidateFile = base.appendingPathComponent(torrent.displayName)
+        if fileManager.fileExists(atPath: candidateFile.path) {
+            // Single-file torrent contents (or the folder when namedFolder was
+            // not found in directory form): reveal/select the item.
+            NSWorkspace.shared.activateFileViewerSelecting([candidateFile])
+            return
+        }
+
+        if fileManager.fileExists(atPath: base.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: base.path)
+            return
+        }
+
+        // Nothing on disk yet (pre-allocation disabled, removed payload, or an
+        // unmounted volume): show the nearest recoverable location and surface
+        // a status note rather than silently doing nothing.
+        NSWorkspace.shared.activateFileViewerSelecting([base])
+        connectionNote = String(localized: "reveal.missingPath")
+    }
+
+    /// WP-13: opens a single file from the files pane with the default macOS
+    /// application (e.g. .mkv in the default video player). Called only from
+    /// explicit row activation (double-click) — plain selection and checkbox
+    /// toggles never reach this path. When the local file is not on disk yet
+    /// (skipped, unstarted, or payload removed), it never fails silently: the
+    /// torrent is revealed in Finder as a fallback and a localized status note
+    /// explains what happened.
+    func openSelectedFile(_ entry: FileEntry) {
+        guard let torrent = selectedTorrent else { return }
+        guard entry.kind == .file else { return }
+        let base = URL(fileURLWithPath: torrent.saveLocation.path)
+        let fileManager = FileManager.default
+
+        let directURL = base.appendingPathComponent(entry.relativePath)
+        if fileManager.fileExists(atPath: directURL.path) {
+            NSWorkspace.shared.open(directURL)
+            return
+        }
+
+        // Classic multi-file layout: files live under the torrent root folder.
+        let nestedURL = base.appendingPathComponent(torrent.displayName).appendingPathComponent(entry.relativePath)
+        if fileManager.fileExists(atPath: nestedURL.path) {
+            NSWorkspace.shared.open(nestedURL)
+            return
+        }
+
+        revealTorrentFolder(torrent)
+        connectionNote = String(localized: "openfile.unavailable")
     }
 
     func toggleInspector() {
@@ -526,7 +885,7 @@ final class TorrentListViewModel: ObservableObject {
         }
     }
 
-    func setLimits(_ recordID: TorrentRecordID, limits: TransferLimits) async {
+    func setLimits(_ recordID: TorrentRecordID, limits: TorrentinoIPC.TransferLimits) async {
         let command = EngineCommandV1.setLimits(SetLimitsRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID, limits: limits))
         do {
             _ = try await client.sendCommand(command)
@@ -540,6 +899,19 @@ final class TorrentListViewModel: ObservableObject {
 
     func select(_ recordID: TorrentRecordID?) {
         selection = recordID.map { [$0] } ?? []
+        files = []
+        fileCursor = nil
+        directoryStack = []
+        if let recordID {
+            Task { await loadFiles(for: recordID) }
+        }
+    }
+
+    /// Table-selection hook: mirrors `select(_:)` without forcing single
+    /// selection. Fires on any selection change so the files pane tracks the
+    /// currently highlighted torrent (multi-select shows no file list).
+    func selectionDidChange() {
+        let recordID = selection.count == 1 ? selection.first : nil
         files = []
         fileCursor = nil
         directoryStack = []
@@ -580,12 +952,67 @@ final class TorrentListViewModel: ObservableObject {
     func setSelection(_ relativePath: String, priority: FileSelectionPriority) async {
         guard let recordID = selection.first,
               let torrent = torrents.first(where: { $0.id == recordID }) else { return }
+        if let idx = files.firstIndex(where: { $0.relativePath == relativePath }) {
+            let old = files[idx]
+            files[idx] = FileEntry(
+                relativePath: old.relativePath,
+                name: old.name,
+                sizeBytes: old.sizeBytes,
+                kind: old.kind,
+                selection: priority
+            )
+        }
         let command = EngineCommandV1.setFileSelection(
             SetFileSelectionRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 recordID: recordID,
                 selection: [FileSelectionItem(relativePath: relativePath, priority: priority)],
+                expectedRevision: torrent.revision
+            )
+        )
+        do {
+            _ = try await client.sendCommand(command)
+            commandError = nil
+        } catch {
+            surfaceCommandError(error, fallback: "files.failed")
+        }
+    }
+
+    func selectAllFiles() async {
+        await setBulkSelection(priority: .normal)
+    }
+
+    func deselectAllFiles() async {
+        await setBulkSelection(priority: .skip)
+    }
+
+    private func setBulkSelection(priority: FileSelectionPriority) async {
+        guard let recordID = selection.first,
+              let torrent = torrents.first(where: { $0.id == recordID }) else { return }
+        let items = files.compactMap { entry -> FileSelectionItem? in
+            guard entry.kind == .file else { return nil }
+            return FileSelectionItem(relativePath: entry.relativePath, priority: priority)
+        }
+        guard !items.isEmpty else { return }
+
+        files = files.map { entry in
+            guard entry.kind == .file else { return entry }
+            return FileEntry(
+                relativePath: entry.relativePath,
+                name: entry.name,
+                sizeBytes: entry.sizeBytes,
+                kind: entry.kind,
+                selection: priority
+            )
+        }
+
+        let command = EngineCommandV1.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                selection: items,
                 expectedRevision: torrent.revision
             )
         )
@@ -802,6 +1229,14 @@ final class TorrentListViewModel: ObservableObject {
         }
     }
 }
+
+/// Agent inspection plus the local file rows needed to render the pre-commit
+/// selection tree. The operation ID remains agent-owned and is never rebuilt.
+struct AddTorrentPreview: Sendable, Equatable {
+    let inspection: AddSourceInspection
+    let files: [FileEntry]
+}
+
 // FixtureLibrary is kept in its dependency-free source file so the app tests
 // can exercise the same generator: enum FixtureLibrary { static func snapshot(count: Int = 100) -> [TorrentSnapshot] { return (1...count).map { _ in fatalError() } } }
 

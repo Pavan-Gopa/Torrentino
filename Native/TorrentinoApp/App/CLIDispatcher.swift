@@ -7,6 +7,7 @@
 // 0 ok · 1 usage · 2 unreachable · 3 denied/not-registered.
 
 import Foundation
+import TorrentinoIPC
 
 enum CLIDispatcher {
     static func runIfRequestedAndExit() {
@@ -53,6 +54,21 @@ enum CLIDispatcher {
                 return 0
             } catch {
                 print("FAIL health error=\(error)")
+                return 2
+            }
+
+        case "snapshot":
+            do {
+                let command = EngineCommandV1.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+                let reply = try await client.sendCommand(command)
+                if case .snapshot(let snapshot) = reply {
+                    for t in snapshot.torrents {
+                        print("TORRENT id=\(t.id) name=\"\(t.displayName)\" desired=\(t.desiredState) activity=\(t.activity) health=\(t.health) bytes=\(t.progress.downloadedBytes)/\(t.progress.totalBytes)")
+                    }
+                }
+                return 0
+            } catch {
+                print("FAIL snapshot error=\(error)")
                 return 2
             }
 

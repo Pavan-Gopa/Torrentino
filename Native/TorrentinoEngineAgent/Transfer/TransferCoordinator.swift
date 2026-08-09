@@ -25,12 +25,42 @@ protocol CreatorIndependentVerifier: Sendable {
     func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity
 }
 
+public struct RestoreSummary: Sendable, Equatable {
+    public let stored: Int
+    public let rebuilt: Int
+    public let skipped: Int
+    public let engineRevision: UInt64
+    public let failure: String?
+
+    public init(stored: Int, rebuilt: Int, skipped: Int, engineRevision: UInt64, failure: String? = nil) {
+        self.stored = max(0, stored)
+        self.rebuilt = max(0, rebuilt)
+        self.skipped = max(0, skipped)
+        self.engineRevision = engineRevision
+        self.failure = failure
+    }
+}
+
 public actor TransferCoordinator {
     // MARK: - Configuration
 
     private struct CreatorCancellationState: Sendable {
         var cancelled: Set<OperationID> = []
         var active: Set<OperationID> = []
+    }
+
+    private enum AdmissionReason: String, Sendable {
+        case commitAdd
+        case restoreReadd
+        case resume
+        case pumpReadd
+        case engineRestart
+    }
+
+    private enum AdmissionOutcome: Sendable, Equatable {
+        case admitted(engineID: String, activity: TorrentActivity)
+        case deferred(TorrentHealth)
+        case failed(fault: EngineFault, health: TorrentHealth)
     }
 
     /// Default pump cadence (production). Tests pass nil to pump manually.
@@ -52,9 +82,14 @@ public actor TransferCoordinator {
     private let clearSafeRecovery: @Sendable () -> Void
     /// WP-10: injectable per-item Trash primitive (tests simulate failures).
     private let trashProvider: any TrashProviding
-    private let log = Logger(subsystem: "com.torrentino.app.engine-agent", category: "transfer")
+    private let log = TorrentinoLog.logger(category: "transfer")
 
     // MARK: - State
+
+    public private(set) var restoreRebuiltCount: Int = 0
+    public private(set) var restoreSkippedCount: Int = 0
+    public private(set) var sessionPhase: EngineLifecycleState = .ready
+    public private(set) var degradedReason: String?
 
     private var records: [TorrentRecordID: TransferRecord] = [:]
     private var recordRevisions: [TorrentRecordID: UInt64] = [:]
@@ -88,6 +123,7 @@ public actor TransferCoordinator {
     private var networkRecoveryPending = false
     private var nextNetworkRecoveryAt = Date.distantPast
     private var readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
+    private var pendingAdmissionReasons: [TorrentRecordID: AdmissionReason] = [:]
     private var restartInFlight = false
     private let creatorPlanStore = CreatorPlanStore()
     /// The actor owns the active-operation set; the lock-backed cancellation
@@ -153,6 +189,13 @@ public actor TransferCoordinator {
 
     // MARK: - Lifecycle
 
+    public var currentEngineRevision: UInt64 { engineRevision }
+
+    public func setSessionPhase(_ phase: EngineLifecycleState, reason: String?) {
+        sessionPhase = phase
+        degradedReason = phase == .degraded ? reason : nil
+    }
+
     /// Starts the status pump (no-op when the coordinator was built with a nil
     /// interval). Safe to call once; the AgentRuntime calls it after restore.
     public func startPump() {
@@ -184,39 +227,70 @@ public actor TransferCoordinator {
     }
 
     /// Rebuilds in-memory records from the persistence store (restart path).
-    /// The pump then re-adds running torrents to the engine. Safe to call more
-    /// than once; never throws — a store failure leaves the coordinator empty.
-    public func restoreFromPersistence() async {
+    /// The pump then admits running torrents through the same gate as every
+    /// other path. Partial side-table failures keep the record visible with a
+    /// typed warning; only invalid core identity is skipped.
+    @discardableResult
+    public func restoreFromPersistence() async -> RestoreSummary {
+        restoreRebuiltCount = 0
+        restoreSkippedCount = 0
+        pendingAdmissionReasons.removeAll()
         do {
             if let restored = try await persistence.loadSettings() {
                 activeSettings = restored.settings
                 settingsRevision = restored.revision
             }
         } catch {
-            log.warning("restore: settings load failed: \(String(describing: error))")
+            log.warning("restore: settings load failed: \(TorrentinoLog.redactedDescription(error))")
         }
 
         let stored: [StoredTorrent]
         do {
             stored = try await persistence.allTorrents()
         } catch {
-            log.error("restore: allTorrents failed: \(String(describing: error))")
-            return
+            log.error("restore: allTorrents failed: \(TorrentinoLog.redactedDescription(error))")
+            sessionPhase = .degraded
+            degradedReason = "persistenceUnavailable"
+            return RestoreSummary(
+                stored: 0,
+                rebuilt: 0,
+                skipped: 0,
+                engineRevision: engineRevision,
+                failure: "persistenceUnavailable"
+            )
         }
+
+        var rebuiltCount = 0
+        var skippedCount = 0
+
         for torrent in stored.sorted(by: { $0.addedAt < $1.addedAt }) {
-            guard let uuid = UUID(uuidString: torrent.id) else { continue }
+            guard Self.isValidCoreIdentity(torrent) else {
+                log.warning("restore: skipped record with invalid core identity")
+                skippedCount += 1
+                continue
+            }
+            guard let uuid = UUID(uuidString: torrent.id) else {
+                log.warning("restore: skipped record with invalid UUID")
+                skippedCount += 1
+                continue
+            }
             let recordID = TorrentRecordID(rawValue: uuid)
             let identity = ContentIdentity(
                 infoHashV1: torrent.infoHashV1.flatMap { TorrentAdder.dataFromHex($0) },
                 infoHashV2: torrent.infoHashV2.flatMap { TorrentAdder.dataFromHex($0) }
             )
+
+            var recordHealth: TorrentHealth? = nil
+
             let metainfoData: Data?
             do {
                 metainfoData = try await persistence.metainfo(torrentID: torrent.id)?.data
             } catch {
-                log.error("restore: metainfo integrity failed for \(torrent.id): \(String(describing: error))")
-                continue
+                log.warning("restore: metainfo integrity failed for \(torrent.id): \(TorrentinoLog.redactedDescription(error))")
+                metainfoData = nil
+                recordHealth = .recoverableError(.storeError)
             }
+
             let metainfo: Metainfo?
             do {
                 if let metainfoData {
@@ -225,11 +299,21 @@ public actor TransferCoordinator {
                     metainfo = nil
                 }
             } catch {
-                log.error("restore: metainfo parse failed for \(torrent.id): \(String(describing: error))")
-                continue
+                log.warning("restore: metainfo parse failed for \(torrent.id): \(TorrentinoLog.redactedDescription(error))")
+                metainfo = nil
+                recordHealth = recordHealth ?? .recoverableError(.invalidPayload)
             }
+
             let desired = DesiredTorrentState(rawValue: torrent.state) ?? .paused
-            let limits = (try? await persistence.torrentLimits(torrentID: torrent.id)) ?? TorrentinoIPC.TransferLimits()
+            let limits: TorrentinoIPC.TransferLimits
+            do {
+                limits = try await persistence.torrentLimits(torrentID: torrent.id) ?? TorrentinoIPC.TransferLimits()
+            } catch {
+                log.warning("restore: limits fallback for record=\(recordID) error=\(TorrentinoLog.redactedDescription(error))")
+                recordHealth = recordHealth ?? .recoverableError(.storeError)
+                limits = TorrentinoIPC.TransferLimits()
+            }
+
             let trackerTiers: [[String]]
             do {
                 trackerTiers = try await persistence.restoreTorrentTrackerTiers(
@@ -238,31 +322,53 @@ public actor TransferCoordinator {
                     isPrivate: metainfo?.isPrivate ?? false
                 )
             } catch {
-                // A record without reconciled structured topology is not a
-                // healthy record. In particular, legacy flat-only data never
-                // becomes a guessed singleton-tier in-memory value.
-                log.error("restore: tracker topology failed for \(torrent.id): \(String(describing: error))")
-                continue
+                log.warning("restore: tracker topology fallback for \(torrent.id): \(TorrentinoLog.redactedDescription(error))")
+                trackerTiers = metainfo?.trackerTiers ?? []
+                recordHealth = recordHealth ?? .recoverableError(.storeError)
             }
-            let saveLocation = Self.normalizedSaveLocation(
-                (try? await persistence.torrentLocation(torrentID: torrent.id))
-                    ?? configuredSaveLocation()
-            )
+
+            let saveLocation: PersistedLocation
+            do {
+                saveLocation = Self.normalizedSaveLocation(
+                    (try await persistence.torrentLocation(torrentID: torrent.id))
+                        ?? configuredSaveLocation()
+                )
+            } catch {
+                log.warning("restore: location fallback for record=\(recordID) error=\(TorrentinoLog.redactedDescription(error))")
+                recordHealth = recordHealth ?? .recoverableError(.storeError)
+                saveLocation = configuredSaveLocation()
+            }
+            let effectiveBytes = metainfo.map { Self.effectiveTotalBytes(for: $0, selection: []) } ?? (metainfo?.totalSize ?? 0)
+            let storageState = storageProbe(saveLocation, effectiveBytes)
+            let storageHealth = health(for: storageState, recordID: recordID)
+
             let restoredHealth: TorrentHealth
             if safeRecovery {
                 restoredHealth = .recoverableError(.crashLoopSafeMode)
+            } else if let recordHealth {
+                restoredHealth = recordHealth
             } else {
-                restoredHealth = health(for: storageProbe(saveLocation, metainfo?.totalSize ?? 0), recordID: recordID)
+                restoredHealth = storageHealth
                     ?? .healthy
             }
+
+            // A running durable record is admitted to the live lifecycle as
+            // checking/metadata, not idle. The first status pump replaces this
+            // bootstrap activity with the engine's authoritative state.
+            let initialActivity: TorrentActivity = desired == .running
+                && !safeRecovery
+                && storageHealth == nil
+                ? (metainfo == nil ? .fetchingMetadata : .checking)
+                : .idle
+
             let record = TransferRecord(
                 id: recordID,
                 contentIdentity: identity,
                 displayName: torrent.name,
                 desiredState: desired,
-                activity: .idle,
+                activity: initialActivity,
                 health: restoredHealth,
-                totalBytes: metainfo?.totalSize ?? 0,
+                totalBytes: effectiveBytes,
                 downloadedBytes: 0,
                 uploadedBytes: 0,
                 downloadBytesPerSec: 0,
@@ -281,13 +387,36 @@ public actor TransferCoordinator {
             records[recordID] = record
             recordRevisions[recordID] = 0
             engineRevision += 1
+            rebuiltCount += 1
+            if desired == .running {
+                pendingAdmissionReasons[recordID] = .restoreReadd
+            }
         }
-        // Nothing was published for restored records (the UI connects fresh
-        // and fetches a full snapshot), so the next delta starts above them.
+
+        self.restoreRebuiltCount = rebuiltCount
+        self.restoreSkippedCount = skippedCount
+
         publishedRevision = engineRevision
         await recoverInterruptedMoves()
         await restorePendingRemovalTokens()
-        log.info("restore: rebuilt \(self.records.count) record(s), engineRevision \(self.engineRevision)")
+        let failure: String? = stored.isEmpty ? nil : (rebuiltCount == 0 ? "restoreAnomaly" : nil)
+        if failure == "restoreAnomaly" {
+            sessionPhase = .degraded
+            degradedReason = failure
+        }
+        log.info("restore: rebuilt \(rebuiltCount) record(s), skipped \(skippedCount) record(s), engineRevision \(self.engineRevision)")
+        TorrentinoLog.record(
+            category: "persistence",
+            level: "notice",
+            message: "restore summary rebuilt=\(rebuiltCount) skipped=\(skippedCount) engineRevision=\(self.engineRevision)"
+        )
+        return RestoreSummary(
+            stored: stored.count,
+            rebuilt: rebuiltCount,
+            skipped: skippedCount,
+            engineRevision: engineRevision,
+            failure: failure
+        )
     }
 
     /// WP-10 (Gate 4): restores the in-memory pending-removal map from the
@@ -397,7 +526,7 @@ public actor TransferCoordinator {
             let nextHealth: TorrentHealth?
             if safeRecovery {
                 nextHealth = .recoverableError(.crashLoopSafeMode)
-            } else if let storageHealth = health(for: storageProbe(record.saveLocation, record.totalBytes), recordID: recordID) {
+            } else if let storageHealth = health(for: storageProbe(record.saveLocation, requiredBytes(for: record)), recordID: recordID) {
                 nextHealth = storageHealth
             } else if conditions.sleeping && record.desiredState == .running {
                 nextHealth = .recoverableError(.systemSleeping)
@@ -464,13 +593,66 @@ public actor TransferCoordinator {
         guard envelope.kind == .request, let command = envelope.command else {
             return Self.encodeResult(.failure(EngineFault.invalidRequest(details: "expected request envelope")), requestID: envelope.requestID)
         }
+        if let sessionFault = sessionFault(for: command) {
+            return Self.encodeResult(.failure(sessionFault), requestID: command.requestID)
+        }
+        TorrentinoLog.record(category: "transfer", level: "info", message: "command start name=\(command.name)")
         let result = await handle(command)
+        let resultLevel: String
+        let resultClass: String
+        switch result {
+        case .success:
+            resultLevel = "info"
+            resultClass = "success"
+        case .failure(let fault):
+            resultLevel = "warning"
+            resultClass = "fault:\(fault.code.rawValue)"
+        }
+        TorrentinoLog.record(
+            category: "transfer",
+            level: resultLevel,
+            message: "command complete name=\(command.name) result=\(resultClass)"
+        )
         return Self.encodeResult(result, requestID: command.requestID)
     }
 
     private static func encodeResult(_ result: EngineCommandResult, requestID: RequestID?) -> Data {
         let envelope = IPCEnvelope.result(requestID: requestID ?? RequestID(), result: result)
         return (try? JSONEncoder().encode(envelope)) ?? Data()
+    }
+
+    private func sessionFault(for command: EngineCommandV1) -> EngineFault? {
+        switch sessionPhase {
+        case .ready:
+            return nil
+        case .degraded:
+            switch command {
+            case .hello, .prepareForQuit, .restartEngineSafely:
+                return nil
+            default:
+                return degradedFault()
+            }
+        default:
+            switch command {
+            case .hello, .prepareForQuit:
+                return nil
+            default:
+                return .engineNotReady(details: "session phase=\(sessionPhase.rawValue)")
+            }
+        }
+    }
+
+    private func degradedFault() -> EngineFault {
+        switch degradedReason {
+        case "persistenceUnavailable":
+            return .storageFailure(details: "session phase degraded: persistenceUnavailable")
+        case "restoreAnomaly":
+            return .internalError(details: "session phase degraded: restoreAnomaly")
+        case "crashLoopSafeMode":
+            return .crashLoopSafeMode()
+        default:
+            return .engineNotReady(details: "session phase degraded")
+        }
     }
 
     // MARK: - Dispatch
@@ -669,7 +851,6 @@ public actor TransferCoordinator {
         // have been restored.
         let saveLocation = Self.normalizedSaveLocation(request.saveLocation ?? configuredSaveLocation())
         let displayName = request.desiredName ?? inspection.displayName
-        let storageState = storageProbe(saveLocation, inspection.metainfo?.totalSize ?? 0)
         let selection: [RecordFileSelection]
         if let metainfo = inspection.metainfo {
             do {
@@ -745,56 +926,11 @@ public actor TransferCoordinator {
             return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: saveLocation.volumeIdentifier))
         }
 
-        // 2. Engine add (best-effort: failure degrades THIS record only).
-        let engineID: String?
-        var health: TorrentHealth = health(for: storageState, recordID: recordID) ?? .healthy
-        var activity: TorrentActivity = inspection.metainfo == nil ? .fetchingMetadata : .queued
-        if safeRecovery {
-            engineID = nil
-            health = .recoverableError(.crashLoopSafeMode)
-            activity = .idle
-        } else if health != .healthy {
-            engineID = nil
-            activity = .idle
-        } else if systemConditions.sleeping {
-            engineID = nil
-            health = .recoverableError(.systemSleeping)
-            activity = .idle
-        } else if !systemConditions.canAttemptNetworkWork {
-            engineID = nil
-            health = .waitingForNetwork
-            activity = .idle
-        } else if !resourceBudget.acceptsHeavyWork {
-            engineID = nil
-            health = .recoverableError(.resourceConstrained)
-            activity = .idle
-        } else if !canAdmitEngineWork(desiredState: desiredState, totalBytes: inspection.metainfo?.totalSize) {
-            engineID = nil
-            health = .recoverableError(.resourceConstrained)
-            activity = .idle
-        } else if systemConditions.canAttemptNetworkWork, await ensureEngineStarted() {
-            do {
-                let result = try await engine.add(specification: TorrentAdder.makeSpecification(
-                    identity: inspection.contentIdentity,
-                    metainfoData: inspection.sourceData,
-                    trackerTiers: trackerTiers,
-                    savePath: saveLocation.path,
-                    paused: request.startPaused ?? false,
-                    privateTorrent: privateTorrent
-                ))
-                engineID = result.torrentID
-            } catch {
-                engineID = nil
-                health = Self.engineHealth(from: error, recordID: recordID)
-                activity = .idle
-                log.warning("commitAdd: engine add failed for \(recordID): \(String(describing: error))")
-            }
+        let effectiveBytes: Int64
+        if let metainfo = inspection.metainfo {
+            effectiveBytes = Self.effectiveTotalBytes(for: metainfo, selection: selection)
         } else {
-            engineID = nil
-            health = systemConditions.canAttemptNetworkWork
-                ? .recoverableError(.engineNotReady)
-                : .waitingForNetwork
-            activity = .idle
+            effectiveBytes = inspection.metainfo?.totalSize ?? 0
         }
 
         let record = TransferRecord(
@@ -802,16 +938,16 @@ public actor TransferCoordinator {
             contentIdentity: inspection.contentIdentity,
             displayName: displayName,
             desiredState: desiredState,
-            activity: activity,
-            health: health,
-            totalBytes: inspection.metainfo?.totalSize ?? 0,
+            activity: .idle,
+            health: .healthy,
+            totalBytes: effectiveBytes,
             downloadedBytes: 0,
             uploadedBytes: 0,
             downloadBytesPerSec: 0,
             uploadBytesPerSec: 0,
             peersConnected: 0,
             seedsTotal: 0,
-            engineID: engineID,
+            engineID: nil,
             metainfoData: inspection.sourceData,
             trackerTiers: trackerTiers,
             fileSelection: selection,
@@ -821,6 +957,8 @@ public actor TransferCoordinator {
         )
         records[recordID] = record
         recordRevisions[recordID] = 0
+        let admission = await admit(recordID, reason: .commitAdd)
+        applyAdmissionOutcome(admission, to: recordID, reason: .commitAdd)
         removePendingInspection(request.operationID)
 
         bumpEngineRevision(change: .added(recordID))
@@ -832,39 +970,189 @@ public actor TransferCoordinator {
     // MARK: - Pause / resume / recheck
 
     private func handlePauseResume(_ recordID: TorrentRecordID, desired: DesiredTorrentState) async -> EngineCommandResult {
-        guard var record = records[recordID] else {
+        guard let existing = records[recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
-        }
-        if desired == .running, safeRecovery {
-            return .failure(.crashLoopSafeMode())
         }
         do {
             try await persistence.updateTorrentState(torrentID: recordID.rawValue.uuidString, state: desired.rawValue)
         } catch {
-            log.error("pause/resume: persistence failed for \(recordID): \(String(describing: error))")
-            return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier))
+            log.error("pause/resume: persistence failed for \(recordID): \(TorrentinoLog.redactedDescription(error))")
+            return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: existing.saveLocation.volumeIdentifier))
         }
-        record = record.with(desiredState: desired)
+        let record = existing.with(desiredState: desired)
         records[recordID] = record
-        let storageState = storageProbe(record.saveLocation, record.totalBytes)
-        if desired == .running, let storageHealth = health(for: storageState, recordID: recordID) {
-            records[recordID] = record.with(health: storageHealth)
-        } else if desired == .running, !systemConditions.canAttemptNetworkWork {
-            records[recordID] = record.with(health: .waitingForNetwork)
-        } else if systemConditions.canAttemptNetworkWork, let engineID = record.engineID, await ensureEngineStarted() {
+        let admission = await admit(recordID, reason: .resume)
+        applyAdmissionOutcome(admission, to: recordID, reason: .resume)
+        bumpEngineRevision(change: .updated(recordID))
+        switch admission {
+        case .admitted:
+            return .success(.ack)
+        case .deferred(let health):
+            return .failure(admissionFault(for: health, recordID: recordID))
+        case .failed(let fault, _):
+            return .failure(fault)
+        }
+    }
+
+    /// The single admission path for commit, restore, resume, pump re-add, and
+    /// engine restart. Gate order is intentionally explicit: a later gate must
+    /// never mask a safer earlier deferral reason.
+    private func admit(_ recordID: TorrentRecordID, reason: AdmissionReason) async -> AdmissionOutcome {
+        guard let record = records[recordID] else {
+            return .failed(
+                fault: .recordNotFound(recordID: recordID),
+                health: .recoverableError(.recordNotFound)
+            )
+        }
+
+        if safeRecovery {
+            return .deferred(.recoverableError(.crashLoopSafeMode))
+        }
+
+        if record.desiredState == .paused {
+            guard await ensureEngineStarted() else {
+                return .deferred(.recoverableError(.engineNotReady))
+            }
             do {
-                switch desired {
-                case .paused: try await engine.pause(torrentID: engineID)
-                case .running: try await engine.resume(torrentID: engineID)
-                case .removed: break
+                if let engineID = record.engineID {
+                    try await engine.pause(torrentID: engineID)
+                    return .admitted(engineID: engineID, activity: .idle)
                 }
+                let result = try await engine.add(specification: makeSpecification(for: record, paused: true))
+                return .admitted(engineID: result.torrentID, activity: .idle)
             } catch {
-                records[recordID] = record.with(health: Self.engineHealth(from: error, recordID: recordID))
-                log.warning("pause/resume: engine failed for \(recordID): \(String(describing: error))")
+                return admissionFailure(error, recordID: recordID, operation: reason.rawValue)
             }
         }
-        bumpEngineRevision(change: .updated(recordID))
-        return .success(.ack)
+
+        let storageState = storageProbe(record.saveLocation, requiredBytes(for: record))
+        if let storageHealth = health(for: storageState, recordID: recordID) {
+            return .deferred(storageHealth)
+        }
+        if systemConditions.sleeping {
+            return .deferred(.recoverableError(.systemSleeping))
+        }
+        if !systemConditions.canAttemptNetworkWork {
+            return .deferred(.waitingForNetwork)
+        }
+        if !resourceBudget.acceptsHeavyWork {
+            return .deferred(.recoverableError(.resourceConstrained))
+        }
+        if !canAdmitEngineWork(desiredState: record.desiredState, totalBytes: record.totalBytes) {
+            return .deferred(.recoverableError(.resourceConstrained))
+        }
+        guard await ensureEngineStarted() else {
+            return .deferred(.recoverableError(.engineNotReady))
+        }
+
+        do {
+            if let engineID = record.engineID {
+                try await engine.resume(torrentID: engineID)
+                return .admitted(engineID: engineID, activity: bootstrapActivity(for: record))
+            }
+            let result = try await engine.add(specification: makeSpecification(for: record, paused: false))
+            return .admitted(engineID: result.torrentID, activity: bootstrapActivity(for: record))
+        } catch {
+            return admissionFailure(error, recordID: recordID, operation: reason.rawValue)
+        }
+    }
+
+    private func applyAdmissionOutcome(
+        _ outcome: AdmissionOutcome,
+        to recordID: TorrentRecordID,
+        reason: AdmissionReason? = nil
+    ) {
+        guard let record = records[recordID] else { return }
+        switch outcome {
+        case .admitted(let engineID, let activity):
+            records[recordID] = record.with(engineID: engineID, activity: activity, health: .healthy)
+            readdBackoff.removeValue(forKey: recordID)
+            TorrentinoLog.record(
+                category: "transfer",
+                level: "notice",
+                message: "admission succeeded reason=record:\(recordID) activity=\(activity.rawValue)"
+            )
+        case .deferred(let health):
+            records[recordID] = record.with(activity: .idle, health: health)
+            TorrentinoLog.record(
+                category: "transfer",
+                level: "warning",
+                message: "admission deferred record=\(recordID) health=\(health)"
+            )
+        case .failed(_, let health):
+            records[recordID] = record.with(activity: .idle, health: health)
+            let failures = (readdBackoff[recordID]?.failures ?? 0) + 1
+            readdBackoff[recordID] = (
+                failures: failures,
+                nextAttemptAt: reason == .commitAdd
+                    ? .distantPast
+                    : Date().addingTimeInterval(Self.backoffSeconds(forAttempt: failures))
+            )
+        }
+    }
+
+    private func admissionFailure(_ error: Error, recordID: TorrentRecordID, operation: String) -> AdmissionOutcome {
+        let fault = Self.engineFault(error, operation: operation, recordID: recordID, fallback: "admission failed")
+        return .failed(fault: fault, health: Self.engineHealth(from: error, recordID: recordID))
+    }
+
+    private func makeSpecification(for record: TransferRecord, paused: Bool) -> AddSpecificationDTO {
+        var privateTorrent = false
+        if let metainfoData = record.metainfoData {
+            do {
+                privateTorrent = try Preflight.validateTorrentData(metainfoData).isPrivate
+            } catch {
+                log.warning("admission metainfo warning record=\(record.id): \(TorrentinoLog.redactedDescription(error))")
+            }
+        }
+        return TorrentAdder.makeSpecification(
+            identity: record.contentIdentity,
+            metainfoData: record.metainfoData,
+            trackerTiers: record.trackerTiers,
+            savePath: record.saveLocation.path,
+            paused: paused,
+            privateTorrent: privateTorrent
+        )
+    }
+
+    private func bootstrapActivity(for record: TransferRecord) -> TorrentActivity {
+        record.metainfoData == nil ? .fetchingMetadata : .checking
+    }
+
+    private func admissionFault(for health: TorrentHealth, recordID: TorrentRecordID) -> EngineFault {
+        switch health {
+        case .waitingForSpace:
+            return .insufficientSpace(recordID: recordID)
+        case .permissionDenied:
+            return .permissionDenied(recordID: recordID)
+        case .waitingForVolume:
+            return .volumeUnavailable(recordID: recordID)
+        case .waitingForNetwork:
+            return .networkUnavailable(details: "network path unavailable")
+        case .recoverableError(let code):
+            switch code {
+            case .crashLoopSafeMode:
+                return .crashLoopSafeMode()
+            case .systemSleeping:
+                return .systemSleeping()
+            case .resourceConstrained:
+                return .resourceConstrained(details: "admission resource budget")
+            case .engineNotReady:
+                return .engineNotReady(details: "engine not running")
+            default:
+                return EngineFault(
+                    code: code,
+                    severity: .warning,
+                    affectedRecord: recordID,
+                    recoveryActions: ["retry_op"],
+                    redactedContext: "admission deferred"
+                )
+            }
+        case .healthy:
+            return .engineNotReady(details: "admission deferred")
+        case .fatalError(let code):
+            return EngineFault(code: code, severity: .fatal, affectedRecord: recordID)
+        }
     }
 
     private func handleRecheck(_ recordID: TorrentRecordID) async -> EngineCommandResult {
@@ -898,10 +1186,30 @@ public actor TransferCoordinator {
         } catch {
             return .failure(EngineFault.invalidPayload(details: "fileSelection: \(error.localizedDescription)"))
         }
-        records[request.recordID] = record.with(fileSelection: selection)
+        var updatedMap = Dictionary(uniqueKeysWithValues: record.fileSelection.map { ($0.relativePath, $0) })
+        for item in selection {
+            updatedMap[item.relativePath] = item
+        }
+        let updatedSelection = Array(updatedMap.values)
+        let effectiveBytes = Self.effectiveTotalBytes(for: metainfo, selection: updatedSelection)
+        records[request.recordID] = record.with(totalBytes: effectiveBytes, fileSelection: updatedSelection)
         bumpEngineRevision(change: .updated(request.recordID))
         await publishInspectionInvalidated(recordID: request.recordID, scope: .files)
         return .success(.ack)
+    }
+    fileprivate static func effectiveTotalBytes(for metainfo: Metainfo, selection: [RecordFileSelection]) -> Int64 {
+        if selection.isEmpty {
+            return metainfo.totalSize
+        }
+        var total: Int64 = 0
+        let selectionMap = Dictionary(uniqueKeysWithValues: selection.map { ($0.relativePath, $0.priority) })
+        for file in metainfo.files {
+            let priority = selectionMap[file.path] ?? .normal
+            if priority != .skip {
+                total += file.sizeBytes
+            }
+        }
+        return total
     }
 
     // MARK: - Paginated reads
@@ -1081,13 +1389,30 @@ public actor TransferCoordinator {
     /// then apply live status to every record. Per-record isolation: an
     /// engine error for one torrent only degrades that record.
     public func pumpOnce() async {
-        guard !safeRecovery,
-              systemConditions.canAttemptNetworkWork,
-              resourceBudget.acceptsHeavyWork else { return }
+        guard sessionPhase != .degraded else { return }
+        guard !safeRecovery else {
+            markDeferredAdmissions(.recoverableError(.crashLoopSafeMode))
+            return
+        }
+        guard !systemConditions.sleeping else {
+            markDeferredAdmissions(.recoverableError(.systemSleeping))
+            return
+        }
+        guard systemConditions.canAttemptNetworkWork else {
+            markDeferredAdmissions(.waitingForNetwork)
+            return
+        }
+        guard resourceBudget.acceptsHeavyWork else {
+            markDeferredAdmissions(.recoverableError(.resourceConstrained))
+            return
+        }
         healthReporter?.noteEngineTick()
         let now = Date()
         guard now >= nextStatusAttemptAt else { return }
-        guard await ensureEngineStarted() else { return }
+        guard await ensureEngineStarted() else {
+            markDeferredAdmissions(.recoverableError(.engineNotReady))
+            return
+        }
 
         if networkRecoveryPending, now >= nextNetworkRecoveryAt {
             await recoverNetworkPath()
@@ -1102,11 +1427,11 @@ public actor TransferCoordinator {
             statusFailures += 1
             healthReporter?.noteEngineFailure()
             nextStatusAttemptAt = now.addingTimeInterval(Self.backoffSeconds(forAttempt: statusFailures))
-            log.warning("pump: statusUpdate failed: \(String(describing: error))")
+            log.warning("pump: statusUpdate failed: \(TorrentinoLog.redactedDescription(error))")
             return
         }
         let statusByEngineID = Dictionary(statuses.map { ($0.engineID, $0) }, uniquingKeysWith: { first, _ in first })
-        var changed: [TorrentRecordID] = []
+        var changed = Set<TorrentRecordID>()
 
         // Re-add records the engine does not know yet (restart + failed adds).
         // Iterate a snapshot of the dictionary: records is mutated inside.
@@ -1117,42 +1442,17 @@ public actor TransferCoordinator {
             if let backoff = readdBackoff[recordID], now < backoff.nextAttemptAt {
                 continue
             }
-            let storageState = storageProbe(record.saveLocation, record.totalBytes)
-            if let storageHealth = health(for: storageState, recordID: recordID) {
-                if record.health != storageHealth {
-                    records[recordID] = record.with(health: storageHealth)
-                    changed.append(recordID)
-                }
-                continue
-            }
-            guard canAdmitEngineWork(desiredState: record.desiredState, totalBytes: record.totalBytes) else {
-                if record.health != .recoverableError(.resourceConstrained) {
-                    records[recordID] = record.with(health: .recoverableError(.resourceConstrained))
-                    changed.append(recordID)
-                }
-                continue
-            }
-            let specification = TorrentAdder.makeSpecification(
-                identity: record.contentIdentity,
-                metainfoData: record.metainfoData,
-                trackerTiers: record.trackerTiers,
-                savePath: record.saveLocation.path,
-                paused: record.desiredState == .paused
-            )
+            let reason = pendingAdmissionReasons[recordID] ?? .pumpReadd
             readdAttempts += 1
-            do {
-                let result = try await engine.add(specification: specification)
-                records[recordID] = record.with(engineID: result.torrentID, health: .healthy)
-                readdBackoff.removeValue(forKey: recordID)
-                changed.append(recordID)
-            } catch {
-                records[recordID] = record.with(health: Self.engineHealth(from: error, recordID: recordID))
-                let failures = (readdBackoff[recordID]?.failures ?? 0) + 1
-                readdBackoff[recordID] = (
-                    failures: failures,
-                    nextAttemptAt: now.addingTimeInterval(Self.backoffSeconds(forAttempt: failures))
-                )
-                changed.append(recordID)
+            let outcome = await admit(recordID, reason: reason)
+            applyAdmissionOutcome(outcome, to: recordID, reason: reason)
+            if case .admitted = outcome {
+                pendingAdmissionReasons.removeValue(forKey: recordID)
+            } else if case .deferred = outcome {
+                pendingAdmissionReasons[recordID] = reason
+            }
+            if records[recordID] != record {
+                changed.insert(recordID)
             }
         }
 
@@ -1160,10 +1460,38 @@ public actor TransferCoordinator {
         let currentRecords = records
         for (recordID, record) in currentRecords {
             guard let engineID = record.engineID, let status = statusByEngineID[engineID] else { continue }
-            let updated = record.applying(status)
+            let updated = record.applying(status, health: Self.liveHealth(for: status))
             if updated != record {
                 records[recordID] = updated
-                changed.append(recordID)
+                changed.insert(recordID)
+                if record.activity != updated.activity || record.health != updated.health {
+                    TorrentinoLog.record(
+                        category: "transfer",
+                        level: updated.health == .healthy ? "notice" : "warning",
+                        message: "transfer transition record=\(recordID) activity=\(record.activity.rawValue)->\(updated.activity.rawValue) health=\(record.health)->\(updated.health)"
+                    )
+                }
+            }
+        }
+
+        // P4: a healthy running record with no activity is never a valid
+        // steady state. Re-admit it through the same gate and log loudly.
+        let limbo = records.filter {
+            $0.value.desiredState == .running
+                && $0.value.engineID == nil
+                && $0.value.activity == .idle
+                && $0.value.health == .healthy
+        }
+        for (recordID, record) in limbo {
+            TorrentinoLog.record(
+                category: "transfer",
+                level: "error",
+                message: "admission invariant P4 violated record=\(recordID); retrying"
+            )
+            let outcome = await admit(recordID, reason: .pumpReadd)
+            applyAdmissionOutcome(outcome, to: recordID, reason: .pumpReadd)
+            if records[recordID] != record {
+                changed.insert(recordID)
             }
         }
 
@@ -1173,6 +1501,36 @@ public actor TransferCoordinator {
             appendEngineChange(.updated(recordID))
         }
         await publishDelta()
+    }
+
+    private func markDeferredAdmissions(_ health: TorrentHealth) {
+        var changed: [TorrentRecordID] = []
+        for (recordID, record) in records where record.engineID == nil && record.desiredState == .running {
+            let updated = record.with(activity: .idle, health: health)
+            if updated != record {
+                records[recordID] = updated
+                changed.append(recordID)
+            }
+        }
+        guard !changed.isEmpty else { return }
+        for recordID in changed {
+            bumpRecordRevision(recordID)
+            appendEngineChange(.updated(recordID))
+        }
+        Task { await publishDelta() }
+    }
+
+    private static func liveHealth(for status: TransferTorrentStatus) -> TorrentHealth {
+        guard [.fetchingMetadata, .queued, .checking, .downloading, .seeding].contains(status.activity),
+              case .recoverableError(let code) = status.health else {
+            return status.health
+        }
+        switch code {
+        case .internalError, .engineBusy, .engineNotReady, .operationTimeout, .engineUnresponsive:
+            return .healthy
+        default:
+            return status.health
+        }
     }
 
     /// Reannounce is deliberately bounded and retried only after a path
@@ -1202,7 +1560,7 @@ public actor TransferCoordinator {
     // MARK: - Engine lifecycle helpers
 
     private func ensureEngineStarted() async -> Bool {
-        guard !safeRecovery, systemConditions.canAttemptNetworkWork else { return false }
+        guard sessionPhase != .degraded, !safeRecovery, systemConditions.canAttemptNetworkWork else { return false }
         if await engine.isStarted {
             engineStartFailures = 0
             nextEngineStartAt = .distantPast
@@ -1273,7 +1631,7 @@ public actor TransferCoordinator {
         var changed: [TorrentRecordID] = []
         for (recordID, record) in records {
             let nextHealth: TorrentHealth
-            if let storageHealth = health(for: storageProbe(record.saveLocation, record.totalBytes), recordID: recordID) {
+            if let storageHealth = health(for: storageProbe(record.saveLocation, requiredBytes(for: record)), recordID: recordID) {
                 nextHealth = storageHealth
             } else if !systemConditions.canAttemptNetworkWork && record.desiredState == .running {
                 nextHealth = .waitingForNetwork
@@ -1282,7 +1640,8 @@ public actor TransferCoordinator {
             } else {
                 nextHealth = .healthy
             }
-            records[recordID] = record.with(engineID: nil, health: nextHealth)
+            records[recordID] = record.with(engineID: nil, activity: .idle, health: nextHealth)
+            pendingAdmissionReasons[recordID] = .engineRestart
             readdBackoff.removeValue(forKey: recordID)
             changed.append(recordID)
         }
@@ -1431,6 +1790,57 @@ public actor TransferCoordinator {
             return .permissionDenied
         case .insufficientSpace:
             return .waitingForSpace
+        }
+    }
+
+    private func requiredBytes(for record: TransferRecord) -> Int64 {
+        max(0, record.totalBytes - record.downloadedBytes)
+    }
+
+    private static func isValidCoreIdentity(_ torrent: StoredTorrent) -> Bool {
+        guard UUID(uuidString: torrent.id) != nil,
+              !torrent.name.isEmpty,
+              !torrent.state.isEmpty,
+              torrent.addedAt >= 0 else {
+            return false
+        }
+        func validHash(_ value: String?, byteCount: Int) -> Bool {
+            // Schema v1 stores an absent optional hash as the empty string.
+            guard let value, !value.isEmpty else { return true }
+            guard value.count == byteCount * 2,
+                  value.allSatisfy({ $0.isHexDigit }) else { return false }
+            return true
+        }
+        guard validHash(torrent.infoHashV1, byteCount: 20),
+              validHash(torrent.infoHashV2, byteCount: 32) else {
+            return false
+        }
+        return !(torrent.infoHashV1?.isEmpty ?? true)
+            || !(torrent.infoHashV2?.isEmpty ?? true)
+    }
+
+    private static func storageFault(
+        for state: StorageAvailabilityState,
+        recordID: TorrentRecordID,
+        volumeIdentifier: String?,
+        requiredBytes: Int64
+    ) -> EngineFault {
+        switch state {
+        case .insufficientSpace(_, let availableBytes):
+            return EngineFault(
+                code: .insufficientSpace,
+                severity: .error,
+                affectedRecord: recordID,
+                affectedVolume: volumeIdentifier,
+                recoveryActions: ["free_disk_space", "choose_storage"],
+                redactedContext: "requiredBytes=\(max(0, requiredBytes)) availableBytes=\(availableBytes)"
+            )
+        case .permissionDenied:
+            return .permissionDenied(recordID: recordID, volumeIdentifier: volumeIdentifier)
+        case .volumeUnavailable, .unknown:
+            return .volumeUnavailable(recordID: recordID, volumeIdentifier: volumeIdentifier)
+        case .available:
+            return .engineNotReady(details: "storage state changed")
         }
     }
 
@@ -1615,7 +2025,35 @@ extension TransferRecord {
         )
     }
 
+    fileprivate func with(activity: TorrentActivity, health: TorrentHealth) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
     fileprivate func with(engineID: String?, health: TorrentHealth) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
+    fileprivate func with(engineID: String?, activity: TorrentActivity, health: TorrentHealth) -> TransferRecord {
         TransferRecord(
             id: id, contentIdentity: contentIdentity, displayName: displayName,
             desiredState: desiredState, activity: activity, health: health,
@@ -1642,6 +2080,21 @@ extension TransferRecord {
             addedAt: addedAt, revision: revision, limits: limits
         )
     }
+
+    fileprivate func with(totalBytes: Int64, fileSelection: [RecordFileSelection]) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
 
     fileprivate func with(limits: TorrentinoIPC.TransferLimits) -> TransferRecord {
         TransferRecord(
@@ -1673,18 +2126,30 @@ extension TransferRecord {
     }
 
     /// Live engine status merged into the record. Equal when nothing changed.
-    fileprivate func applying(_ status: TransferTorrentStatus) -> TransferRecord {
+    fileprivate func applying(_ status: TransferTorrentStatus, health: TorrentHealth = .healthy) -> TransferRecord {
         let fraction = min(1, max(0, status.progressFraction))
-        let downloaded = status.downloadedBytes > 0
-            ? status.downloadedBytes
-            : Int64(fraction * Double(self.totalBytes))
-        let totalBytes = downloaded > 0 && fraction > 0
-            ? Int64(Double(downloaded) / fraction)
-            : self.totalBytes
+        let effectiveTotal: Int64
+        if let metainfoData, let metainfo = try? Preflight.validateTorrentData(metainfoData) {
+            effectiveTotal = TransferCoordinator.effectiveTotalBytes(for: metainfo, selection: fileSelection)
+        } else if self.totalBytes > 0 {
+            effectiveTotal = self.totalBytes
+        } else if status.downloadedBytes > 0 && fraction > 0 {
+            effectiveTotal = Int64(Double(status.downloadedBytes) / fraction)
+        } else {
+            effectiveTotal = 0
+        }
+
+        let downloaded: Int64
+        if status.downloadedBytes > 0 {
+            downloaded = min(effectiveTotal, status.downloadedBytes)
+        } else {
+            downloaded = Int64(fraction * Double(effectiveTotal))
+        }
+
         let candidate = TransferRecord(
             id: id, contentIdentity: contentIdentity, displayName: displayName,
-            desiredState: desiredState, activity: status.activity, health: status.health,
-            totalBytes: totalBytes, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
+            desiredState: desiredState, activity: status.activity, health: health,
+            totalBytes: effectiveTotal, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
             downloadBytesPerSec: status.downloadBytesPerSec, uploadBytesPerSec: status.uploadBytesPerSec,
             peersConnected: status.peersConnected, seedsTotal: status.seedsTotal,
             engineID: engineID, metainfoData: metainfoData,

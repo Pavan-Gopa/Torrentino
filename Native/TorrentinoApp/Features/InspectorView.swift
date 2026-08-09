@@ -87,9 +87,11 @@ struct InspectorView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "doc.richtext")
-                .font(.system(size: 32))
-                .foregroundStyle(.blue)
+            Image(nsImage: AppLogo.image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(torrent?.displayName ?? String(localized: "inspector.no_selection"))
@@ -120,6 +122,18 @@ struct InspectorView: View {
     private var generalTab: some View {
         Form {
             if let torrent {
+                if let healthDescription = healthDescription(for: torrent.health) {
+                    Section {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(healthDescription)
+                                .font(.callout)
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
                 LabeledContent(String(localized: "inspector.general.name"), value: torrent.displayName)
                 LabeledContent(String(localized: "inspector.general.size"), value: byteCount(torrent.progress.totalBytes))
                 LabeledContent(String(localized: "inspector.general.downloaded"), value: byteCount(torrent.progress.downloadedBytes))
@@ -129,6 +143,36 @@ struct InspectorView: View {
             } else {
                 Text(String(localized: "inspector.no_selection"))
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Presentation-only mapping. The agent's health value remains untouched;
+    /// the inspector chooses localized copy without applying recovery rules.
+    private func healthDescription(for health: TorrentHealth) -> String? {
+        switch health {
+        case .healthy:
+            return nil
+        case .waitingForNetwork:
+            return String(localized: "error.network_unavailable")
+        case .waitingForVolume:
+            return String(localized: "error.volume_unavailable")
+        case .waitingForSpace:
+            return String(localized: "error.insufficient_space")
+        case .permissionDenied:
+            return String(localized: "error.permission_denied")
+        case .recoverableError(let code), .fatalError(let code):
+            switch code {
+            case .resourceConstrained:
+                return String(localized: "error.resource_constrained")
+            case .systemSleeping:
+                return String(localized: "error.system_sleeping")
+            case .storeError:
+                return String(localized: "error.store_error")
+            case .crashLoopSafeMode:
+                return String(localized: "engine.degraded.safe_recovery")
+            default:
+                return String(localized: "error.internal")
             }
         }
     }

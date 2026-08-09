@@ -41,6 +41,10 @@ public enum TorrentHealth: Codable, Sendable, Equatable {
     case permissionDenied
     case recoverableError(EngineErrorCode)
     case fatalError(EngineErrorCode)
+
+    // Keep the shared API shape for the existing inspector while the rejected
+    // lane's localized health presentation is rolled back.
+    public var localizedDescription: String? { nil }
 }
 
 /// Byte accounting for a torrent. fraction is 0.0...1.0.

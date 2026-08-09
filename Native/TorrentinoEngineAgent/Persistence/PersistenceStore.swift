@@ -13,8 +13,285 @@
 
 import Foundation
 import OSLog
+import os
 import TorrentinoDomain
 import TorrentinoIPC
+
+// Layer: Engine Agent (Diagnostics & Observability).
+// Role: target-shared redacted file sink and OSLog facade.
+// Must-not: persist user paths, credentials, tracker passkeys, or raw bridge
+//           diagnostics; file growth must remain bounded.
+
+public actor RedactedLogFileManager {
+    public static let shared = RedactedLogFileManager()
+
+    private let fileManager: FileManager
+    private let logDirectory: URL
+    private let maxFileSize: Int64
+    private let maxFileCount: Int
+    private var currentFileHandle: FileHandle?
+
+    public init(
+        logDirectory: URL? = nil,
+        maxFileSize: Int64 = 2 * 1024 * 1024,
+        maxFileCount: Int = 5,
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.maxFileSize = max(1, maxFileSize)
+        self.maxFileCount = max(1, maxFileCount)
+
+        if let logDirectory {
+            self.logDirectory = logDirectory
+        } else if let override = ProcessInfo.processInfo.environment["TORRENTINO_LOG_DIRECTORY"], !override.isEmpty {
+            self.logDirectory = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        } else {
+            self.logDirectory = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("Logs", isDirectory: true)
+                .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
+                ?? URL(fileURLWithPath: "/tmp/torrentino-logs", isDirectory: true)
+        }
+
+        try? fileManager.createDirectory(at: self.logDirectory, withIntermediateDirectories: true)
+    }
+
+    public nonisolated static func defaultLogDirectory(fileManager: FileManager = .default) -> URL {
+        if let override = ProcessInfo.processInfo.environment["TORRENTINO_LOG_DIRECTORY"], !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
+            ?? URL(fileURLWithPath: "/tmp/torrentino-logs", isDirectory: true)
+    }
+
+    public static func redact(_ text: String) -> String {
+        var redacted = text
+        let patterns: [(String, String, NSRegularExpression.Options)] = [
+            ("(?:/Users|/Volumes|/private/var)/[^\\s\"']+", "~", []),
+            ("(proxyPassword|password|secret|passkey|token)=[^&\\s\"']+", "$1=<redacted>", [.caseInsensitive]),
+            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"[^\\\"]*\\\"", "$1\"<redacted>\"", [.caseInsensitive]),
+            ("Authorization:\\s*Bearer\\s+[^\\s\"']+", "Authorization: Bearer <redacted>", [.caseInsensitive]),
+        ]
+        for (pattern, replacement, options) in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
+            let range = NSRange(location: 0, length: redacted.utf16.count)
+            redacted = regex.stringByReplacingMatches(in: redacted, options: [], range: range, withTemplate: replacement)
+        }
+        return redacted
+    }
+
+    public func writeLog(category: String, level: String, message: String) {
+        let cleanMessage = Self.redact(message)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] [\(category)] [\(level.uppercased())] \(cleanMessage)\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        do {
+            let handle = try prepareCurrentFileHandle()
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            if Int64(try handle.offset()) >= maxFileSize {
+                rotateLogs()
+            }
+        } catch {
+            // Diagnostics must never take down the engine.
+        }
+    }
+
+    public func flush() {}
+
+    public func allLogFileURLs() -> [URL] {
+        guard let files = try? fileManager.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return files
+            .filter { $0.lastPathComponent.hasPrefix("engine_log") && $0.pathExtension == "log" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    public func fetchRecentLogLines(maxCount: Int = 1000) -> [String] {
+        var lines: [String] = []
+        for url in allLogFileURLs() {
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                lines.append(contentsOf: content.split(whereSeparator: \.isNewline).map(String.init))
+            }
+        }
+        return lines.count > maxCount ? Array(lines.suffix(maxCount)) : lines
+    }
+
+    public func clearAllLogs() {
+        try? currentFileHandle?.close()
+        currentFileHandle = nil
+        for url in allLogFileURLs() {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
+    private func prepareCurrentFileHandle() throws -> FileHandle {
+        if let currentFileHandle { return currentFileHandle }
+        let url = logDirectory.appendingPathComponent("engine_log_current.log")
+        if !fileManager.fileExists(atPath: url.path) {
+            fileManager.createFile(atPath: url.path, contents: nil)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        currentFileHandle = handle
+        return handle
+    }
+
+    private func rotateLogs() {
+        try? currentFileHandle?.close()
+        currentFileHandle = nil
+        let current = logDirectory.appendingPathComponent("engine_log_current.log")
+        guard fileManager.fileExists(atPath: current.path) else { return }
+
+        if maxFileCount > 1 {
+            for index in stride(from: maxFileCount - 1, through: 1, by: -1) {
+                let source = logDirectory.appendingPathComponent(
+                    index == 1 ? "engine_log_current.log" : "engine_log_\(index - 1).log"
+                )
+                let destination = logDirectory.appendingPathComponent("engine_log_\(index).log")
+                if fileManager.fileExists(atPath: destination.path) {
+                    try? fileManager.removeItem(at: destination)
+                }
+                if fileManager.fileExists(atPath: source.path) {
+                    try? fileManager.moveItem(at: source, to: destination)
+                }
+            }
+        }
+    }
+}
+
+public struct TorrentinoCategoryLogger: Sendable {
+    private let category: String
+
+    fileprivate init(category: String) {
+        self.category = category
+    }
+
+    public func debug(_ message: String) { TorrentinoLog.record(category: category, level: "debug", message: message) }
+    public func info(_ message: String) { TorrentinoLog.record(category: category, level: "info", message: message) }
+    public func notice(_ message: String) { TorrentinoLog.record(category: category, level: "notice", message: message) }
+    public func warning(_ message: String) { TorrentinoLog.record(category: category, level: "warning", message: message) }
+    public func error(_ message: String) { TorrentinoLog.record(category: category, level: "error", message: message) }
+}
+
+public enum TorrentinoLog {
+    public static let subsystem = "com.torrentino.app.engine-agent"
+
+    public static func logger(category: String) -> TorrentinoCategoryLogger {
+        TorrentinoCategoryLogger(category: category)
+    }
+
+    private struct BootstrapState: Sendable {
+        var initialized = false
+        var degraded = false
+    }
+
+    private static let lifecycle = Logger(subsystem: subsystem, category: "lifecycle")
+    private static let xpc = Logger(subsystem: subsystem, category: "xpc")
+    private static let persistence = Logger(subsystem: subsystem, category: "persistence")
+    private static let transfer = Logger(subsystem: subsystem, category: "transfer")
+    private static let diagnostics = Logger(subsystem: subsystem, category: "diagnostics")
+    private static let bootstrapState = OSAllocatedUnfairLock(initialState: BootstrapState())
+    private static let fileQueue = DispatchQueue(label: "com.torrentino.app.engine-agent.log-file")
+
+    public static func redactedDescription(_ error: Error) -> String {
+        RedactedLogFileManager.redact(String(describing: error))
+    }
+
+    public static var observabilityDegraded: Bool {
+        bootstrapState.withLock { $0.degraded }
+    }
+
+    /// Performs the only synchronous filesystem operation in diagnostics. The
+    /// agent must prove the sink before any asynchronous record can be queued.
+    public static func bootstrap() {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let startMarker = "agent bootstrap start version=\(version)"
+        let bootstrapLogger = Logger(subsystem: subsystem, category: "lifecycle")
+        bootstrapLogger.notice("\(startMarker, privacy: .public)")
+
+        do {
+            let directory = RedactedLogFileManager.defaultLogDirectory()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("engine_log_current.log")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((startMarker + "\n").utf8))
+            let readyMarker = "log sink ready path=\(RedactedLogFileManager.redact(url.path))"
+            bootstrapLogger.notice("\(readyMarker, privacy: .public)")
+            try handle.write(contentsOf: Data((readyMarker + "\n").utf8))
+            try handle.synchronize()
+            try handle.close()
+
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            guard String(contents.split(whereSeparator: \.isNewline).last ?? "") == readyMarker else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            bootstrapState.withLock {
+                $0.initialized = true
+                $0.degraded = false
+            }
+        } catch {
+            let reason = RedactedLogFileManager.redact(String(describing: error))
+            bootstrapState.withLock {
+                $0.initialized = true
+                $0.degraded = true
+            }
+            bootstrapLogger.fault("observability=degraded reason=\(reason, privacy: .public)")
+            FileHandle.standardError.write(Data("FATAL: diagnostics sink degraded: \(reason)\n".utf8))
+        }
+    }
+
+    public static func record(category: String, level: String, message: String) {
+        let clean = RedactedLogFileManager.redact(message)
+        let logger: Logger
+        switch category {
+        case "lifecycle": logger = lifecycle
+        case "xpc": logger = xpc
+        case "persistence": logger = persistence
+        case "transfer": logger = transfer
+        default: logger = diagnostics
+        }
+        switch level.lowercased() {
+        case "error", "fault": logger.error("\(clean, privacy: .public)")
+        case "warning": logger.warning("\(clean, privacy: .public)")
+        case "debug": logger.debug("\(clean, privacy: .public)")
+        case "info": logger.info("\(clean, privacy: .public)")
+        default: logger.notice("\(clean, privacy: .public)")
+        }
+
+        fileQueue.async {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                await RedactedLogFileManager.shared.writeLog(category: category, level: level, message: clean)
+                semaphore.signal()
+            }
+            semaphore.wait()
+        }
+    }
+
+    public static func flush() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            fileQueue.async {
+                Task {
+                    await RedactedLogFileManager.shared.flush()
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Used only by fatal bootstrap paths immediately before `exit`.
+    public static func flushSynchronously() {
+        fileQueue.sync {}
+    }
+}
 
 // MARK: - Value types (all Sendable)
 
@@ -122,7 +399,7 @@ actor PersistenceStore {
     private var generationCounters: [GenerationKind: UInt64] = [:]
     private let sessionClock = GenerationClock(initial: 0)
     private var lastReport: StartupReport?
-    private let log = Logger(subsystem: "com.torrentino.app.engine-agent", category: "persistence")
+    private let log = TorrentinoLog.logger(category: "persistence")
 
     /// Maximum journal rows kept. Older entries are trimmed after each append.
     static let journalLimit = 1000
@@ -146,6 +423,7 @@ actor PersistenceStore {
     func open() async throws -> StartupReport {
         guard state == .unopened else { throw PersistenceError.alreadyOpen }
         state = .opening
+        TorrentinoLog.record(category: "persistence", level: "info", message: "persistence open start")
         do {
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
             let database = SQLiteConnection(path: databaseURL.path)
@@ -157,7 +435,8 @@ actor PersistenceStore {
             let report = try await StartupReconciler.reconcile(store: self)
             lastReport = report
             state = report.degraded ? .degraded : .ready
-            log.notice("persistence open \(report.message, privacy: .public)")
+            log.notice("persistence open \(report.message)")
+            TorrentinoLog.record(category: "persistence", level: report.degraded ? "warning" : "notice", message: "persistence open complete report=\(report.message)")
             return report
         } catch let error as PersistenceError {
             switch error {
@@ -167,7 +446,8 @@ actor PersistenceStore {
                 return try recoverFromOpenFailure(original: error)
             default:
                 state = .failed
-                log.error("persistence open failed: \(String(describing: error), privacy: .public)")
+                log.error("persistence open failed: \(TorrentinoLog.redactedDescription(error))")
+                TorrentinoLog.record(category: "persistence", level: "error", message: "persistence open failed: \(TorrentinoLog.redactedDescription(error))")
                 throw error
             }
         } catch let error as SQLiteError {
@@ -195,11 +475,13 @@ actor PersistenceStore {
             )
             lastReport = report
             state = .degraded
-            log.error("persistence degraded: \(report.message, privacy: .public)")
+            log.error("persistence degraded: \(report.message)")
+            TorrentinoLog.record(category: "persistence", level: "warning", message: "persistence rebuilt report=\(report.message)")
             return report
         } catch {
             state = .failed
-            log.error("controlled recovery failed: \(String(describing: error), privacy: .public)")
+            log.error("controlled recovery failed: \(TorrentinoLog.redactedDescription(error))")
+            TorrentinoLog.record(category: "persistence", level: "error", message: "controlled recovery failed: \(TorrentinoLog.redactedDescription(error))")
             throw error
         }
     }
@@ -217,6 +499,7 @@ actor PersistenceStore {
             // WAL exactly like a process restart after SIGKILL. (A real close
             // would let SQLite checkpoint the WAL into the main file.)
             log.notice("unclean close: connection left open (kill -9 semantics)")
+            TorrentinoLog.record(category: "persistence", level: "warning", message: "unclean close leaves WAL for replay")
         }
         state = .closed
     }
@@ -431,7 +714,32 @@ actor PersistenceStore {
 
     func torrentLimits(torrentID: String) throws -> TorrentinoIPC.TransferLimits? {
         guard let payload = try sessionValue(key: Self.torrentLimitsKey(torrentID)) else { return nil }
-        return try JSONDecoder().decode(TorrentinoIPC.TransferLimits.self, from: payload.data)
+        do {
+            return try JSONDecoder().decode(TorrentinoIPC.TransferLimits.self, from: payload.data)
+        } catch {
+            // Layer: EngineAgent (Persistence).
+            // Role: tolerant schema fallback for TransferLimits decoding.
+            // Why: records persisted by rejected/future lanes may carry extra or altered keys;
+            // fallback to dictionary parsing preserves valid limit values without discarding the record.
+            if let dict = try? JSONSerialization.jsonObject(with: payload.data) as? [String: Any] {
+                let maxDownload = (dict["maxDownloadBytesPerSec"] as? NSNumber)?.int64Value
+                let maxUpload = (dict["maxUploadBytesPerSec"] as? NSNumber)?.int64Value
+                let ratio = (dict["ratioLimit"] as? NSNumber)?.doubleValue
+                let seedTime = (dict["seedTimeSeconds"] as? NSNumber)?.int64Value
+                return TorrentinoIPC.TransferLimits(
+                    maxDownloadBytesPerSec: maxDownload,
+                    maxUploadBytesPerSec: maxUpload,
+                    ratioLimit: ratio,
+                    seedTimeSeconds: seedTime
+                )
+            }
+            TorrentinoLog.record(
+                category: "persistence",
+                level: "warning",
+                message: "tolerant decode failed table=torrent_limits record=\(torrentID) error=\(TorrentinoLog.redactedDescription(error))"
+            )
+            throw PersistenceError.sqlite("tolerant decode failed for torrent limits")
+        }
     }
 
     // MARK: - Structured tracker topology (schema v3)
@@ -439,8 +747,34 @@ actor PersistenceStore {
     private struct TrackerTopologyEnvelope: Codable {
         let version: Int
         let tiers: [[String]]
-    }
 
+        enum CodingKeys: String, CodingKey {
+            case version
+            case tiers
+        }
+
+        init(version: Int, tiers: [[String]]) {
+            self.version = version
+            self.tiers = tiers
+        }
+
+        init(from decoder: Decoder) throws {
+            // Layer: EngineAgent (Persistence).
+            // Role: tolerant decode for tracker topology envelope.
+            // Why: missing/unknown keys across versions default cleanly to version 1 and empty tiers.
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            do {
+                self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            } catch {
+                self.version = 1
+            }
+            do {
+                self.tiers = try container.decodeIfPresent([[String]].self, forKey: .tiers) ?? []
+            } catch {
+                self.tiers = []
+            }
+        }
+    }
     private struct TrackerTopologyRow {
         let data: Data
         let checksum: String
@@ -597,7 +931,24 @@ actor PersistenceStore {
 
     func torrentLocation(torrentID: String) throws -> PersistedLocation? {
         guard let payload = try sessionValue(key: Self.torrentLocationKey(torrentID)) else { return nil }
-        return try JSONDecoder().decode(PersistedLocation.self, from: payload.data)
+        do {
+            return try JSONDecoder().decode(PersistedLocation.self, from: payload.data)
+        } catch {
+            // Layer: EngineAgent (Persistence).
+            // Role: tolerant schema fallback for PersistedLocation decoding.
+            // Why: extra fields in location JSON should not prevent reading the target path.
+            if let dict = try? JSONSerialization.jsonObject(with: payload.data) as? [String: Any],
+               let path = dict["path"] as? String {
+                let volumeID = dict["volumeIdentifier"] as? String
+                return PersistedLocation(path: path, volumeIdentifier: volumeID)
+            }
+            TorrentinoLog.record(
+                category: "persistence",
+                level: "warning",
+                message: "tolerant decode failed table=torrent_location record=\(torrentID) error=\(TorrentinoLog.redactedDescription(error))"
+            )
+            throw PersistenceError.sqlite("tolerant decode failed for torrent location")
+        }
     }
 
     func persistSettings(_ settings: EngineSettings, revision: SettingsRevision) throws {
@@ -610,12 +961,45 @@ actor PersistenceStore {
 
     func loadSettings() throws -> (settings: EngineSettings, revision: SettingsRevision)? {
         guard let settingsPayload = try sessionValue(key: "engine_settings"),
-              let revisionPayload = try sessionValue(key: "engine_settings_revision"),
-              let settings = try? JSONDecoder().decode(EngineSettings.self, from: settingsPayload.data),
-              let revision = SettingsRevision(String(data: revisionPayload.data, encoding: .utf8) ?? "") else {
+              let revisionPayload = try sessionValue(key: "engine_settings_revision") else {
             return nil
         }
+        let settings: EngineSettings
+        do {
+            settings = try JSONDecoder().decode(EngineSettings.self, from: settingsPayload.data)
+        } catch {
+            log.warning("settings tolerant decode fallback: \(TorrentinoLog.redactedDescription(error))")
+            settings = tolerantSettings(from: settingsPayload.data) ?? .default
+        }
+        let revision: SettingsRevision
+        if let text = String(data: revisionPayload.data, encoding: .utf8),
+           let parsed = SettingsRevision(text) {
+            revision = parsed
+        } else {
+            log.warning("settings revision decode fallback")
+            revision = 1
+        }
         return (settings, revision)
+    }
+
+    private func tolerantSettings(from data: Data) -> EngineSettings? {
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let defaults = EngineSettings.default
+        let listenPort = UInt16(clamping: (dict["listenPort"] as? NSNumber)?.intValue ?? Int(defaults.listenPort))
+        return EngineSettings(
+            downloadDirectory: dict["downloadDirectory"] as? String ?? defaults.downloadDirectory,
+            maxDownloadBytesPerSec: (dict["maxDownloadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxDownloadBytesPerSec,
+            maxUploadBytesPerSec: (dict["maxUploadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxUploadBytesPerSec,
+            listenPort: listenPort == 0 ? defaults.listenPort : listenPort,
+            dhtEnabled: (dict["dhtEnabled"] as? NSNumber)?.boolValue ?? defaults.dhtEnabled,
+            lsdEnabled: (dict["lsdEnabled"] as? NSNumber)?.boolValue ?? defaults.lsdEnabled,
+            upnpEnabled: (dict["upnpEnabled"] as? NSNumber)?.boolValue ?? defaults.upnpEnabled,
+            natPmpEnabled: (dict["natPmpEnabled"] as? NSNumber)?.boolValue ?? defaults.natPmpEnabled,
+            encryptionEnabled: (dict["encryptionEnabled"] as? NSNumber)?.boolValue ?? defaults.encryptionEnabled,
+            proxy: defaults.proxy
+        )
     }
 
     func sessionValue(key: String) throws -> StoredPayload? {
@@ -1042,7 +1426,7 @@ actor PersistenceStore {
     /// aside, salvages readable rows, writes a fresh database (temp -> fsync
     /// -> rename -> dir fsync), reopens it and restores the salvage.
     func recoverFromCorruptDatabase(reason: String) throws -> RebuildReport {
-        log.error("controlled recovery: \(reason, privacy: .public)")
+        log.error("controlled recovery: \(reason)")
         rawClose()
 
         let preserved = moveForensicGroupAside()

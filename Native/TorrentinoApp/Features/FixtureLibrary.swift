@@ -120,3 +120,56 @@ enum TorrentListProjection {
         return result
     }
 }
+
+import UniformTypeIdentifiers
+
+/// `.torrent` gate shared by the window drop handler and Finder
+/// open-document: file URL, extension/UTI match against the app-declared
+/// `com.bittorrent.torrent` type (Info.plist exports it with the `torrent`
+/// filename extension).
+enum TorrentDropRouting {
+    static func isTorrentDropURL(_ url: URL) -> Bool {
+        guard url.isFileURL else { return false }
+        if url.pathExtension.lowercased() == "torrent" { return true }
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return false }
+        return type.identifier == "com.bittorrent.torrent"
+    }
+}
+
+/// Adaptive lower files-pane geometry: size to content for small file lists,
+/// cap and scroll for large ones.
+enum FilesPaneSizing {
+    /// Row height allowance per visible file entry plus the header bar.
+    static let baseHeight: CGFloat = 40
+    static let rowHeight: CGFloat = 28
+    /// Keep the torrent table primary; beyond this the pane scrolls.
+    static let maxHeight: CGFloat = 280
+    static let minimumHeight: CGFloat = baseHeight + rowHeight
+
+    static func hasContext(
+        selectedTorrentIsVisible: Bool,
+        fileCount: Int,
+        filesLoading: Bool
+    ) -> Bool {
+        selectedTorrentIsVisible && (filesLoading || fileCount > 0)
+    }
+
+    static func isVisible(
+        selectedTorrentIsVisible: Bool,
+        fileCount: Int,
+        filesLoading: Bool,
+        collapsed: Bool
+    ) -> Bool {
+        hasContext(
+            selectedTorrentIsVisible: selectedTorrentIsVisible,
+            fileCount: fileCount,
+            filesLoading: filesLoading
+        ) && !collapsed
+    }
+
+    static func idealHeight(fileCount: Int) -> CGFloat {
+        let clamped = max(1, fileCount)
+        let content = baseHeight + rowHeight * CGFloat(clamped)
+        return min(content, maxHeight)
+    }
+}

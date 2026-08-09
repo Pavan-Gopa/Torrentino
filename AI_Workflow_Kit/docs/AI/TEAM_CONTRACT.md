@@ -84,9 +84,13 @@ Human ↔ Orchestrator only (control plane)
 5. Diff **only** in `STATE.yaml` → `target_files`.
 6. Communication between agents **via files only**.
 7. **Коммитит только Orchestrator.** Воркеры (Coder, Reviewer, Tester) делают работу, оставляют файлы в working tree. Orchestrator проверяет результат и коммитит + пушит. Воркеры НЕ делают `git commit` / `git push`.
-8. No silent architecture redesign by Coder.
-9. No fake data / fake states in production code.
-10. **`Legacy/Tauri/` HARD BAN (all roles, no exceptions):**
+8. **Fresh build before Human live review.** После каждого Coder handoff Orchestrator закрывает старую app/agent сборку, пересобирает Debug, запускает свежую сборку и проверяет operational status до Human live-review или Reviewer kick. Если refresh не прошёл — обратно Coder, не Reviewer.
+9. **Human live review is additive.** Human может проверять свежую сборку как живой ревьювер, но это не заменяет обязательный Code Reviewer step и не заменяет Tester step.
+10. **Reviewer mandatory.** После Coder fix round и Human-accepted fresh build следующий обязательный шаг — Reviewer. Нельзя закрывать работу или идти в Tester без code review verdict.
+11. **Tester mandatory after review.** После Reviewer APPROVED следующий обязательный шаг — Tester: создать/обновить focused tests для нового поведения и прогнать старые regression suites. Нельзя закрывать WP только по Human live review или Reviewer approval.
+12. No silent architecture redesign by Coder.
+13. No fake data / fake states in production code.
+14. **`Legacy/Tauri/` HARD BAN (all roles, no exceptions):**
     - Do **not** modify, create, delete, move, reformat, or "fix" anything under `Legacy/`.
     - Do **not** use Legacy as implementation reference, copy-paste source, or design authority for Native work.
     - Do **not** `git add` / commit / restore / checkout Legacy except **Orchestrator** undoing accidental dirty tree back to HEAD.
@@ -94,15 +98,15 @@ Human ↔ Orchestrator only (control plane)
     - Human alone may touch Legacy offline for personal research; agents must ignore that worktree noise and never "help" with it.
     - If `git status` shows Legacy dirty: **leave it alone**, report to Orchestrator in handoff; do not revert unless you are Orchestrator restoring frozen tree.
     - Reviewer/Tester may only **detect** Legacy path changes via `git diff -- Legacy/` (no file edits). Untouched Legacy is a hard gate.
-11. **Never** `git add -A` on a parent directory outside Torrentino.
-12. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
-13. **Readable, well-commented code** — see § Comments below.
-14. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
-15. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
-16. Swift 6 strict concurrency: `Complete` с первого пакета.
-17. Никаких disk/network/DB/hash operations на `MainActor`.
-18. C++ pointer не пересекает actor boundary.
-19. UI не является источником истины.
+15. **Never** `git add -A` on a parent directory outside Torrentino.
+16. Product git root = `Torrentino/`. Tags: `torrentino/pre-<WP>`, `torrentino/<WP>-done`.
+17. **Readable, well-commented code** — see § Comments below.
+18. Human communicates **only with Orchestrator** for workflow. Workers report via files + «вернись к оркестратору».
+19. **Tester прогоняет ВСЕ suite'ы при каждом шаге.** Если любой suite красный — RED.
+20. Swift 6 strict concurrency: `Complete` с первого пакета.
+21. Никаких disk/network/DB/hash operations на `MainActor`.
+22. C++ pointer не пересекает actor boundary.
+23. UI не является источником истины.
 
 ## Comments (mandatory quality bar)
 

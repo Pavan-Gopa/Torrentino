@@ -10,6 +10,7 @@ import Foundation
 @main
 enum AgentMain {
     static func main() {
+        TorrentinoLog.bootstrap()
         let runtime: AgentRuntime
         do {
             runtime = try AgentRuntime()
@@ -21,9 +22,17 @@ enum AgentMain {
                 "FATAL: counter store format \(foundFormat) is newer than this agent supports " +
                 "(\(supportedFormat)). Downgrade blocked — reinstall the newer app version.\n"
             ).utf8))
+            TorrentinoLog.record(
+                category: "lifecycle",
+                level: "error",
+                message: "agent bootstrap blocked by counter format found=\(foundFormat) supported=\(supportedFormat)"
+            )
+            TorrentinoLog.flushSynchronously()
             exit(AgentRuntime.exitCodeDowngradeBlocked)
         } catch {
             FileHandle.standardError.write(Data("FATAL: agent bootstrap failed: \(error)\n".utf8))
+            TorrentinoLog.record(category: "lifecycle", level: "error", message: "agent bootstrap failed: \(TorrentinoLog.redactedDescription(error))")
+            TorrentinoLog.flushSynchronously()
             exit(AgentRuntime.exitCodeFault)
         }
 

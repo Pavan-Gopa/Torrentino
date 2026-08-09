@@ -1,3 +1,54 @@
+# WP13-LIVE-ENGINE-002 — Engine Truthfulness + Observability
+
+## RESULT: waiting_review
+
+### [WP13-LIVE-ENGINE-002-BLOCKED]
+
+The product-side lifecycle and observability fixes are implemented and pass the
+disposable XCTest coverage below. The mandatory disposable launchd/live proof
+is blocked because the preflight found the existing Human Engine directory,
+launchd job, and agent process. No Human state was inspected, changed, or
+deleted.
+
+| Acceptance | Status | Evidence |
+| --- | --- | --- |
+| E1 restore durable records, tolerate extra/old payload shapes, rebuild/skipped summary | PASS (unit) | `testRestoreToleratesExtraFieldsAndOldShape`, `testRestoreWarningClearsAfterHealthyEngineAdmission` |
+| E2 live health clears after healthy status while actionable storage faults remain | PASS (unit) | `testMultiFileRunningDesiredStateAndOfflineRecovery`, `testStatusCacheMergesSentinelsAndClearsTransientHealth`, existing WP09 storage-fault tests |
+| E3 desired `running` is not admitted as `idle` | PASS (unit) | `testCommitAddImmediateStartRunningNotIdle`, restore/re-add assertions |
+| E4 Pause/Resume returns typed engine faults | PASS (unit) | `testPauseResumeFaultReturnsActionableTypedError` |
+| E5 redacted rotating file sink plus OSLog call sites | PARTIAL | `testRedactedLogSinkRotatesAndWritesDisposableEvidence`; live file + OSLog evidence blocked by Human-state guard |
+| E6 add-flow/file-selection parity | PASS | full XCTest, `testCommitAddFlowPublishesDelta`, file-selection suite and WP-07 QA gate |
+| E7 regression sweep across touched hot files | PASS | full XCTest, WP-07 and WP-10 QA gates, `git diff --check` |
+
+### Changes
+
+- `TransferCoordinator.swift`: restore tolerance, rebuilt/skipped counters,
+  initial activity, re-add/resume admission, typed pause/resume faults, and
+  lifecycle/transition logs.
+- `BridgeTransferEngine.swift` and `StatusCache.swift`: corrected libtorrent
+  2.1 activity mapping, bounded live status merge, health projection, rates,
+  peers, removal cleanup, and transition logs.
+- `PersistenceStore.swift`, `AgentService.swift`, `AgentRuntime.swift`, and
+  `AgentMain.swift`: target-shared redacted rotating sink plus lifecycle,
+  persistence, restore, XPC, command, and transfer diagnostics.
+- `TorrentListViewModel.swift`: health projection only; lifecycle remains agent
+  owned.
+- `TransferSmokeTests.swift`: disposable restore/admission/health/pause-resume/
+  mapping/cache/log-sink regression cases.
+
+### Verification
+
+- `xcodebuild build -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData`: **BUILD SUCCEEDED**.
+- `xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData`: **TEST SUCCEEDED**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp07_file_selection.sh`: **PASS**.
+- `bash Native/TorrentinoEngineBridge/scripts/qa/test_wp10_removal_durable.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+- `graphify update .`: **PASS**.
+- `test_wp13_bug_closure.sh`: selected XCTest subset **PASS**, then stopped at
+  its stale `#if WP13_APP_SEAM` source-contract assertion before live actions.
+
+**Human: Live UI proof remains required for this lane.**
+
 # FEEDBACK — WP-13 Diagnostics, security, dependencies (RELEASE track)
 
 ### 1. Build & tests

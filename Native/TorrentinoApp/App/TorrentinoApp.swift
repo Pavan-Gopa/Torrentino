@@ -15,7 +15,7 @@ struct TorrentinoApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("Torrentino", id: "main") {
             ContentView()
                 .environmentObject(AppContext.shared)
                 .onOpenURL { url in
@@ -23,6 +23,7 @@ struct TorrentinoApp: App {
                 }
         }
         .defaultSize(width: 900, height: 560)
+        .handlesExternalEvents(matching: Set(["main", "*"]))
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button(String(localized: "app.about")) {
@@ -122,7 +123,7 @@ struct TorrentinoApp: App {
             }
         } else if url.isFileURL && url.pathExtension.lowercased() == "torrent" {
             Task { @MainActor in
-                await AppContext.transfers.addTorrentFile(url, startPaused: false)
+                AppContext.transfers.importIncomingTorrent(url)
             }
         }
     }
@@ -133,4 +134,17 @@ enum AppContext {
     static let engineClient = EngineClient()
     static let shared = EngineViewModel(client: engineClient)
     static let transfers = TorrentListViewModel(client: engineClient)
+}
+enum AppLogo {
+    static var image: NSImage {
+        let rootPath = "/Users/pavan/Documents/AI Projects/Torrentino/LOGO/Main LOGO.png"
+        if let img = NSImage(contentsOfFile: rootPath) {
+            return img
+        }
+        if let bundlePath = Bundle.main.path(forResource: "AppLogo", ofType: "png"),
+           let img = NSImage(contentsOfFile: bundlePath) {
+            return img
+        }
+        return NSImage(named: NSImage.applicationIconName) ?? NSImage()
+    }
 }

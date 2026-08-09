@@ -17,6 +17,7 @@ public actor BridgeTransferEngine: TransferEngine {
     private let coordinator: EngineCoordinator
     private var started = false
     private var statusCache = ByteBoundedStatusCache()
+    private var lastProjectedStatuses: [String: TransferTorrentStatus] = [:]
     private var resourceBudget = EngineResourceBudget.balanced
     private var activeSettings = EngineSettings.default
 
@@ -57,6 +58,7 @@ public actor BridgeTransferEngine: TransferEngine {
                 budget: resourceBudget
             ))
             statusCache.removeAll()
+            lastProjectedStatuses.removeAll()
             started = true
         } catch {
             started = false
@@ -82,6 +84,7 @@ public actor BridgeTransferEngine: TransferEngine {
         await coordinator.shutdown()
         started = false
         statusCache.removeAll()
+        lastProjectedStatuses.removeAll()
         try await start(configuration: configuration ?? activeSettings)
     }
 
@@ -156,28 +159,68 @@ public actor BridgeTransferEngine: TransferEngine {
     public func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
         let boundedBatch = max(1, min(maxAlerts, resourceBudget.alertDrainBatch))
         let alerts = try await coordinator.drainAlerts(maxCount: boundedBatch)
+        if let drainMessage = EngineAlertDTO.alertDrainLogMessage(count: alerts.count) {
+            TorrentinoLog.record(category: "transfer", level: "debug", message: drainMessage)
+        }
         for alert in alerts {
             guard let torrentID = alert.torrentID else { continue }
-            statusCache.insert(
-                CachedTorrentStatus(fraction: alert.progress, state: alert.state, error: alert.error),
+            let projectedHealth = Self.health(
+                from: alert.error ?? (alert.kind == "error" ? alert.message : nil),
+                kind: alert.kind
+            )
+            statusCache.merge(
+                CachedTorrentStatus(
+                    fraction: alert.progress,
+                    state: alert.state,
+                    error: alert.error ?? (alert.kind == "error" ? alert.message : nil),
+                    health: projectedHealth,
+                    downloadRate: alert.downloadRate,
+                    uploadRate: alert.uploadRate,
+                    downloadedBytes: alert.downloadedBytes,
+                    uploadedBytes: alert.uploadedBytes,
+                    peersConnected: alert.peersConnected,
+                    seedsTotal: alert.seedsTotal
+                ),
                 for: torrentID
             )
+            if alert.kind == "removed" {
+                statusCache.remove(torrentID)
+                lastProjectedStatuses.removeValue(forKey: torrentID)
+                continue
+            }
+            if projectedHealth != .healthy {
+                let alertLog = EngineAlertDTO.alertLogMessage(for: alert)
+                TorrentinoLog.record(category: "transfer", level: alertLog.severity, message: alertLog.message)
+            }
         }
-        return statusCache.entries.map { torrentID, snapshot in
+        statusCache.expireFaults()
+        let projected = statusCache.entries.map { torrentID, snapshot in
             TransferTorrentStatus(
                 engineID: torrentID,
                 progressFraction: max(0, min(1, snapshot.fraction)),
-                downloadedBytes: 0, // coordinator derives bytes from fraction + record size
-                uploadedBytes: 0,
-                downloadBytesPerSec: 0,
-                uploadBytesPerSec: 0,
-                peersConnected: 0,
-                seedsTotal: 0,
+                downloadedBytes: snapshot.downloadedBytes,
+                uploadedBytes: snapshot.uploadedBytes,
+                downloadBytesPerSec: snapshot.downloadRate,
+                uploadBytesPerSec: snapshot.uploadRate,
+                peersConnected: snapshot.peersConnected,
+                seedsTotal: snapshot.seedsTotal,
                 activity: Self.activity(from: snapshot.state),
-                health: Self.health(from: snapshot.error),
+                health: snapshot.health,
                 etaSeconds: nil
             )
         }
+        for status in projected {
+            if let previous = lastProjectedStatuses[status.engineID],
+               (previous.activity != status.activity || previous.health != status.health) {
+                TorrentinoLog.record(
+                    category: "transfer",
+                    level: status.health == .healthy ? "notice" : "warning",
+                    message: "transfer transition engineID=\(status.engineID) activity=\(previous.activity.rawValue)->\(status.activity.rawValue) health=\(previous.health)->\(status.health)"
+                )
+            }
+            lastProjectedStatuses[status.engineID] = status
+        }
+        return projected
     }
 
     public func aggregateHealth() async throws -> TransferAggregateStats {
@@ -192,32 +235,18 @@ public actor BridgeTransferEngine: TransferEngine {
     }
 
     /// libtorrent torrent_status state → TorrentActivity (v1 subset).
-    private static func activity(from state: Int) -> TorrentActivity {
-        switch state {
-        case 3: return .fetchingMetadata // downloading_metadata
-        case 4: return .downloading
-        case 5, 6: return .seeding // finished / seeding
-        case 1, 2, 7, 8: return .checking // queued_for_checking, checking_files, allocating, checking_resume_data
-        default: return .idle
-        }
+    static func activity(from state: Int) -> TorrentActivity {
+        LibtorrentActivityMapper.activity(from: state)
     }
 
-    private static func health(from error: String?) -> TorrentHealth {
-        guard let error else { return .healthy }
-        let text = error.lowercased()
-        if text.contains("no space") || text.contains("disk full") || text.contains("enospc") {
-            return .waitingForSpace
-        }
-        if text.contains("permission") || text.contains("access denied") || text.contains("read-only") || text.contains("eacces") {
-            return .permissionDenied
-        }
-        if text.contains("network") || text.contains("connection") || text.contains("unreachable") {
-            return .waitingForNetwork
-        }
-        if text.contains("volume") || text.contains("not found") {
-            return .waitingForVolume
-        }
-        return .recoverableError(.internalError)
+    /// Projects only live/native faults. A warning alert by itself is
+    /// transient; the next live status sample carries the healthy clear.
+    static func health(from error: String?, kind: String) -> TorrentHealth {
+        LibtorrentActivityMapper.health(from: error, kind: kind)
+    }
+
+    static func health(from error: String?) -> TorrentHealth {
+        health(from: error, kind: "error")
     }
 
     private static func mappedBridgeError(_ error: Error, operation: String) -> Error {
@@ -251,6 +280,28 @@ public actor BridgeTransferEngine: TransferEngine {
             maxConnectionAttempts: max(0, budget.maxConnectionAttempts),
             cacheBytes: max(1, budget.cacheBytes),
             alertQueueSize: UInt32(clamping: max(1, budget.alertDrainBatch * 4))
+        )
+    }
+}
+
+extension EngineAlertDTO {
+    static func alertDrainLogMessage(count: Int) -> String? {
+        count > 0 ? "bridge alerts drained count=\(count)" : nil
+    }
+
+    static func alertLogMessage(for alert: EngineAlertDTO) -> (severity: String, message: String) {
+        let type: String
+        switch alert.kind {
+        case "error": type = "torrent_error_alert"
+        case "unknown": type = "tracker_announce"
+        case "session": type = "storage"
+        default: type = alert.kind
+        }
+        let severity = alert.kind == "session" ? "warning" : "error"
+        let message = alert.error ?? alert.message ?? "alert"
+        return (
+            severity: severity,
+            message: "libtorrent alert type=\(type) severity=\(severity) message=\(message)"
         )
     }
 }

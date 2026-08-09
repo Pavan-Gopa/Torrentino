@@ -273,15 +273,39 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
     public let state: Int
     public let error: String?
     public let message: String?
+    public let downloadRate: Int64
+    public let uploadRate: Int64
+    public let downloadedBytes: Int64
+    public let uploadedBytes: Int64
+    public let peersConnected: Int
+    public let seedsTotal: Int
 
-    public init(kind: String, torrentID: String? = nil, progress: Double = -1, state: Int = -1,
-                error: String? = nil, message: String? = nil) {
+    public init(
+        kind: String,
+        torrentID: String? = nil,
+        progress: Double = -1,
+        state: Int = -1,
+        error: String? = nil,
+        message: String? = nil,
+        downloadRate: Int64 = 0,
+        uploadRate: Int64 = 0,
+        downloadedBytes: Int64 = 0,
+        uploadedBytes: Int64 = 0,
+        peersConnected: Int = 0,
+        seedsTotal: Int = 0
+    ) {
         self.kind = kind
         self.torrentID = torrentID
         self.progress = progress
         self.state = state
         self.error = error
         self.message = message
+        self.downloadRate = downloadRate
+        self.uploadRate = uploadRate
+        self.downloadedBytes = downloadedBytes
+        self.uploadedBytes = uploadedBytes
+        self.peersConnected = peersConnected
+        self.seedsTotal = seedsTotal
     }
 
     enum CodingKeys: String, CodingKey {
@@ -291,6 +315,28 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         case state = "state"
         case error = "error"
         case message = "message"
+        case downloadRate = "download-rate"
+        case uploadRate = "upload-rate"
+        case downloadedBytes = "downloaded-bytes"
+        case uploadedBytes = "uploaded-bytes"
+        case peersConnected = "peers-connected"
+        case seedsTotal = "seeds-total"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        torrentID = try container.decodeIfPresent(String.self, forKey: .torrentID)
+        progress = try container.decodeIfPresent(Double.self, forKey: .progress) ?? -1
+        state = try container.decodeIfPresent(Int.self, forKey: .state) ?? -1
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        downloadRate = try container.decodeIfPresent(Int64.self, forKey: .downloadRate) ?? 0
+        uploadRate = try container.decodeIfPresent(Int64.self, forKey: .uploadRate) ?? 0
+        downloadedBytes = try container.decodeIfPresent(Int64.self, forKey: .downloadedBytes) ?? 0
+        uploadedBytes = try container.decodeIfPresent(Int64.self, forKey: .uploadedBytes) ?? 0
+        peersConnected = try container.decodeIfPresent(Int.self, forKey: .peersConnected) ?? 0
+        seedsTotal = try container.decodeIfPresent(Int.self, forKey: .seedsTotal) ?? 0
     }
 }
 
