@@ -253,6 +253,10 @@ implementation:
       build/ .opencode/; AGENTS.md + LOGO/ + Measurements/wp12 committed.
       Orphan diagnostics files KEPT pending salvage lane (QA scripts assert
       their existence). Backup branches/tags retained as safety net.
+      2026-08-09 HUMAN ORDER: ONE version only. All backup branches (3) and
+      all backup/* tags (7) purged locally AND on origin. Salvage code gone;
+      fix lane will re-implement from documented FEEDBACK root causes.
+      Repo state: single branch native-macos + torrentino/* tags only.
       New lane [WP13-LIVE-ENGINE-004] opened: Task A = ENGINE-003 infra debt
       (pbxproj membership for DiagnosticsLogging/RedactedLogFileManager/
       WP13DiagnosticsSecurityTests, facade de-dup out of PersistenceStore,
