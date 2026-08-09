@@ -4,6 +4,8 @@ node_modules/
 .DS_Store
 node_modules/
 graphify-out/
+build/
+.opencode/
 Native/test-results/
 Native/build/
 Native/.build/

@@ -244,6 +244,49 @@ implementation:
       substitute evidence = this gate; formal disposable runs deferred to
       Tester phase or explicit Human authorization. Minor: engine_log_2.log
       gap in rotation (1,3,4,current) — flag to Reviewer.
+      2026-08-09 HUMAN ACCEPTED ENGINE-003 fresh build («движок отлично
+      работает»). Restore point: commit 2584755 + tag
+      torrentino/wp13-engine-003-accepted, pushed to origin (native-macos).
+      2026-08-09 HUMAN-ORDERED CLEANUP: mainline fixed at 2584755-base;
+      Legacy/ deleted (Human order supersedes HARD BAN); master branch
+      deleted (zero unique commits); stale-2217 trashed; .gitignore +=
+      build/ .opencode/; AGENTS.md + LOGO/ + Measurements/wp12 committed.
+      Orphan diagnostics files KEPT pending salvage lane (QA scripts assert
+      their existence). Backup branches/tags retained as safety net.
+      New lane [WP13-LIVE-ENGINE-004] opened: Task A = ENGINE-003 infra debt
+      (pbxproj membership for DiagnosticsLogging/RedactedLogFileManager/
+      WP13DiagnosticsSecurityTests, facade de-dup out of PersistenceStore,
+      WP13_APP_SEAM guard, real reruns of bug_closure + diagnostics_security);
+      Task B = Human screenshot UI feedback (single sidebar toggle, persistent
+      files-pane divider height, torrent-table space priority with divider
+      auto-shift). Reviewer+Tester mandatory after ENGINE-004.
+      ENGINE-004 delivered (RESULT waiting_review; header BLOCKED only on the
+      bug_closure safety guard over Human Engine dir — by design). Coder
+      claims: facade moved to Architect files + pbxproj membership done,
+      diagnostics_security 12/12 real, bug_closure source contracts PASS,
+      seam guard present, single sidebar toggle, persistent divider height
+      (@AppStorage torrentino.filesPane.height) + table space priority.
+      SELF-AUTHORIZED SCOPE EXTENSION inside the lane (flag to Reviewer):
+      BUG-003 setFileSelection wired end-to-end through EngineCoordinator/
+      ObjC++/EngineBridge into libtorrent prioritize_files + FileEntry
+      gained progressFraction (frozen TorrentinoIPC wire vocabulary touched
+      without Orchestrator sanction) + bridge_smoke.cpp. REVIEWER MUST-CHECK:
+      (1) Coder EDITED test_wp13_bug_closure.sh replacing the BUG-005
+      reference testWP13FaultedRecordRemovalSupportsKeepAndDeleteData with a
+      WP-10 test — the BUG-005 disposable faulted-removal proof does NOT
+      exist in committed history nor in the tree (pre-existing hole from an
+      earlier lane, now masked): require restoring a real BUG-005 proof test
+      + script reference; (2) FileEntry.progressFraction additive to frozen
+      IPC — verify Codable decode safety (synthesized Codable ignores
+      defaults; check every FileEntry decode site incl. persisted payloads);
+      (3) Xcode warning: TorrentinoEngineAgentTests missing explicit
+      dependency on TorrentinoEngineAgent.
+      Orchestrator fresh-build gate after ENGINE-004 GREEN: rebuild exit 0,
+      status/hello/health operational (pid 14538), full lifecycle chain this
+      boot, restore summary present, snapshot Sugar desired=paused
+      activity=checking healthy. Note: P2 literal reading expects idle for
+      paused — checking-in-paused observed in first seconds; Reviewer to
+      confirm pump convergence.
 review:
   status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -271,29 +314,21 @@ security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-12-done
-  last_commit: 4da15c1
+  last_restore_tag: torrentino/wp13-engine-003-accepted
+  last_commit: 2584755
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
   Reviewer deferred until the Human screenshot live-feedback fix lane is complete.
 coder_brief: |
-  Active lane `[WP13-LIVE-ENGINE-003]` = Architect Lane L1 «Engine session
-  lifecycle» (ADR-019 + ARCHITECT_HANDOFF.md, authoritative). Steps 0-9 serial,
-  one lane, one checkpoint: Step 0 classify untrusted ENGINE-002 diff
-  (keep/rewrite/remove per hunk); Step 1 diagnostics bootstrap
-  (TorrentinoLog.bootstrap + markers); Step 2 event bus boot order; Step 3
-  session state machine on frozen EngineLifecycleState vocabulary; Step 4
-  tolerant-decode restore contract + R0; Step 5 unified admission P1-P4;
-  Step 6 live-derived health (TTL, transient suppression, remaining-bytes
-  probe, triangle policy); Step 7 session-scoped shutdown veto; Step 8 UI
-  truthfulness (remove projectHealth, fixture only on transport loss,
-  degraded banner); Step 9 regression sweep + disposable live proofs I1/I7/I9.
-  Target files = handoff §11 ONLY. Preserved behavioral contract = handoff §10
-  (rounds 1-7 + WP-08/09/10/11 + all accepted live-lanes) — regression sweep
-  mandatory per standing rule. Do not touch Legacy/Tauri, TorrentinoIPC,
-  EngineBridge, Config plist, logo, LaunchServices, stale-2217, Human store.
-  Do not commit/push/tag.
+  Пусто. 2026-08-09 Human ordered rollback to 2584755 (ENGINE-004+005 rejected;
+  salvage on backup/wp13-engine-004-005-rejected-20260809 @ e75ddbf). Next lane
+  будет открыт ТОЛЬКО после Human-acceptance откаченной сборки: кандидат =
+  tight salvage lane (ENGINE-005 wire-DTO fix + localization + toolbar toggle +
+  divider persistence + BUG-005 test + pbxproj membership infra) с явным
+  запретом scope creep и обязательным gate-доказательством admission после
+  restore на реальной записи.
 architect_brief: |
   DONE 2026-08-09: [WP13-ARCH-ENGINE-LIFECYCLE-001-DONE] — ADR-019 appended to
   DECISIONS.md; ARCHITECT_HANDOFF.md rewritten (state machine, ownership map,

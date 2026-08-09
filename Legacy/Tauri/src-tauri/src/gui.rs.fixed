@@ -1,6 +1,0 @@
-// Torrentino GUI backend (Tauri commands + state).
-//
-// Reliability invariants:
-//  * Never panic on engine-start failure: the window opens and shows a banner.
-//  * tokio Mutexes (no poisoning path), no global singletons of handles.
-//  * Native librqbit ids used as the frontend id (never a local counter).
