@@ -27,6 +27,25 @@ check_command() {
   fi
 }
 
+check_script() {
+  if [[ ! -f "$1" ]]; then
+    printf 'FAIL %s\n' "$1" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  if bash -n "$1"; then
+    printf 'OK   shell syntax: %s\n' "$1"
+  else
+    printf 'FAIL shell syntax: %s\n' "$1" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ -x "$1" ]]; then
+    printf 'OK   executable: %s\n' "$1"
+  else
+    printf 'WARN not executable: %s (launch with bash; installer repairs this)\n' "$1"
+  fi
+}
+
 check_command omp
 check_command graphify
 
@@ -34,12 +53,19 @@ check_path .omp/config.yml
 check_path .omp/AGENTS.md
 check_path .omp/commands/workflow.md
 check_path .omp/extensions/workflow-dashboard.ts
+check_path .omp/lib/workflow-dashboard-core.ts
+check_path .omp/tests/workflow-dashboard.selftest.ts
 check_path grilling/SKILL.md
 check_path AI_Workflow_Kit/docs/AI/STATE.yaml
-check_path AI_Workflow_Kit/script/workflow_models.sh
+check_path AI_Workflow_Kit/docs/AI/METRICS.md
+check_path AI_Workflow_Kit/script/workflow_metrics.py
+for script in checkpoint graphify_rebuild omp_workflow workflow_doctor workflow_metrics workflow_models; do
+  check_script "AI_Workflow_Kit/script/$script.sh"
+done
 
 for role in coder reviewer tester architect security; do
   check_path ".omp/agents/workflow-$role.md"
+  check_path ".omp/agents/workflow-$role-backup.md"
 done
 
 for alias in workflow_orchestrator workflow_coder workflow_reviewer workflow_tester workflow_architect workflow_security; do
@@ -59,10 +85,42 @@ else
   printf 'WARN graphify-out/graph.json missing; run graphify_rebuild.sh after source exists\n'
 fi
 
+if bash AI_Workflow_Kit/script/workflow_metrics.sh self-check >/dev/null; then
+  printf 'OK   workflow metrics runtime and private Git path\n'
+else
+  printf 'FAIL workflow metrics runtime/path check\n' >&2
+  failures=$((failures + 1))
+fi
+
+if bash AI_Workflow_Kit/script/workflow_metrics.sh validate >/dev/null; then
+  printf 'OK   workflow metrics readable event store\n'
+else
+  printf 'FAIL workflow metrics event validation\n' >&2
+  failures=$((failures + 1))
+fi
+
+if bash AI_Workflow_Kit/script/workflow_metrics.sh selftest >/dev/null; then
+  printf 'OK   workflow metrics deterministic selftest\n'
+else
+  printf 'FAIL workflow metrics deterministic selftest\n' >&2
+  failures=$((failures + 1))
+fi
+
+if command -v node >/dev/null 2>&1; then
+  if node .omp/tests/workflow-dashboard.selftest.ts >/dev/null; then
+    printf 'OK   workflow dashboard deterministic selftest\n'
+  else
+    printf 'FAIL workflow dashboard deterministic selftest\n' >&2
+    failures=$((failures + 1))
+  fi
+else
+  printf 'WARN command: node unavailable; dashboard selftest skipped (OMP runtime still validated on launch)\n'
+fi
+
 if (( failures > 0 )); then
   printf '\nWorkflow doctor: %d failure(s)\n' "$failures" >&2
   exit 1
 fi
 
 printf '\nWorkflow doctor: ready\n'
-printf 'Launch: ./AI_Workflow_Kit/script/omp_workflow.sh\n'
+printf 'Launch: bash AI_Workflow_Kit/script/omp_workflow.sh\n'

@@ -13,11 +13,12 @@ modelRoles:
   workflow_tester_backup: google-antigravity/claude-sonnet-4-6:high
   workflow_architect_backup: openai-codex/gpt-5.6-sol:xhigh
   workflow_security_backup: openai-codex/gpt-5.6-sol:max
+  default: xai-oauth/grok-4.5:high
 
 retry:
   enabled: true
-  modelFallback: true
-  fallbackRevertPolicy: never
+  # Persistent model/provider failure pauses the workflow. Human authorizes backup.
+  modelFallback: false
 
 async:
   enabled: true
