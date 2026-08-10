@@ -1,8 +1,8 @@
 project_prefix: torrentino
 onboarding:
-  status: pending
-  model_pairs_confirmed: false
-  completed_at: null
+  status: complete
+  model_pairs_confirmed: true
+  completed_at: 2026-08-10T13:13:32Z
 
 current_step: WP-13
 step_description: >-
