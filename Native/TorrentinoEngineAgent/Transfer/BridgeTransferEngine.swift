@@ -193,17 +193,20 @@ public actor BridgeTransferEngine: TransferEngine {
                 TorrentinoLog.record(category: "transfer", level: alertLog.severity, message: alertLog.message)
             }
         }
-        statusCache.expireFaults()
+        // A first-ever failed status poll has no prior sample to merge into.
+        // Keep the cache's -1 unknown sentinel internal; the coordinator's
+        // value types remain non-negative and receive neutral zeroes until a
+        // successful sample arrives. Existing live values were preserved above.
         let projected = statusCache.entries.map { torrentID, snapshot in
             TransferTorrentStatus(
                 engineID: torrentID,
                 progressFraction: max(0, min(1, snapshot.fraction)),
-                downloadedBytes: snapshot.downloadedBytes,
-                uploadedBytes: snapshot.uploadedBytes,
-                downloadBytesPerSec: snapshot.downloadRate,
-                uploadBytesPerSec: snapshot.uploadRate,
-                peersConnected: snapshot.peersConnected,
-                seedsTotal: snapshot.seedsTotal,
+                downloadedBytes: max(0, snapshot.downloadedBytes),
+                uploadedBytes: max(0, snapshot.uploadedBytes),
+                downloadBytesPerSec: max(0, snapshot.downloadRate),
+                uploadBytesPerSec: max(0, snapshot.uploadRate),
+                peersConnected: max(0, snapshot.peersConnected),
+                seedsTotal: max(0, snapshot.seedsTotal),
                 activity: Self.activity(from: snapshot.state),
                 health: snapshot.health,
                 etaSeconds: nil

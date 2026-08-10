@@ -38,12 +38,13 @@ implementation:
   status: waiting_review
   attempts: 1
   note: >-
-    [WP13-LIVE-COLDSTART-AGENT-REBIND-001-DONE] GUI launch now
-    prepareForLaunch()=SMAppService.register BTM rebind then transfers.start().
-    Orchestrator gate: open ColdStartRebindDerivedData app → live agent path+md5
-    match embedded agent (b5ac681c...); status/hello/health OK pid 61077;
-    sterile Engine backup-20260810-214353. Awaiting Human first-add live test
-    without quit+double-click workaround. Creator discoverability UI preserved.
+    [WP13-LIVE-RATES-PROJECTION-001-DONE] StatusCache.merge no longer clobbers
+    live rates/bytes/peers with unknown (-1) samples; bridge DTO defaults -1;
+    CLI snapshot prints downBps/upBps/peers. XCTest 325/325. Orchestrator
+    relaunched RatesProjectionDerivedData app (agent md5 match). Live CLI
+    after checking→downloading shows non-zero rates (e.g. downBps=42005
+    peers=30). Awaiting Human UI confirmation Down/Up no longer stuck Zero
+    while transferring. Cold-start rebind + creator discoverability preserved.
     Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
     duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
     BUG-003 files-from-metainfo UI (302/302 XCTest). Residual: selection is
@@ -368,8 +369,8 @@ omp:
   active_agent: null
   active_role: null
   last_result_artifact: null
-  dispatched_at: 2026-08-10T22:10:00Z
-  completed_at: 2026-08-10T21:45:00Z
+  dispatched_at: 2026-08-10T22:25:00Z
+  completed_at: 2026-08-10T22:05:00Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -414,11 +415,10 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Pending Human live acceptance of cold-start rebind (+ creator discoverability).
+  Pending Human accept of rates projection (+ cold-start + creator discoverability).
 coder_brief: |
-  Cold-start rebind delivered; waiting Human first-add proof. No further coder
-  unless Human rejects.
+  Rates projection delivered; waiting Human UI proof. No further coder unless reject.
 tester_brief: |
-  Idle until Reviewer after Human accepts cold-start + discoverability.
+  Idle until Reviewer after Human accepts combined UI lanes.
 architect_brief: |
   Idle.

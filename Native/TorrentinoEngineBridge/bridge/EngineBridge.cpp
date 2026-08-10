@@ -703,7 +703,8 @@ struct EngineBridge::Impl {
 				dto.error = status.errc.message();
 			}
 		} catch (...) {
-			// a handle that died mid-conversion keeps the -1 sentinel
+			// EngineAlertDTO's -1 live-field defaults survive a failed status()
+			// call, so Swift merge can retain the last successful sample.
 		}
 	}
 

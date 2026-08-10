@@ -266,6 +266,8 @@ public struct IndependentTorrentIdentityDTO: Codable, Sendable, Equatable {
 
 /// Aggregated alert batch item (`EngineAlertDTO`). A batch may contain zero
 /// or more alerts; `kind` is a stable kebab-case name (see bridging header).
+/// Live scalar fields use -1 when the native handle status could not be read.
+/// Zero is a valid observation for idle rates, counters, and peer counts.
 public struct EngineAlertDTO: Codable, Sendable, Equatable {
     public let kind: String
     public let torrentID: String?
@@ -287,12 +289,12 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         state: Int = -1,
         error: String? = nil,
         message: String? = nil,
-        downloadRate: Int64 = 0,
-        uploadRate: Int64 = 0,
-        downloadedBytes: Int64 = 0,
-        uploadedBytes: Int64 = 0,
-        peersConnected: Int = 0,
-        seedsTotal: Int = 0
+        downloadRate: Int64 = -1,
+        uploadRate: Int64 = -1,
+        downloadedBytes: Int64 = -1,
+        uploadedBytes: Int64 = -1,
+        peersConnected: Int = -1,
+        seedsTotal: Int = -1
     ) {
         self.kind = kind
         self.torrentID = torrentID
@@ -331,12 +333,12 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         state = try container.decodeIfPresent(Int.self, forKey: .state) ?? -1
         error = try container.decodeIfPresent(String.self, forKey: .error)
         message = try container.decodeIfPresent(String.self, forKey: .message)
-        downloadRate = try container.decodeIfPresent(Int64.self, forKey: .downloadRate) ?? 0
-        uploadRate = try container.decodeIfPresent(Int64.self, forKey: .uploadRate) ?? 0
-        downloadedBytes = try container.decodeIfPresent(Int64.self, forKey: .downloadedBytes) ?? 0
-        uploadedBytes = try container.decodeIfPresent(Int64.self, forKey: .uploadedBytes) ?? 0
-        peersConnected = try container.decodeIfPresent(Int.self, forKey: .peersConnected) ?? 0
-        seedsTotal = try container.decodeIfPresent(Int.self, forKey: .seedsTotal) ?? 0
+        downloadRate = try container.decodeIfPresent(Int64.self, forKey: .downloadRate) ?? -1
+        uploadRate = try container.decodeIfPresent(Int64.self, forKey: .uploadRate) ?? -1
+        downloadedBytes = try container.decodeIfPresent(Int64.self, forKey: .downloadedBytes) ?? -1
+        uploadedBytes = try container.decodeIfPresent(Int64.self, forKey: .uploadedBytes) ?? -1
+        peersConnected = try container.decodeIfPresent(Int.self, forKey: .peersConnected) ?? -1
+        seedsTotal = try container.decodeIfPresent(Int.self, forKey: .seedsTotal) ?? -1
     }
 }
 

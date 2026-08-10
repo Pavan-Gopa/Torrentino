@@ -63,7 +63,7 @@ enum CLIDispatcher {
                 let reply = try await client.sendCommand(command)
                 if case .snapshot(let snapshot) = reply {
                     for t in snapshot.torrents {
-                        print("TORRENT id=\(t.id) name=\"\(t.displayName)\" desired=\(t.desiredState) activity=\(t.activity) health=\(t.health) bytes=\(t.progress.downloadedBytes)/\(t.progress.totalBytes)")
+                        print("TORRENT id=\(t.id) name=\"\(t.displayName)\" desired=\(t.desiredState) activity=\(t.activity) health=\(t.health) downBps=\(t.rates.downloadBytesPerSec) upBps=\(t.rates.uploadBytesPerSec) peers=\(t.peers.connected) bytes=\(t.progress.downloadedBytes)/\(t.progress.totalBytes)")
                     }
                 }
                 return 0

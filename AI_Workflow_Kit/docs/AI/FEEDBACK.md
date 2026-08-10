@@ -1,3 +1,24 @@
+### [WP13-LIVE-RATES-PROJECTION-001-DONE] Coder + Orchestrator gate (2026-08-10)
+- Fix: `StatusCache.merge` treats rate/counter/peer `-1` as unknown (non-destructive); `0` remains real idle. Bridge `EngineAlertDTO` defaults/decode use `-1` unknown; first projection clamps unknown→0 only when no prior sample. CLI snapshot now prints `downBps`/`upBps`/`peers`.
+- Files: StatusCache, BridgeTransferEngine, EngineBridgeDTOs, EngineBridge.h/.cpp, CLIDispatcher, TransferSmokeTests (+tests). No AppDelegate/creator UI churn.
+- Verification: build `RatesProjectionDerivedData` SUCCEEDED; XCTest **325/325**; codesign valid.
+- Orchestrator live after relaunch (Engine preserved): agent path/md5 match fresh app; once activity left checking, CLI showed e.g. `activity=downloading downBps=42005 upBps=3399 peers=30` (and Coder earlier saw ~11 MB/s on Sugar).
+- **Human UI check now:** open window should show non-zero Down/Up while transferring (not permanent Zero while network monitor shows multi-MB/s). Progress/ETA should move when downloading. Create button still present.
+- Note: pure **Checking** phase may still show low/zero *payload* rates while disk recheck grows `bytes=` — that can be honest; bug was zeros during active download.
+
+### [WP13-LIVE-RATES-PROJECTION-001-OPEN] Human: engine downloads, UI rates stuck at zero (2026-08-10)
+- After cold-start rebind, Human screenshot: macOS network monitor shows `TorrentinoEngineAgent` ~6.9 MB/s down / 1.3 MB/s up, but Torrentino table shows Down/Up `Zero KB/s`, ETA `—`, status bar zeros; progress bar looks stuck though Size can show partial bytes.
+- Orchestrator forensics: transfer pipeline runs (alerts drained, checking→downloading transitions, CLI snapshot bytes grow). UI path depends on pump → StatusCache → record.apply → torrentDelta/snapshot → table rates columns.
+- Prime suspect: `StatusCache.merge` always assigns `downloadRate/uploadRate/downloadedBytes/uploadedBytes/peers` from the new sample with **no sentinel**. `EngineBridge.fill_progress_dto` on failure leaves defaults at 0 while fraction/state stay -1 (which merge preserves). A partial/failed fill can therefore wipe previously good rates/bytes to zero even when transfer continues.
+- Secondary checks: ensure per-handle synthetic status samples are not starved by alert-batch ordering; ensure UI applies rate-bearing deltas (engineRevision continuity) and table reads `torrent.rates`.
+- Fix requirements:
+  1. Merge must not clobber fresher live rates/progress counters with unknown/zero partial samples.
+  2. Live downloading session must surface non-zero rates in UI when agent is transferring (or honest activity if only checking).
+  3. Add/extend deterministic tests for merge sentinels + rate projection.
+  4. CLI `snapshot` should print rates/peers to make gate evidence trivial.
+- Preserve: cold-start `prepareForLaunch` rebind, creator toolbar/empty Create buttons.
+- Non-goals: redesign table, Metal, unrelated creator features.
+
 ### [WP13-LIVE-COLDSTART-AGENT-REBIND-001-DONE] Coder + Orchestrator gate (2026-08-10)
 - Fix: `AppDelegate.applicationDidFinishLaunching` awaits `EngineViewModel.prepareForLaunch()` (`AgentServiceRegistration.register()` BTM self-heal + status) **before** `TorrentListViewModel.start()`. Removed ContentView `.task` startup races.
 - Files: `AppDelegate.swift`, `EngineViewModel.swift`, `ContentView.swift` only (+ prior discoverability UI still present).

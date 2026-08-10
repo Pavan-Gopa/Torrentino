@@ -1007,11 +1007,17 @@ final class TransferSmokeTests: TestProfileCase {
                 state: 3,
                 error: "restore warning",
                 health: .recoverableError(.internalError),
-                downloadRate: 2,
-                downloadedBytes: 10
+                downloadRate: 2_000,
+                uploadRate: 300,
+                downloadedBytes: 10_000,
+                uploadedBytes: 2_000,
+                peersConnected: 4,
+                seedsTotal: 6
             ),
             for: "hash"
         )
+        // A failed/partial status sample uses -1 for every unavailable scalar.
+        // It must clear the transient fault without erasing the last live data.
         cache.merge(
             CachedTorrentStatus(fraction: -1, state: -1, error: nil, health: .healthy),
             for: "hash"
@@ -1021,6 +1027,64 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(cache.entries["hash"]?.state, 3)
         XCTAssertNil(cache.entries["hash"]?.error)
         XCTAssertEqual(cache.entries["hash"]?.health, .healthy)
+        XCTAssertEqual(cache.entries["hash"]?.downloadRate, 2_000)
+        XCTAssertEqual(cache.entries["hash"]?.uploadRate, 300)
+        XCTAssertEqual(cache.entries["hash"]?.downloadedBytes, 10_000)
+        XCTAssertEqual(cache.entries["hash"]?.uploadedBytes, 2_000)
+        XCTAssertEqual(cache.entries["hash"]?.peersConnected, 4)
+        XCTAssertEqual(cache.entries["hash"]?.seedsTotal, 6)
+
+        // A successful partial sample may update known fields while retaining
+        // unknown fields, and zero is real when the native status says idle.
+        cache.merge(
+            CachedTorrentStatus(
+                fraction: -1,
+                state: -1,
+                error: nil,
+                health: .healthy,
+                downloadRate: 5_000,
+                peersConnected: 8
+            ),
+            for: "hash"
+        )
+        XCTAssertEqual(cache.entries["hash"]?.downloadRate, 5_000)
+        XCTAssertEqual(cache.entries["hash"]?.uploadRate, 300)
+        XCTAssertEqual(cache.entries["hash"]?.downloadedBytes, 10_000)
+        XCTAssertEqual(cache.entries["hash"]?.peersConnected, 8)
+
+        cache.merge(
+            CachedTorrentStatus(
+                fraction: 0,
+                state: 0,
+                error: nil,
+                health: .healthy,
+                downloadRate: 0,
+                uploadRate: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                peersConnected: 0,
+                seedsTotal: 0
+            ),
+            for: "hash"
+        )
+        XCTAssertEqual(cache.entries["hash"]?.downloadRate, 0)
+        XCTAssertEqual(cache.entries["hash"]?.uploadRate, 0)
+        XCTAssertEqual(cache.entries["hash"]?.downloadedBytes, 0)
+        XCTAssertEqual(cache.entries["hash"]?.uploadedBytes, 0)
+        XCTAssertEqual(cache.entries["hash"]?.peersConnected, 0)
+        XCTAssertEqual(cache.entries["hash"]?.seedsTotal, 0)
+    }
+
+    func testEngineAlertDTOMarksMissingLiveScalarsUnknown() throws {
+        let data = Data(#"{"kind":"state_changed","torrent-id":"hash","progress":0.5,"state":3}"#.utf8)
+        let alert = try JSONDecoder().decode(EngineAlertDTO.self, from: data)
+
+        XCTAssertEqual(alert.downloadRate, -1)
+        XCTAssertEqual(alert.uploadRate, -1)
+        XCTAssertEqual(alert.downloadedBytes, -1)
+        XCTAssertEqual(alert.uploadedBytes, -1)
+        XCTAssertEqual(alert.peersConnected, -1)
+        XCTAssertEqual(alert.seedsTotal, -1)
     }
 
     func testRedactedLogSinkRotatesAndWritesDisposableEvidence() async throws {
@@ -1183,6 +1247,77 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(cached?.uploadedBytes, 250_000)
         XCTAssertEqual(cached?.peersConnected, 12)
         XCTAssertEqual(cached?.seedsTotal, 50)
+    }
+    func testPumpPublishesRateAndCounterChangesInTorrentDelta() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))"
+        )
+        let deliveries = DeliveryCollector()
+        await bus.register(deliveries.sink())
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0.25,
+            downloadedBytes: 100,
+            uploadedBytes: 10,
+            downloadBytesPerSec: 100,
+            uploadBytesPerSec: 20,
+            peersConnected: 2,
+            seedsTotal: 1,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil
+        )])
+        await coordinator.pumpOnce()
+        let firstAuthoritativeSnapshot = try snapshot(from: await coordinator.processCommand(
+            encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))
+        ))
+        let firstTorrent = firstAuthoritativeSnapshot.torrents.first { $0.id == recordID }
+        XCTAssertEqual(firstTorrent?.rates.downloadBytesPerSec, 100)
+        XCTAssertEqual(firstTorrent?.progress.downloadedBytes, 100)
+        XCTAssertEqual(firstTorrent?.peers.connected, 2)
+
+        let firstEvents = await deliveries.events(timeoutNanoseconds: 500_000_000)
+        let firstSnapshot = firstEvents
+            .compactMap { event -> TorrentSnapshot? in
+                guard case .torrentDelta(let payload) = event else { return nil }
+                return payload.delta.updated.first { $0.id == recordID }
+            }
+            .last
+        XCTAssertEqual(firstSnapshot?.rates.downloadBytesPerSec, 100)
+        XCTAssertEqual(firstSnapshot?.progress.downloadedBytes, 100)
+        XCTAssertEqual(firstSnapshot?.peers.connected, 2)
+
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0.5,
+            downloadedBytes: 200,
+            uploadedBytes: 20,
+            downloadBytesPerSec: 900,
+            uploadBytesPerSec: 45,
+            peersConnected: 6,
+            seedsTotal: 2,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil
+        )])
+        await coordinator.pumpOnce()
+
+        let secondEvents = await deliveries.events(atLeast: 2)
+        let secondSnapshot = secondEvents
+            .compactMap { event -> TorrentSnapshot? in
+                guard case .torrentDelta(let payload) = event else { return nil }
+                return payload.delta.updated.first { $0.id == recordID }
+            }
+            .last
+        XCTAssertEqual(secondSnapshot?.rates.downloadBytesPerSec, 900)
+        XCTAssertEqual(secondSnapshot?.rates.uploadBytesPerSec, 45)
+        XCTAssertEqual(secondSnapshot?.progress.downloadedBytes, 200)
+        XCTAssertEqual(secondSnapshot?.peers.connected, 6)
     }
 
 
@@ -3476,6 +3611,13 @@ private actor DeliveryCollector {
 
     func events(timeoutNanoseconds: UInt64) async -> [EngineEventV1] {
         guard collected.isEmpty else { return collected }
+        await withCheckedContinuation { continuation in
+            waiting = continuation
+        }
+        return collected
+    }
+    func events(atLeast count: Int) async -> [EngineEventV1] {
+        guard collected.count < count else { return collected }
         await withCheckedContinuation { continuation in
             waiting = continuation
         }

@@ -59,12 +59,15 @@ struct CachedTorrentStatus: Sendable, Equatable {
         state: Int,
         error: String?,
         health: TorrentHealth = .healthy,
-        downloadRate: Int64 = 0,
-        uploadRate: Int64 = 0,
-        downloadedBytes: Int64 = 0,
-        uploadedBytes: Int64 = 0,
-        peersConnected: Int = 0,
-        seedsTotal: Int = 0,
+        // Native status() uses -1 when a live scalar could not be sampled.
+        // Zero remains a real value: an idle torrent can truthfully report no
+        // rate, no peers, or no additional bytes.
+        downloadRate: Int64 = -1,
+        uploadRate: Int64 = -1,
+        downloadedBytes: Int64 = -1,
+        uploadedBytes: Int64 = -1,
+        peersConnected: Int = -1,
+        seedsTotal: Int = -1,
         errorObservedAt: Date? = nil
     ) {
         self.fraction = fraction
@@ -113,10 +116,13 @@ struct ByteBoundedStatusCache: Sendable {
         trim()
     }
 
-    /// Applies a partial alert sample without allowing sentinel progress/state
-    /// values to erase the last live sample. `error` and `health` are always
-    /// replaced because a healthy status is the explicit clear signal for a
-    /// previous non-fatal alert.
+    /// Applies a partial alert sample without allowing unknown progress/state,
+    /// rates, counters, or peer fields to erase the last live sample.
+    ///
+    /// Every non-negative scalar is a successful observation, including zero.
+    /// The bridge uses -1 only when status() could not provide that field.
+    /// `error` and `health` are always replaced because a healthy status is
+    /// the explicit clear signal for a previous non-fatal alert.
     mutating func merge(_ status: CachedTorrentStatus, for key: String) {
         guard let previous = entries[key] else {
             insert(status, for: key)
@@ -128,12 +134,12 @@ struct ByteBoundedStatusCache: Sendable {
                 state: status.state >= 0 ? status.state : previous.state,
                 error: status.error,
                 health: status.health,
-                downloadRate: status.downloadRate,
-                uploadRate: status.uploadRate,
-                downloadedBytes: status.downloadedBytes,
-                uploadedBytes: status.uploadedBytes,
-                peersConnected: status.peersConnected,
-                seedsTotal: status.seedsTotal,
+                downloadRate: status.downloadRate >= 0 ? status.downloadRate : previous.downloadRate,
+                uploadRate: status.uploadRate >= 0 ? status.uploadRate : previous.uploadRate,
+                downloadedBytes: status.downloadedBytes >= 0 ? status.downloadedBytes : previous.downloadedBytes,
+                uploadedBytes: status.uploadedBytes >= 0 ? status.uploadedBytes : previous.uploadedBytes,
+                peersConnected: status.peersConnected >= 0 ? status.peersConnected : previous.peersConnected,
+                seedsTotal: status.seedsTotal >= 0 ? status.seedsTotal : previous.seedsTotal,
                 errorObservedAt: status.health == .healthy ? nil : (status.errorObservedAt ?? Date())
             ),
             for: key
