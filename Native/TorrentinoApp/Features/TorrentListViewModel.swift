@@ -379,6 +379,54 @@ final class TorrentListViewModel: ObservableObject {
         }
         NotificationManager.shared.processSnapshots(torrents)
     }
+    /// Mutation acknowledgements are not snapshots; reconcile after every
+    /// successful command so delayed or dropped events cannot leave stale
+    /// desired/activity state or rows in the table.
+    private func refreshAuthoritativeSnapshotAfterMutation() async {
+        do {
+            try await fetchFullSnapshot()
+        } catch {
+            // The mutation already succeeded. Do not misreport a subsequent
+            // snapshot transport failure as pause/resume/remove failure.
+            connectionNote = String(localized: "snapshot.failed")
+        }
+    }
+
+    /// A completed removal is authoritative even if its event is delayed.
+    private func applyRemovalResult(_ result: RemovalBatchResult) {
+        lastRemovalResult = result
+        if result.outcome == .completed {
+            remove(result.recordID)
+        }
+    }
+
+    private func clearRemovalError() {
+        commandError = nil
+        if connectionNote == String(localized: "remove.failed") {
+            connectionNote = nil
+        }
+    }
+
+    private func reconcileAlreadyRemoved(_ recordID: TorrentRecordID) async {
+        // Remove locally first so the stale row disappears even if the
+        // follow-up snapshot cannot be fetched.
+        remove(recordID)
+        clearRemovalError()
+        await refreshAuthoritativeSnapshotAfterMutation()
+        clearRemovalError()
+    }
+
+    private static func isRecordNotFound(_ error: Error) -> Bool {
+        if let clientError = error as? EngineClientError,
+           case .fault(let fault) = clientError {
+            return fault.code == .recordNotFound
+        }
+        if let fault = error as? EngineFault {
+            return fault.code == .recordNotFound
+        }
+        return false
+    }
+
 
     private func applyReachableFault(_ error: EngineClientError) {
         usingFixture = false
@@ -645,9 +693,16 @@ final class TorrentListViewModel: ObservableObject {
         let command = EngineCommandV1.pause(PauseRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
         do {
             _ = try await client.sendCommand(command)
+            await refreshAuthoritativeSnapshotAfterMutation()
             commandError = nil
         } catch {
-            surfaceCommandError(error, fallback: "pause.failed")
+            if Self.isRecordNotFound(error) {
+                // A stale row cannot be paused; reconcile it as already gone
+                // instead of leaving a ghost with a red command error.
+                await reconcileAlreadyRemoved(recordID)
+            } else {
+                surfaceCommandError(error, fallback: "pause.failed")
+            }
         }
     }
 
@@ -655,9 +710,16 @@ final class TorrentListViewModel: ObservableObject {
         let command = EngineCommandV1.resume(ResumeRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: recordID))
         do {
             _ = try await client.sendCommand(command)
+            await refreshAuthoritativeSnapshotAfterMutation()
             commandError = nil
         } catch {
-            surfaceCommandError(error, fallback: "resume.failed")
+            if Self.isRecordNotFound(error) {
+                // A stale row cannot be resumed; reconcile it as already gone
+                // instead of leaving a ghost with a red command error.
+                await reconcileAlreadyRemoved(recordID)
+            } else {
+                surfaceCommandError(error, fallback: "resume.failed")
+            }
         }
     }
 
@@ -729,9 +791,18 @@ final class TorrentListViewModel: ObservableObject {
                     guard case .removalResult(let result) = try await client.sendCommand(commit) else {
                         throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
                     }
-                    lastRemovalResult = result
+                    applyRemovalResult(result)
+                    await refreshAuthoritativeSnapshotAfterMutation()
+                    clearRemovalError()
                 } catch {
-                    connectionNote = String(localized: "remove.failed")
+                    if Self.isRecordNotFound(error) {
+                        // The record may have been removed by a prior successful
+                        // attempt while this UI still held its old row.
+                        await reconcileAlreadyRemoved(recordID)
+                    } else {
+                        commandError = nil
+                        connectionNote = String(localized: "remove.failed")
+                    }
                 }
             }
             await refreshPendingRemovals()
@@ -770,10 +841,18 @@ final class TorrentListViewModel: ObservableObject {
                 guard case .removalResult(let result) = try await client.sendCommand(commit) else {
                     throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
                 }
-                lastRemovalResult = result
+                applyRemovalResult(result)
+                await refreshAuthoritativeSnapshotAfterMutation()
+                clearRemovalError()
                 await refreshPendingRemovals()
             } catch {
-                connectionNote = String(localized: "remove.failed")
+                if Self.isRecordNotFound(error) {
+                    await reconcileAlreadyRemoved(summary.recordID)
+                    await refreshPendingRemovals()
+                } else {
+                    commandError = nil
+                    connectionNote = String(localized: "remove.failed")
+                }
             }
         }
     }

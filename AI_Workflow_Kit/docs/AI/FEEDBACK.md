@@ -1,3 +1,25 @@
+### [WP13-LIVE-UI-AUTHORITY-REFRESH-001-DONE] Coder + Orchestrator gate (2026-08-10)
+- Fix in `TorrentListViewModel`: after successful pause/resume/remove → `fetchFullSnapshot`; completed removal drops row immediately; `recordNotFound` clears ghost without Remove failed.
+- Build: `build/UIAuthorityRefreshDerivedData` SUCCEEDED; focused AppTests 41/41.
+- Orchestrator: killed all stale Torrentino UI (including CoderFix002), opened **only** UIAuthority app; live agent path/md5 match that bundle; Create strings present.
+- **Human must use this window only** (title bar app from UIAuthorityRefreshDerivedData). Do not reopen random old build folders / double-click if that launches another copy.
+- Verify: (1) when state is Downloading, Down/Up not stuck Zero; (2) Resume on paused works and UI updates; (3) Remove drops row without Remove failed; (4) Create Torrent button visible.
+
+### [WP13-LIVE-UI-AUTHORITY-REFRESH-001-OPEN] Human emergency: frozen UI, Remove failed (2026-08-10)
+- Human: UI all zeros, Paused/Checking stuck, cannot resume, Remove failed; network shows heavy download. Quit/reopen no longer helps.
+- Forensics:
+  - Live GUI process was `build/CoderFix002DerivedData/.../Torrentino.app` (OLD, no Create button) while agent was `RatesProjectionDerivedData` agent downloading Sugar `downBps≈12MB/s`.
+  - Agent log: `resume` success; `prepareRemoval/commitRemoval` success; subsequent `prepareRemoval` => `fault:recordNotFound` (UI still showed ghost row).
+  - `TorrentListViewModel.removeSelected` on success only sets `lastRemovalResult` and does **not** `fetchFullSnapshot` / local remove; on any catch sets generic `remove.failed` (including recordNotFound after already-removed ghost).
+  - `pause`/`resume` likewise do not refresh snapshot after success — UI depends entirely on live events.
+- Required product fixes (UI view-model / client path):
+  1. After successful pause/resume/remove (and similar mutating commands that change list authority), apply authoritative refresh (`fetchFullSnapshot` or precise local apply from result+events) so table matches agent.
+  2. On remove: if agent reports success OR `recordNotFound`, drop ghost row / refresh list; do not show Remove failed for already-gone records.
+  3. Ensure event subscription remains active after cold-start rebind; if events lag, snapshot refresh still keeps UI truthful.
+  4. Keep rates-projection, cold-start rebind, creator discoverability.
+- Orchestrator will relaunch ONLY latest bundle after fix; Human must use that window.
+- Non-goals: deleting Human downloads; redesigning Checking semantics (recheck can be real); Legacy.
+
 ### [WP13-LIVE-RATES-PROJECTION-001-DONE] Coder + Orchestrator gate (2026-08-10)
 - Fix: `StatusCache.merge` treats rate/counter/peer `-1` as unknown (non-destructive); `0` remains real idle. Bridge `EngineAlertDTO` defaults/decode use `-1` unknown; first projection clamps unknown→0 only when no prior sample. CLI snapshot now prints `downBps`/`upBps`/`peers`.
 - Files: StatusCache, BridgeTransferEngine, EngineBridgeDTOs, EngineBridge.h/.cpp, CLIDispatcher, TransferSmokeTests (+tests). No AppDelegate/creator UI churn.

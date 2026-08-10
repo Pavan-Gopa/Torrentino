@@ -38,13 +38,11 @@ implementation:
   status: waiting_review
   attempts: 1
   note: >-
-    [WP13-LIVE-RATES-PROJECTION-001-DONE] StatusCache.merge no longer clobbers
-    live rates/bytes/peers with unknown (-1) samples; bridge DTO defaults -1;
-    CLI snapshot prints downBps/upBps/peers. XCTest 325/325. Orchestrator
-    relaunched RatesProjectionDerivedData app (agent md5 match). Live CLI
-    after checking→downloading shows non-zero rates (e.g. downBps=42005
-    peers=30). Awaiting Human UI confirmation Down/Up no longer stuck Zero
-    while transferring. Cold-start rebind + creator discoverability preserved.
+    [WP13-LIVE-UI-AUTHORITY-REFRESH-001-DONE] pause/resume/remove now refresh
+    authoritative snapshot; remove ghosts on recordNotFound; no false Remove
+    failed. Orchestrator force-quit stale UIs and launched only
+    UIAuthorityRefreshDerivedData (agent md5 match). Awaiting Human verify:
+    live rates when downloading, resume works, remove drops row, Create visible.
     Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
     duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
     BUG-003 files-from-metainfo UI (302/302 XCTest). Residual: selection is
@@ -369,8 +367,8 @@ omp:
   active_agent: null
   active_role: null
   last_result_artifact: null
-  dispatched_at: 2026-08-10T22:25:00Z
-  completed_at: 2026-08-10T22:05:00Z
+  dispatched_at: 2026-08-10T22:40:00Z
+  completed_at: 2026-08-10T22:20:00Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -415,10 +413,10 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Pending Human accept of rates projection (+ cold-start + creator discoverability).
+  Pending Human accept of UI authority refresh (+ rates/cold-start/creator).
 coder_brief: |
-  Rates projection delivered; waiting Human UI proof. No further coder unless reject.
+  UI authority refresh delivered; waiting Human. No further coder unless reject.
 tester_brief: |
-  Idle until Reviewer after Human accepts combined UI lanes.
+  Idle until Reviewer after Human accept.
 architect_brief: |
   Idle.
