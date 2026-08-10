@@ -58,6 +58,19 @@ assert_contains "${TESTS}" "testEngineCommandUnknownDecodeFails" "unknown comman
 assert_contains "${TESTS}" "testVersionBackwardCompatLogicViaEnvelope" "backward compat"
 assert_contains "${TESTS}" "testEnvelopeFuzzTruncatedJSON" "fuzz/negative parser"
 assert_contains "${TESTS}" "testEnvelopeConcurrentEncodeDecodeStress" "concurrency stress"
+qa_log "priming the app product before the focused target (Xcode cold dependency-order workaround)…"
+set +e
+xcodebuild build \
+	-project "${XCODEPROJ}" \
+	-scheme Torrentino \
+	-destination 'platform=macOS,arch=arm64' \
+	CODE_SIGN_IDENTITY="Developer ID Application" \
+	DEVELOPMENT_TEAM=438UQRF7JV \
+	2>&1 | tee "${LOG}"
+prime_rc=${PIPESTATUS[0]}
+set -e
+[[ ${prime_rc} -eq 0 ]] || qa_die "app product priming failed (rc=${prime_rc}); see ${LOG}"
+
 
 qa_log "running TorrentinoIPCTests…"
 set +e
@@ -68,7 +81,7 @@ xcodebuild test \
 	-only-testing:TorrentinoIPCTests \
 	CODE_SIGN_IDENTITY="Developer ID Application" \
 	DEVELOPMENT_TEAM=438UQRF7JV \
-	2>&1 | tee "${LOG}"
+	2>&1 | tee -a "${LOG}"
 rc=${PIPESTATUS[0]}
 set -e
 

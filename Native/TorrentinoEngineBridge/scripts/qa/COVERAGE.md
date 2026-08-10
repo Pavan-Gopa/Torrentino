@@ -441,3 +441,56 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | Lock file unlink race | P3 | `AdvisoryLockHandle.release()` removes `persistence.lock`; a releasing holder could unlink a file a third opener is about to flock. Benign under single-writer + instance-lock model (see REPORT.md Observation 3). |
 | GUI pixel/UI automation of empty window | N/A | Covered via source contract + AppTests; no AppKit snapshot harness yet |
 | Full 24h soak burn-in | N/A | Wall-clock item (WP-01 gate); smoke soaks green every suite run |
+
+---
+
+## WP-13 ADR-020 Stabilization Campaign — 2026-08-10
+
+**Lane:** `[WP13-STABILITY-TEST-CAMPAIGN-001]`  
+**Principle:** risk-based contract coverage; monotonic; TestProfile/mktemp only  
+**XCTest:** 317/317 PASS (+2 new)  
+**QA suite:** 107 PASS / 0 FAIL / 13 WP-02 BLOCKED / 1 Legacy WAIVED  
+**Product edits:** none
+
+### Matrix → evidence (new this run marked ★)
+
+| ADR-020 / I-cell | Evidence | Status |
+| --- | --- | --- |
+| I1 R0 degrade + fail-closed snapshot | ★ `testWP13StabilityR0DegradesAndFailsSnapshotClosed` | PASS |
+| I2 tolerant restore shapes | `testRestoreToleratesExtraFieldsAndOldShape` | PASS |
+| I3 restore summary markers | existing observability / restore summary tests; live markers disposable | PARTIAL (in-process PASS; live disposable deferred) |
+| I4 unified admission / no idle limbo | `testCommitAddImmediateStartRunningNotIdle`, multi-file offline recovery, restore warning clear | PASS |
+| I5 health latch clear / rates / progress | `testStatusCacheMergesSentinelsAndClearsTransientHealth`, `testTransferRatesAndProgressProjection` | PASS |
+| I6 actionable triangle policy | wp09 health/fault matrix + HealthPolicy coverage | PASS |
+| I7 session-scoped shutdown veto | live disposable only | BLOCKED (Human agent present) |
+| I8 event subscription timing | event bus flush/coalesce + continuity tests | PASS (contract) |
+| I9 diagnostics redaction/correlation | ★ `testWP13StabilityDiagnosticsRedactsSecretsAndPreservesSafeCorrelation`, rotate sink test, `test_wp13_diagnostics_security.sh` | PASS |
+| I10 app projection / no false fixture | AppTests list + ETA/health gating | PASS |
+| I11 preserved file-selection + removal | `testFileSelectionPrioritiesRoundTrip`, WP10 keep/trash/partial/move + wp07/wp10 scripts | PASS |
+| Persistence WAL/crash/generation | persistence XCTest + wp06 scripts | PASS |
+| XPC envelope/reconnect/stress | IPC tests in matrix + wp05 scripts | PASS |
+| Bridge priorities/status/alerts | priorities round-trip + wp04 scripts | PASS |
+| Deterministic stress | concurrent commands, 100-row, envelope stress, wp09 matrix | PASS |
+| Soak preparation | wp01 soak/flush smoke | PREP ONLY (no multi-hour claim) |
+| Lifecycle launchd live | `test_wp02_*` | BLOCKED this host |
+
+### New / updated scripts this run
+
+| File | Role |
+| --- | --- |
+| ★ `test_wp13_stability_matrix.sh` | 30-test deterministic matrix harness |
+| `run_qa_suite.sh` | includes wp13 stability; WP-02 block; Legacy waive |
+| `test_wp03_empty_state.sh` | realign empty-state brand/add action |
+| `test_wp03_domain_types.sh` / `test_wp03_ipc_envelope.sh` | cold-target prime |
+| `test_wp03_strict_concurrency.sh` | ignore AppIntents tool warning |
+| `test_wp08_dnd_association.sh` | realign TorrentDropRouting gate |
+| ★ `TransferSmokeTests` R0 + redaction tests | XCTest contracts |
+
+### Open gaps after this run
+
+| Gap | Severity | Notes |
+| --- | --- | --- |
+| Disposable live I7 shutdown veto | P2 | Needs Human-authorized sterile agent identity |
+| Disposable live I1/I9 first-boot markers | P2 | Same; in-process contracts already green |
+| Multi-hour soak | N/A | Wall-clock WP-14/15; smoke only here |
+| WP-02 live suite on this host | ENV | Re-run when Human agent stopped or on disposable machine |

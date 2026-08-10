@@ -19,7 +19,8 @@ CV="$(cat "${CONTENT}")"
 assert_contains "${CV}" "emptyState" "emptyState view present"
 assert_contains "${CV}" 'String(localized: "empty.no_torrents")' "empty.no_torrents key"
 assert_contains "${CV}" 'String(localized: "empty.subtitle")' "empty.subtitle key"
-assert_contains "${CV}" "square.stack.3d.up.slash" "empty-state SF Symbol"
+assert_contains "${CV}" "Image(nsImage: AppLogo.image)" "empty state uses branded app icon"
+assert_contains "${CV}" "transfers.showAddSheet = true" "empty state exposes add action"
 # Must not invent torrents in the empty view.
 assert_not_contains "${CV}" "TorrentInfo(" "empty state must not fabricate TorrentInfo"
 

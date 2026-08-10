@@ -9,24 +9,15 @@
 
 | Field | Value |
 |-------|--------|
-| Step | |
-| Date | |
+| Step | WP-13 `[WP13-STABILITY-TEST-CAMPAIGN-001]` |
+| Date | 2026-08-10 |
 | bugs_open | 0 |
 
 ## Bugs
 
-### BUG-001 — short title
+_No product-functional bugs opened this campaign._
 
-| | |
-|--|--|
-| Severity | critical \| major \| minor |
-| Status | open \| closed |
-| Repro | |
-| Expected | |
-| Actual | |
-| Suspect files | |
-| Logs / evidence | |
+Environmental only (not bugs):
 
----
-
-_(add BUG-002, … as needed)_
+- 13× `test_wp02_*.sh` **BLOCKED** — pre-existing Human launchd agent session.
+- `test_wp03_legacy_untouched.sh` **WAIVED** — Legacy HARD BAN / tree removed.

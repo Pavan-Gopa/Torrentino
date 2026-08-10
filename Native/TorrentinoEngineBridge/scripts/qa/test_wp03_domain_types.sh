@@ -58,6 +58,19 @@ assert_contains "${TESTS}" "testTorrentInfoEdgeEmptyNameSizeZeroProgressBounds" 
 assert_contains "${TESTS}" "testEngineError" "engine error tests"
 assert_contains "${TESTS}" "testTorrentStateSendableConcurrentReads" "concurrency stress"
 assert_contains "${TESTS}" "testTorrentInfoTamperedJSONDecodeFails" "negative/fuzz"
+qa_log "priming the app product before the focused target (Xcode cold dependency-order workaround)…"
+set +e
+xcodebuild build \
+	-project "${XCODEPROJ}" \
+	-scheme Torrentino \
+	-destination 'platform=macOS,arch=arm64' \
+	CODE_SIGN_IDENTITY="Developer ID Application" \
+	DEVELOPMENT_TEAM=438UQRF7JV \
+	2>&1 | tee "${LOG}"
+prime_rc=${PIPESTATUS[0]}
+set -e
+[[ ${prime_rc} -eq 0 ]] || qa_die "app product priming failed (rc=${prime_rc}); see ${LOG}"
+
 
 qa_log "running TorrentinoDomainTests…"
 set +e
@@ -68,7 +81,7 @@ xcodebuild test \
 	-only-testing:TorrentinoDomainTests \
 	CODE_SIGN_IDENTITY="Developer ID Application" \
 	DEVELOPMENT_TEAM=438UQRF7JV \
-	2>&1 | tee "${LOG}"
+	2>&1 | tee -a "${LOG}"
 rc=${PIPESTATUS[0]}
 set -e
 

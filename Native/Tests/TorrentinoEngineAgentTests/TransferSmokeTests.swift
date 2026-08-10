@@ -2546,6 +2546,64 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertTrue(snap.torrents.contains { $0.displayName == "old-shape" })
     }
 
+    // MARK: - WP-13 ADR-020 stabilization
+
+    func testWP13StabilityR0DegradesAndFailsSnapshotClosed() async throws {
+        let store = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await store.open()
+        try await store.addTorrent(StoredTorrent(
+            id: UUID().uuidString,
+            infoHashV1: nil,
+            infoHashV2: nil,
+            name: "invalid-core-identity",
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+
+        let coordinator = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        let summary = await coordinator.restoreFromPersistence()
+
+        XCTAssertEqual(summary.stored, 1)
+        XCTAssertEqual(summary.rebuilt, 0)
+        XCTAssertEqual(summary.skipped, 1)
+        XCTAssertEqual(summary.failure, "restoreAnomaly")
+        let sessionPhase = await coordinator.sessionPhase
+        let degradedReason = await coordinator.degradedReason
+        XCTAssertEqual(sessionPhase, .degraded)
+        XCTAssertEqual(degradedReason, "restoreAnomaly")
+
+        let requestID = RequestID()
+        let reply = await coordinator.processCommand(encode(.fetchSnapshot(
+            FetchSnapshotRequest(requestID: requestID, afterRevision: nil)
+        )))
+        let envelope = decode(IPCEnvelope.self, from: reply)
+        XCTAssertEqual(envelope.requestID, requestID, "fail-closed reply must preserve correlation")
+        guard case .failure(let fault) = envelope.result else {
+            return XCTFail("R0 must not publish an empty snapshot as authoritative truth")
+        }
+        XCTAssertEqual(fault.code, .internalError)
+        XCTAssertTrue(fault.redactedContext?.contains("restoreAnomaly") == true)
+    }
+
+
+    func testWP13StabilityDiagnosticsRedactsSecretsAndPreservesSafeCorrelation() {
+        let requestID = RequestID()
+        let raw = "requestID=\(requestID.rawValue.uuidString) /Users/alice/Downloads/file.torrent password=secret Authorization: Bearer token"
+        let redacted = RedactedLogFileManager.redact(raw)
+
+        XCTAssertTrue(redacted.contains(requestID.rawValue.uuidString))
+        XCTAssertFalse(redacted.contains("/Users/alice"))
+        XCTAssertFalse(redacted.contains("password=secret"))
+        XCTAssertFalse(redacted.contains("Bearer token"))
+    }
+
     // MARK: - Helpers
 
     private typealias LimitState = (

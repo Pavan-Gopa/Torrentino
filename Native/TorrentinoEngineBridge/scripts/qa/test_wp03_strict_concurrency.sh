@@ -37,12 +37,16 @@ set -e
 [[ ${build_rc} -eq 0 ]] || qa_die "xcodebuild build failed (rc=${build_rc}); see ${LOG}"
 
 # Treat compiler/linker warning lines as failures even if TREAT_WARNINGS_AS_ERRORS
-# were accidentally relaxed on a target.
-warn_lines="$(grep -E 'warning:|WARNING:' "${LOG}" | grep -vE 'note:|ignoring' || true)"
+# were accidentally relaxed on a target. Xcode 26 emits this tool-owned warning
+# for applications that intentionally do not link AppIntents; it is unrelated
+# to source concurrency and is the only accepted exclusion.
+warn_lines="$(grep -E 'warning:|WARNING:' "${LOG}" \
+	| grep -vE 'note:|ignoring|appintentsmetadataprocessor.*warning: Metadata extraction skipped\\. No AppIntents\\.framework dependency found\\.' \
+	|| true)"
 if [[ -n "${warn_lines}" ]]; then
 	printf '%s\n' "${warn_lines}" >&2
-	qa_die "build produced warning lines (strict concurrency gate)"
+	qa_die "build produced compiler/linker warning lines (strict concurrency gate)"
 fi
-qa_ok "build exit 0 with zero warning lines"
+qa_ok "build exit 0 with zero compiler/linker warning lines"
 
 qa_pass

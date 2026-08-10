@@ -58,9 +58,9 @@ require_text() {
 	qa_ok "$description"
 }
 
-require_text "${LIST}" '.onDrop(of: [.fileURL, .plainText]' "drop accepts file URLs and text"
-require_text "${LIST}" 'url.pathExtension.lowercased() == "torrent" else { return }' "drop rejects non-torrent files"
-require_text "${LIST}" 'text.hasPrefix("magnet:") else { return }' "drop rejects non-magnet text"
+require_text "${LIST}" '.onDrop(of: [.fileURL, .url, .item, .data, .plainText]' "drop accepts Finder URLs, promised data, and text"
+require_text "${LIST}" 'TorrentDropRouting.isTorrentDropURL(url)' "drop routes every decoded URL through the torrent gate"
+require_text "${LIST}" 'guard text.hasPrefix("magnet:") else { return }' "drop rejects non-magnet text"
 require_text "${APP}" '.onOpenURL { url in' "open URL handler"
 require_text "${APP}" 'url.scheme == "magnet"' "magnet URL association handler"
 require_text "${APP}" 'url.pathExtension.lowercased() == "torrent"' "torrent URL association handler"
