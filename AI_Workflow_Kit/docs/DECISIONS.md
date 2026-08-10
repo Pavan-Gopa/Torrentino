@@ -429,3 +429,47 @@ contract (ADR-004 budgets remain).
   accordingly. No commit/tag/branch work is part of the design packet.
 - Decomposition is deliberately deferred to a second lane so the lifecycle
   fix lands as one coherent, reviewable unit on the hot files.
+
+---
+
+## ADR-020 — Stability freeze and evidence-first engine hardening
+
+**Date:** 2026-08-09
+**Status:** Accepted (Human directive)
+
+**Context:** Torrentino currently has a Human-accepted working engine after repeated
+WP-13 regressions caused by changes in hot lifecycle, restore, admission, health,
+rates, persistence, and UI-projection paths. Adding capabilities now has lower value
+than proving that the current behavior remains stable and making future failures
+immediately attributable.
+
+**Decision:**
+- Product feature work is frozen until Human explicitly lifts the freeze. Queued UI
+  and removal capabilities remain documented but unimplemented.
+- Testing is risk-based, not test-count based. Each test defends an observable
+  contract, fails on a plausible defect, is deterministic, and records sufficient
+  phase/log evidence to identify the failing ownership boundary.
+- Test Engineer may change only tests, QA scripts, isolated fixtures, and their
+  existing reports. Test Engineer never patches product behavior or production
+  logging. A product or observability gap is written as evidence and routed through
+  Orchestrator to a narrow Coder → Reviewer → Tester loop.
+- Engine stabilization coverage spans lifecycle/launchd, shutdown veto, cold and
+  unclean boot, persistence/WAL/schema/generation restore and R0, unified admission,
+  health/activity/rates/progress convergence, XPC boot races/event ordering/reconnect,
+  bridge priorities/status/alerts, removal/recovery, diagnostics bootstrap/rotation/
+  redaction/correlation, app snapshot projection, bounded stress, and soak gates.
+- Integration scripts use only disposable TestProfile or `mktemp` stores. They never
+  read or mutate the Human Engine directory or downloaded content. Each script emits
+  a scenario ID, ordered phase markers, a truthful exit status, and the relevant
+  redacted log window plus preserved artifacts on failure.
+- Production logging is not increased speculatively. A failing test must demonstrate
+  the missing diagnostic before a logging change is authorized; such a change is
+  product code and requires the normal review/regression pipeline.
+
+**Consequences:**
+- The current UI review-fix completes mandatory re-review before the stabilization
+  Tester campaign begins.
+- Raw test quantity is not a gate. Contract coverage, deterministic reproduction,
+  actionable failure artifacts, concurrency/stress depth, and safe isolation are.
+- Feature work, including `WP13-LIVE-REMOVE-FILES-001`, stays deferred until the
+  stability campaign is green and Human explicitly resumes product development.

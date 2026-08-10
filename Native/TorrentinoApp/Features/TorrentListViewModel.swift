@@ -98,6 +98,7 @@ final class TorrentListViewModel: ObservableObject {
     let client: EngineClient
     private(set) var directoryStack: [String] = []
     private var fileCursor: PageCursor?
+    private var filesLoadRequestID = UUID()
     private var eventHandler: (@Sendable ([EngineEventV1]) -> Void)?
     private var recoveryInFlight = false
 
@@ -352,7 +353,13 @@ final class TorrentListViewModel: ObservableObject {
 
     private func remove(_ recordID: TorrentRecordID) {
         torrents.removeAll { $0.id == recordID }
-        selection.remove(recordID)
+        if selection.remove(recordID) != nil {
+            filesLoadRequestID = UUID()
+            files = []
+            fileCursor = nil
+            directoryStack = []
+            filesLoading = false
+        }
     }
 
     // MARK: - Commands
@@ -511,7 +518,7 @@ final class TorrentListViewModel: ObservableObject {
 
     /// Performs the same agent inspection used by commit, then builds a local
     /// file preview from the inspected source bytes for the Add sheet.
-    func inspectTorrentFile(_ url: URL) async -> AddTorrentPreview? {
+    func inspectTorrentFile(_ url: URL) async -> LatestInspectionState<AddTorrentPreview>.Result {
         do {
             let data = try await readTorrentData(from: url)
             let inspection = try await inspect(source: .torrentFileData(data))
@@ -527,20 +534,16 @@ final class TorrentListViewModel: ObservableObject {
                     selection: .normal
                 )
             }
-            lastAddError = nil
-            return AddTorrentPreview(inspection: inspection, files: files)
+            return .success(AddTorrentPreview(inspection: inspection, files: files))
         } catch EngineClientError.fault(let fault) {
-            lastAddError = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
-            connectionNote = lastAddError
-            return nil
+            let message = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
         } catch let fault as EngineFault {
-            lastAddError = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
-            connectionNote = lastAddError
-            return nil
+            let message = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
         } catch {
-            lastAddError = String(localized: "torrents.add.inspection_failed")
-            connectionNote = lastAddError
-            return nil
+            let message = String(localized: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
         }
     }
 
@@ -902,9 +905,7 @@ final class TorrentListViewModel: ObservableObject {
         files = []
         fileCursor = nil
         directoryStack = []
-        if let recordID {
-            Task { await loadFiles(for: recordID) }
-        }
+        scheduleFilesLoad(for: recordID)
     }
 
     /// Table-selection hook: mirrors `select(_:)` without forcing single
@@ -915,36 +916,72 @@ final class TorrentListViewModel: ObservableObject {
         files = []
         fileCursor = nil
         directoryStack = []
-        if let recordID {
-            Task { await loadFiles(for: recordID) }
-        }
+        scheduleFilesLoad(for: recordID)
     }
 
     func enterDirectory(_ name: String) {
         directoryStack.append(name)
-        Task { await loadFiles(for: selection.first) }
+        scheduleFilesLoad(for: selection.first)
     }
 
     func goUpDirectory() {
         guard !directoryStack.isEmpty else { return }
         directoryStack.removeLast()
-        Task { await loadFiles(for: selection.first) }
+        scheduleFilesLoad(for: selection.first)
     }
 
     func loadFiles(for recordID: TorrentRecordID?, pageSize: Int = 200) async {
-        guard let recordID, let torrent = torrents.first(where: { $0.id == recordID }) else { return }
+        let requestID = UUID()
+        filesLoadRequestID = requestID
+        await loadFiles(for: recordID, pageSize: pageSize, requestID: requestID)
+    }
+
+    private func scheduleFilesLoad(for recordID: TorrentRecordID?) {
+        let requestID = UUID()
+        filesLoadRequestID = requestID
+        guard let recordID else {
+            filesLoading = false
+            return
+        }
+        Task { await loadFiles(for: recordID, requestID: requestID) }
+    }
+
+    private func loadFiles(
+        for recordID: TorrentRecordID?,
+        pageSize: Int = 200,
+        requestID: UUID
+    ) async {
+        guard let recordID,
+              let torrent = torrents.first(where: { $0.id == recordID }),
+              selection.count == 1,
+              selection.first == recordID else {
+            if filesLoadRequestID == requestID {
+                filesLoading = false
+            }
+            return
+        }
+        let requestedDirectoryStack = directoryStack
         filesLoading = true
-        defer { filesLoading = false }
+        defer {
+            if filesLoadRequestID == requestID {
+                filesLoading = false
+            }
+        }
         let cursor = FileCursor(directoryStack: directoryStack, token: fileCursor)
         let command = EngineCommandV1.fetchFiles(
             FetchFilesRequest(requestID: RequestID(), recordID: recordID, cursor: cursor, pageSize: pageSize, expectedRevision: torrent.revision)
         )
         do {
             guard case .files(let page) = try await client.sendCommand(command) else { return }
+            guard filesLoadRequestID == requestID,
+                  selection.count == 1,
+                  selection.first == recordID,
+                  directoryStack == requestedDirectoryStack else { return }
             files = page.items
             fileCursor = page.nextCursor
             fileRevision = page.revision
         } catch {
+            guard filesLoadRequestID == requestID else { return }
             connectionNote = String(localized: "files.failed")
         }
     }
@@ -1228,13 +1265,6 @@ final class TorrentListViewModel: ObservableObject {
             }
         }
     }
-}
-
-/// Agent inspection plus the local file rows needed to render the pre-commit
-/// selection tree. The operation ID remains agent-owned and is never rebuilt.
-struct AddTorrentPreview: Sendable, Equatable {
-    let inspection: AddSourceInspection
-    let files: [FileEntry]
 }
 
 // FixtureLibrary is kept in its dependency-free source file so the app tests

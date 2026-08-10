@@ -34,25 +34,22 @@ struct AddTorrentSheet: View {
     @State private var pickerMode: AddTorrentPickerMode?
     @State private var fileURL: URL?
     @State private var destinationURL: URL?
-    @State private var preview: AddTorrentPreview?
-    @State private var selectedPaths: Set<String> = []
-    @State private var errorMessage: String?
-    @State private var inspecting = false
+    @State private var inspectionPresentation = AddTorrentInspectionPresentation()
     @State private var committing = false
-    @State private var inspectionRequestID = UUID()
+    @State private var inspectionState = LatestInspectionState<AddTorrentPreview>()
 
     private var canCommit: Bool {
-        guard !committing, !inspecting else { return false }
+        guard !committing, !inspectionPresentation.inspecting else { return false }
         if fileURL != nil {
-            return preview != nil
+            return inspectionPresentation.canCommit
         }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var selectedBytes: Int64 {
-        guard let preview else { return 0 }
+        guard let preview = inspectionPresentation.preview else { return 0 }
         return preview.files.reduce(into: Int64(0)) { result, file in
-            if selectedPaths.contains(file.relativePath) {
+            if inspectionPresentation.selectedPaths.contains(file.relativePath) {
                 result += file.sizeBytes
             }
         }
@@ -73,10 +70,10 @@ struct AddTorrentSheet: View {
                     guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                           fileURL != nil else { return }
                     fileURL = nil
-                    preview = nil
-                    selectedPaths.removeAll()
-                    inspecting = false
-                    inspectionRequestID = UUID()
+                    inspectionPresentation.preview = nil
+                    inspectionPresentation.selectedPaths.removeAll()
+                    inspectionPresentation.inspecting = false
+                    _ = inspectionState.begin()
                 }
 
             HStack {
@@ -109,7 +106,7 @@ struct AddTorrentSheet: View {
                 }
             }
 
-            if inspecting {
+            if inspectionPresentation.inspecting {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
@@ -117,14 +114,14 @@ struct AddTorrentSheet: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            } else if let preview {
+            } else if let preview = inspectionPresentation.preview {
                 inspectionSummary(preview)
             }
 
             Toggle(String(localized: "torrents.add.start_paused"), isOn: $startPaused)
                 .toggleStyle(.checkbox)
 
-            if let errorMessage {
+            if let errorMessage = inspectionPresentation.errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -156,7 +153,7 @@ struct AddTorrentSheet: View {
             let mode = pickerMode
             pickerMode = nil
             guard let mode else {
-                errorMessage = String(localized: "torrents.add.pick_failed")
+                inspectionPresentation.errorMessage = String(localized: "torrents.add.pick_failed")
                 return
             }
 
@@ -165,23 +162,23 @@ struct AddTorrentSheet: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first, TorrentDropRouting.isTorrentDropURL(url) else {
-                        errorMessage = String(localized: "torrents.add.pick_failed")
+                        inspectionPresentation.errorMessage = String(localized: "torrents.add.pick_failed")
                         return
                     }
                     beginInspection(for: url)
                 case .failure(let error):
                     if !Self.isPickerCancellation(error) {
-                        errorMessage = String(localized: "torrents.add.pick_failed")
+                        inspectionPresentation.errorMessage = String(localized: "torrents.add.pick_failed")
                     }
                 }
             case .destination:
                 switch result {
                 case .success(let urls):
                     destinationURL = urls.first
-                    errorMessage = nil
+                    inspectionPresentation.errorMessage = nil
                 case .failure(let error):
                     if !Self.isPickerCancellation(error) {
-                        errorMessage = String(localized: "torrents.add.destination_failed")
+                        inspectionPresentation.errorMessage = String(localized: "torrents.add.destination_failed")
                     }
                 }
             }
@@ -203,15 +200,15 @@ struct AddTorrentSheet: View {
     private func commit() {
         guard canCommit else { return }
         committing = true
-        errorMessage = nil
+        inspectionPresentation.errorMessage = nil
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             defer { committing = false }
-            if let preview {
+            if let preview = inspectionPresentation.preview {
                 let selection = preview.files.map { file in
                     FileSelectionItem(
                         relativePath: file.relativePath,
-                        priority: selectedPaths.contains(file.relativePath) ? .normal : .skip
+                        priority: inspectionPresentation.selectedPaths.contains(file.relativePath) ? .normal : .skip
                     )
                 }
                 let saveLocation = destinationURL.map { PersistedLocation(path: $0.path) }
@@ -224,24 +221,24 @@ struct AddTorrentSheet: View {
                 if success {
                     dismiss()
                 } else if let err = viewModel.lastAddError {
-                    errorMessage = err
+                    inspectionPresentation.errorMessage = err
                 }
             } else if trimmed.hasPrefix("magnet:") {
                 let success = await viewModel.addMagnet(trimmed, startPaused: startPaused)
                 if success {
                     dismiss()
                 } else if let err = viewModel.lastAddError {
-                    errorMessage = err
+                    inspectionPresentation.errorMessage = err
                 }
             } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
                 let success = await viewModel.addTorrentFileURL(trimmed, startPaused: startPaused)
                 if success {
                     dismiss()
                 } else if let err = viewModel.lastAddError {
-                    errorMessage = err
+                    inspectionPresentation.errorMessage = err
                 }
             } else {
-                errorMessage = String(localized: "torrents.add.invalid_source")
+                inspectionPresentation.errorMessage = String(localized: "torrents.add.invalid_source")
             }
         }
     }
@@ -270,12 +267,12 @@ struct AddTorrentSheet: View {
                         .font(.headline)
                     Spacer()
                     Button(String(localized: "torrents.files.select_all")) {
-                        selectedPaths = Set(preview.files.map(\.relativePath))
+                        inspectionPresentation.selectedPaths = Set(preview.files.map(\.relativePath))
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
                     Button(String(localized: "torrents.files.deselect_all")) {
-                        selectedPaths.removeAll()
+                        inspectionPresentation.selectedPaths.removeAll()
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
@@ -300,12 +297,12 @@ struct AddTorrentSheet: View {
         HStack(spacing: 8) {
             if node.kind == .file {
                 Toggle("", isOn: Binding(
-                    get: { selectedPaths.contains(node.relativePath) },
+                    get: { inspectionPresentation.selectedPaths.contains(node.relativePath) },
                     set: { isSelected in
                         if isSelected {
-                            selectedPaths.insert(node.relativePath)
+                            inspectionPresentation.selectedPaths.insert(node.relativePath)
                         } else {
-                            selectedPaths.remove(node.relativePath)
+                            inspectionPresentation.selectedPaths.remove(node.relativePath)
                         }
                     }
                 ))
@@ -334,28 +331,25 @@ struct AddTorrentSheet: View {
     }
 
     private func beginInspection(for url: URL) {
+        let requestID = inspectionState.begin()
         guard TorrentDropRouting.isTorrentDropURL(url) else {
-            errorMessage = String(localized: "torrents.add.pick_failed")
+            inspectionPresentation.inspecting = false
+            inspectionPresentation.errorMessage = String(localized: "torrents.add.pick_failed")
             return
         }
         fileURL = url
         text = ""
-        preview = nil
-        selectedPaths.removeAll()
-        errorMessage = nil
-        inspecting = true
-        let requestID = UUID()
-        inspectionRequestID = requestID
-        Task {
-            let result = await viewModel.inspectTorrentFile(url)
-            guard inspectionRequestID == requestID else { return }
-            inspecting = false
-            if let result {
-                preview = result
-                selectedPaths = Set(result.files.map(\.relativePath))
-            } else {
-                errorMessage = viewModel.lastAddError ?? String(localized: "torrents.add.inspection_failed")
-            }
+        inspectionPresentation = AddTorrentInspectionPresentation(inspecting: true)
+        Task { @MainActor in
+            // The localized failure travels with this attempt; lastAddError is
+            // shared by other add commands and is not an inspection result.
+            let outcome = await viewModel.inspectTorrentFile(url)
+            _ = AddTorrentInspectionResultApplication.apply(
+                outcome,
+                for: requestID,
+                to: &inspectionState,
+                presentation: &inspectionPresentation
+            )
         }
     }
 

@@ -104,6 +104,10 @@ Workers **не** планируют pipeline и **не** выдают промп
 
 ## Kick delivery format (каждый раз)
 
+**Standing rule (2026-08-09, Human decision):** все kick-промпты worker-агентам
+выдаются **только на английском** (код и комментарии уже EN; меньше «авторских
+прочтений»). Статус-отчёты Human — по-прежнему на русском.
+
 В ответе Human:
 
 1. **Краткий статус** (таблица: WP, implementation, review, tests, next_actor, tags).
@@ -131,6 +135,12 @@ Scope: **only** Torrentino git root.
   pkill) → rebuild Debug → relaunch → verify `--cli status` operational. Human
   must never test a stale build. If rebuild/relaunch/status fails, do not kick
   Reviewer; route the failure back to Coder with the exact evidence.
+- **Sterile rebuild (standing rule, Human order 2026-08-09):** before relaunch
+  in the gate, reset the Engine store: MOVE
+  `~/Library/Application Support/com.torrentino.app/Engine` to
+  `~/.Trash/torrentino-engine-backup-<timestamp>/` (never hard-delete;
+  downloaded content files are never touched). Every Human live review starts
+  from a clean slate — no persisted records from previous builds.
 - Human live review is **not** a replacement for workflow roles. If Human accepts
   the fresh build, next mandatory step is **Reviewer**. If Reviewer approves, next
   mandatory step is **Tester**, who must add/update tests for new behavior and run

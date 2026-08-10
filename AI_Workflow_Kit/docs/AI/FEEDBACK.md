@@ -1,3 +1,828 @@
+### [WP13-STABILITY-TEST-CAMPAIGN-001-OPEN] Orchestrator routing after APPROVED (2026-08-10)
+- Final code re-review `[WP13-UI-001-004-REVIEW-003]` returned `APPROVED`: 315/315 full tests, 41/41 focused app tests, clean build/diff gates, no new warnings, exact scope, all prior findings closed, and ADR-019/ADR-020 respected.
+- Mandatory Tester campaign is now open under the Human stability freeze. It is evidence-only: tests, QA scripts, disposable fixtures, `COVERAGE.md`, `REPORT.md`, and `BUG_REPORT.md`; no product code, production logging, project configuration, or new functionality.
+- Required risk matrix: lifecycle/launchd and shutdown veto; cold/unclean boot and monotonic lifecycle; persistence/WAL/schema/generation restore including R0; unified add/restore/resume/pump admission; health/activity/rates/progress convergence; XPC boot races/event ordering/reconnect/concurrent clients; bridge priorities/status/alerts; keep-data/delete-data removal and recovery; diagnostics bootstrap/rotation/redaction/correlation; app snapshot/event projection; deterministic stress loops; soak preparation.
+- New evidence must execute behavior rather than grep source, use isolated TestProfile/`mktemp` state, emit scenario/phase markers, preserve failure artifacts and relevant redacted log windows, and return truthful exit codes. Human Engine state, downloaded content, external network, and Legacy are forbidden.
+- Tester must inventory and reuse existing coverage, add dedicated evidence for every uncovered matrix cell, wire it into cumulative QA where safe, run the complete XCTest and QA regression suites, and report either GREEN or evidence-backed bugs. Tester never fixes product defects.
+
+### [WP13-UI-001-004-REVIEW-003] Final Code Re-review
+
+**1. Verdict**
+
+`APPROVED`
+
+All three REVIEW-002 findings are resolved. The inspection result and visible Add-sheet projection are generation-owned, the production result-application seam is used by both the Add sheet and the tests, and the ETA/health tests exercise the authoritative snapshot-to-row path. Required build/test/diff gates are green, with only previously known project/toolchain warnings. ADR-019 and the ADR-020 stability freeze were respected.
+
+**2. Baseline and Exact Scope**
+
+- Baseline: `HEAD 1167751562539e56c451a7943fee4897170af1a4` (`1167751`).
+- `git diff --stat -- Native`: 8 tracked files, 1,206 insertions, 213 deletions.
+- Tracked Native paths are `Native/Torrentino.xcodeproj/project.pbxproj`, `Native/TorrentinoApp/Features/AddTorrentSheet.swift`, `Native/TorrentinoApp/Features/FixtureLibrary.swift`, `Native/TorrentinoApp/Features/TorrentDropRouting.swift`, `Native/TorrentinoApp/Features/TorrentListView.swift`, `Native/TorrentinoApp/Features/TorrentListViewModel.swift`, `Native/TorrentinoApp/Resources/Localizable.xcstrings`, and `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`.
+- The expected untracked Native path is `Native/TorrentinoApp/Resources/Assets.xcassets/`, containing the accepted AppIcon catalog.
+- The FIX-002 lane product/test whitelist is exact: `AddTorrentSheet.swift`, `TorrentListViewModel.swift`, `FixtureLibrary.swift`, and `TorrentinoAppTests.swift`.
+- The project-file, routing, list-view, localization, and AppIcon changes are accumulated accepted UI work and were not changed by FIX-002. No unexpected product path was found.
+- `AI_Workflow_Kit/docs/AI/ORCHESTRATOR.md`, `STATE.yaml`, `DECISIONS.md`, and `FEEDBACK.md` remain workflow-owned dirty files. This review did not modify `STATE.yaml`.
+
+**3. Graphify Query and Result**
+
+Mandatory query, run before opening source files:
+
+```text
+graphify query "Final re-review of WP13 REVIEW-FIX-002: stale Add inspection connectionNote ownership, production Add result-application seam, and authoritative TorrentSnapshot-to-row ETA health coverage"
+```
+
+- Graphify was available and completed a BFS depth-2 traversal with 680 nodes found.
+- The scoped result included `AddTorrentInspectionResultApplication`, `LatestInspectionState`, `AddTorrentSheet`, `TorrentListViewModel`, `TorrentSnapshot`, `TorrentListRowProjection`, `TorrentinoAppTests`, and the named production inspection tests.
+- Graphify reported the existing skill/package mismatch: skill `0.9.20`, installed package `0.9.33`. The query completed successfully; this was not a navigation failure.
+- A subsequent narrowed query also returned the same production seam, snapshot, row, and test nodes.
+
+**4. Build Command and Result**
+
+```text
+xcodebuild clean build \
+  -project Native/Torrentino.xcodeproj \
+  -scheme Torrentino \
+  -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/ReviewerFix002DerivedData
+```
+
+Result: `** CLEAN SUCCEEDED **` followed by `** BUILD SUCCEEDED **`.
+
+**5. Full Test Command and Exact Counts**
+
+```text
+xcodebuild test \
+  -project Native/Torrentino.xcodeproj \
+  -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/ReviewerFix002DerivedData
+```
+
+Result: `** TEST SUCCEEDED **`.
+
+`xcresulttool` summary: 315 passed, 0 failed, 0 skipped, 0 expected failures, total 315.
+
+**6. Focused Test Command and Exact Counts**
+
+```text
+xcodebuild test \
+  -project Native/Torrentino.xcodeproj \
+  -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/ReviewerFix002DerivedData \
+  -only-testing:TorrentinoAppTests
+```
+
+- The first cold invocation on an empty `ReviewerFix002DerivedData` failed before test collection because the scheme's existing `TorrentinoEngineAgentTests` target lacks an explicit `TorrentinoEngineAgent` dependency. It collected 0 tests and did not run product tests.
+- After the required clean build and full test, the exact focused command was rerun and returned `** TEST SUCCEEDED **`.
+- Final focused `xcresulttool` summary: 41 passed, 0 failed, 0 skipped, 0 expected failures, total 41.
+- The cold-build issue is the previously reported dependency-order warning, not a FIX-002 change or warning.
+
+**7. Warning Assessment**
+
+- Newly introduced warnings attributable to FIX-002: none.
+- Clean build warning: known AppIntents metadata extraction skipped because `AppIntents.framework` is not a dependency.
+- Full test warnings: known macOS 13 versus macOS 14 XCTest linker warnings and the known missing explicit `TorrentinoEngineAgentTests` dependency warning.
+- The missing-dependency warning also explains the first cold focused-build failure. It is outside the FIX-002 whitelist and unchanged by this lane.
+- No changed Swift source, ETA formatter, test seam, localization entry, AppIcon asset, engine file, or bridge file produced a new warning.
+
+**8. `git diff --check`**
+
+- Required `git diff --check`: pass with no output.
+- Product-only `git diff --check -- Native`: pass with no output.
+
+**9. Resolution Matrix for REVIEW-002 Findings**
+
+| REVIEW-002 finding | Verification | Result |
+|---|---|---|
+| 1. Stale Add inspection failure can overwrite shared `connectionNote` | `inspectTorrentFile` now returns only `LatestInspectionState<AddTorrentPreview>.Result` at `TorrentListViewModel.swift:521-547`; its three failure paths call the preservation boundary without assigning `connectionNote`. `AddTorrentInspectionResultApplication.apply` accepts the generation before changing presentation at `FixtureLibrary.swift:366-387`. Non-inspection lifecycle, snapshot, add, removal, file, and command-note assignments remain present at `TorrentListViewModel.swift:378-395,457-515,564-577,640,734-776,827,857,985,1064-1068`. | PASS |
+| 2. Inspection tests do not exercise production result application | `AddTorrentInspectionResultApplication.apply` is the only Add result-application reducer at `FixtureLibrary.swift:367`; `AddTorrentSheet.beginInspection` calls it at `AddTorrentSheet.swift:347-352`; the four named tests call the same seam at `TorrentinoAppTests.swift:570-770`. The obsolete `InspectionPresentation` helper and direct `inspectionPresentation` reducer are absent. | PASS |
+| 3. ETA/health tests bypass authoritative snapshot-to-row projection | Tests build `TorrentSnapshot` through `authoritativeTorrentSnapshot` at `TorrentinoAppTests.swift:924-952`, then call `TorrentListRowProjection(torrent:)` in every ETA/health case at `:328-426`. The row initializer forwards `torrent.health` at `FixtureLibrary.swift:135-143`, and production columns use the same initializer at `TorrentListView.swift:201-209`. | PASS |
+| 4. Workflow-owned trailing whitespace gate | Final overall and Native-only `git diff --check` both pass. The Reviewer did not edit `STATE.yaml`. | PASS |
+
+**10. Production Seam Ownership Assessment**
+
+- Exactly one Add result-application reducer exists: `AddTorrentInspectionResultApplication.apply`.
+- The generation acceptance call is inside that production seam: `inspectionState.resolve(outcome, for: generation)` precedes the success/failure projection.
+- `AddTorrentSheet` calls the seam in the real `beginInspection` production path. The view-model supplies the attempt-owned localized result; it does not write the shared status note from inspection catches.
+- Tests use the same internal source seam. There is no second test reducer, no source-text assertion, and no public API expansion.
+- `AddTorrentInspectionResultApplication` and its state/presentation types are internal. The Add sheet and view-model remain `@MainActor`; the result is applied inside `Task { @MainActor in ... }`.
+- The existing single `LatestInspectionState` generation owner is reused. No second inspection counter, parallel inspection state machine, sleep, debounce, delay, or timing workaround was added.
+- The failure boundary returns the exact localized failure while leaving the shared `connectionNote` value unchanged. The dedicated preservation test covers this boundary at `TorrentinoAppTests.swift:607-646`.
+- The sheet stays open when inspection or commit fails and calls `dismiss()` only on successful commit at `AddTorrentSheet.swift:221-241`.
+
+**11. Test-Quality Assessment**
+
+- `testProductionAddInspectionOlderFailureAfterNewerSuccessIsIgnored` verifies accepted latest preview, cleared error, stopped inspection, commit availability, and unchanged full presentation after stale failure.
+- `testProductionAddInspectionOlderSuccessAfterNewerFailureIsIgnored` verifies the exact latest failure, absent preview, stopped inspection, unavailable commit, and rejection of stale success.
+- `testProductionAddInspectionKeepsExactLatestFailureAcrossInterleaving` verifies older success, latest exact failure, and stale failure interleaving without generic replacement.
+- `testProductionAddInspectionSeamRequiresCurrentGenerationAcceptance` verifies stale rejection before any visible presentation mutation, followed by current-generation acceptance.
+- The production `AddTorrentInspectionPresentation` is `Equatable`; stale-result assertions include its selected-path set as part of the complete presentation state. The production seam explicitly selects all preview paths on success and clears them on failure at `FixtureLibrary.swift:377-385`.
+- The tests assert exact localized failure values, preview, inspecting state, commit availability, generation result, and connection-note preservation where a result is applicable.
+- ETA/health tests assert final `etaText`, not only helper arithmetic. They are deterministic, local, and use no sleeps, external network, production Application Support, global mutable state, or filesystem residue. The snapshot helper only uses the isolated TestProfile path as a value in the DTO.
+- No new test duplicates production ETA logic or the Add presentation reducer. The full suite remains safe: 315/315 passed.
+
+**12. ETA/Health Authoritative Projection Matrix**
+
+| Case | Snapshot input | Final row assertion | Test |
+|---|---|---|---|
+| Healthy active download | healthy, running, downloading, positive rate | `etaSeconds == 4`; `etaText` is not unavailable | `TorrentinoAppTests.swift:328-338` |
+| Waiting for space | `waitingForSpace`, stale downloading activity, positive rate | nil ETA and localized em dash | `:410-425` |
+| Waiting for network | `waitingForNetwork`, stale downloading activity, positive rate | nil ETA and localized em dash | `:410-425` |
+| Paused | healthy, paused | nil ETA and localized em dash | `:340-358` |
+| Idle/stalled | healthy, idle with positive stale rate | nil ETA and localized em dash | `:340-358` |
+| Zero rate | healthy, running, downloading, zero rate | nil ETA and localized em dash | `:410-425` |
+| Complete | downloaded equals total | nil ETA and localized em dash | `:340-358` |
+| Downloaded above total | downloaded 600, total 500 | downloaded clamped to 500; no negative/overflow ETA; em dash | `:361-372` |
+| `Int64.max` at rate 1 | total `Int64.max`, rate 1 | nil ETA and em dash, never `0s` | `:374-408` |
+| Exact one-year horizon | total equals `maximumDisplayHorizonSeconds` | inclusive boundary returns valid ETA and non-unavailable text | `:374-408` |
+| One second beyond horizon | total equals maximum plus 1 | nil ETA and em dash | `:374-408` |
+
+All rows use `TorrentSnapshot -> TorrentListRowProjection(torrent:) -> etaSeconds/etaText`; no test calls the ETA helper directly. The authoritative health forwarding and final formatter boundary are therefore both covered.
+
+**13. Accepted-Behavior Regression Matrix**
+
+| Accepted behavior | Result | Evidence |
+|---|---|---|
+| One native sidebar toggle | PASS | `NavigationSplitView` remains the singular sidebar owner; no custom sidebar toolbar item was reintroduced. |
+| Controlled persistent files-pane divider | PASS | `ControlledNSSplitView` and coordinator remain singular; AppStorage is the one global baseline. |
+| User-drag-only persistence | PASS | Persistence callback requires the real tracking flag; programmatic updates require `isApplyingFixedHeight == false`. |
+| Selection/loading/removal never moves divider | PASS | Both hosted panes remain mounted; view-model file-load invalidation is unchanged from accepted UI behavior; bridge regression tests pass. |
+| Choose File and Destination pickers | PASS | One mode-driven importer remains at `AddTorrentSheet.swift:145-185`. |
+| Security-scoped local file access | PASS | `readTorrentData` starts and stops security-scoped access off the main actor at `TorrentListViewModel.swift:581-587`. |
+| Latest-only inspection and exact localized errors | PASS | Generation gate and attempt-owned `Result` are in the production path. |
+| Preflight and initial file selection | PASS | Commit maps every preview file to `.normal` or `.skip` and preserves agent inspection identity. |
+| Failure keeps sheet open; success dismisses | PASS | Only successful commit branches call `dismiss()`. |
+| DnD and Finder open-document routing | PASS | Shared `.torrent` gate and existing Finder route remain unchanged. |
+| Import deduplication | PASS | Existing recent-URL gate remains at `TorrentListViewModel.swift:81-95`. |
+| Independent file checkboxes and bulk selection | PASS | Existing bindings and Select All/Deselect All paths remain; full suite green. |
+| File opening and Reveal in Finder | PASS | Existing activation routes remain in `TorrentListView.swift` and view-model. |
+| Existing torrent-only Remove | PASS | Context menu still uses `deleteFiles: false`; queued remove-with-files remains absent. |
+| Live rates and progress | PASS | Table continues to render authoritative snapshot rates/progress. |
+| Downloaded `X of Y` | PASS | Row projection uses authoritative downloaded/effective total bytes; EN/RU catalog entries compile. |
+| Health-aware bounded ETA | PASS | Snapshot health, activity, desired state, rate, clamping, horizon, and final em-dash formatting are covered. |
+| AppIcon | PASS | Asset catalog compiles and prior accepted project wiring remains limited to AppIcon resources/settings. |
+| English/Russian localization | PASS | New accepted ETA/downloaded keys have EN and RU values with matching placeholders. |
+| Accessibility labels | PASS | Existing labels remain; full app-target suite passes. VoiceOver visual behavior remains manual. |
+
+**14. Stability-Freeze Verification**
+
+| Frozen surface | Verification |
+|---|---|
+| Engine files | No `git diff` under `Native/TorrentinoEngineAgent`. |
+| Bridge/adapter | No `git diff` under `Native/TorrentinoEngineBridge`. |
+| IPC vocabulary | No `git diff` under `Native/TorrentinoIPC`. |
+| Persistence and transport | No changed persistence, transport, or EngineClient path. |
+| Project configuration | FIX-002 did not change project configuration. The current pbxproj diff is the earlier accepted AppIcon wiring only. |
+| Localization | FIX-002 did not change localization. The current catalog entries are earlier accepted UI-004 work. |
+| Production logging | No logging or OSLog changes in the four FIX-002 files. |
+| Functionality | No new feature and no queued remove-with-files implementation. |
+| Dependencies | No new dependency, package, Homebrew runtime dependency, or App Sandbox change. |
+| ADR-019 | UI remains presentation-only; authoritative health/activity/rates remain engine-owned. |
+| ADR-020 | Feature freeze, evidence-first testing, and product-read-only stabilization boundary are respected. |
+
+**15. Legacy Detection Result**
+
+- `git status --short -- Legacy/Tauri`: empty.
+- `git diff --name-only -- Legacy/Tauri`: empty.
+- Legacy/Tauri was not opened, read, edited, restored, staged, or used as an implementation reference.
+
+**16. Findings Ordered by Severity**
+
+No new findings. The previous P1 connection-note race, P1 production-path test gap, P2 authoritative ETA/health projection test gap, and workflow whitespace gate are resolved. The known cold-build dependency-order issue is not attributable to FIX-002 and is recorded under warning assessment/residual risk only.
+
+**17. Residual Risks and Manual-Only Checks**
+
+- Physical mouse-event divider dragging and quit/relaunch height persistence remain GUI/manual checks; the existing AppKit seam and focused tests are green.
+- Real concurrent file-picker interaction, VoiceOver announcements, EN/RU visual fit, Finder/DnD live behavior, AppIcon appearance, and 500-row rendering remain manual or existing workflow evidence.
+- The Orchestrator's sterile fresh-build evidence, including operational status/hello/health, empty snapshot, ready lifecycle, and successful live `inspectAddSource`, was accepted as additional evidence and was not repeated by this read-only review.
+- The known undeclared `TorrentinoEngineAgentTests` dependency can make the first cold focused invocation fail before test collection; the required clean build followed by the exact focused command produced the final 41/41 result. This is pre-existing project hygiene, not a FIX-002 defect.
+- The dedicated engine-stabilization campaign remains the next functional evidence gate under ADR-020.
+
+**18. Coder Fix List**
+
+N/A. Verdict is `APPROVED`; no Coder fix is requested.
+
+**19. Result**
+
+`RESULT: APPROVED`
+
+**20. Next Actor**
+
+`next_actor: orchestrator`
+
+### [WP13-UI-001-004-REVIEW-FIX-002-REFRESH-DONE] Orchestrator sterile fresh-build gate (2026-08-10)
+- Coder handoff `[WP13-UI-001-004-REVIEW-FIX-002-DONE]` landed with 315/315 full tests, 41/41 focused app tests, clean build, clean diff check, and the strict UI/test whitelist satisfied. Engine, bridge, IPC, persistence, production logging, and queued features were untouched.
+- Old runtime shutdown: app quit through `osascript`; `--cli shutdown` returned `OK shutdown acknowledged=true`; no `Torrentino` or `TorrentinoEngineAgent` process remained.
+- Sterile store reset: moved `~/Library/Application Support/com.torrentino.app/Engine` to `~/.Trash/torrentino-engine-backup-20260810-160720/`. Nothing was hard-deleted and downloaded content was not touched.
+- Fresh build: `xcodebuild clean build -quiet -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData` completed with exit 0.
+- Relaunch: opened `build/DerivedData/Build/Products/Debug/Torrentino.app`.
+- Operational proof: `--cli status` returned `service=enabled` / `STATE operational` (pid 13252); `--cli hello` and `--cli health` returned OK with `network=satisfied`; empty-store `--cli snapshot` completed successfully.
+- Agent-log proof: fresh bootstrap at `2026-08-10T10:37:56Z` reached `unregistered → starting → openingStore → restoringSession → reconcilingRecords → ready`; schema v1-v3 migration, event subscription, restore `rebuilt=0 skipped=0`, transfer-lane wiring, and successful snapshot fetch are present. A subsequent live `inspectAddSource` completed successfully.
+- Under `[WP13-STABILITY-FREEZE-001]`, this green gate authorizes formal Reviewer re-review immediately. Tester stabilization remains blocked until APPROVED.
+
+### [WP13-UI-001-004-REVIEW-FIX-002-DONE]
+
+1. Root cause of stale `connectionNote` mutation: `TorrentListViewModel.inspectTorrentFile` wrote each inspection failure into the shared visible `connectionNote` inside its catch paths before the Add sheet accepted the attempt generation. An older completion could therefore overwrite status owned by the current connection or state.
+2. Production ownership correction: inspection now returns only its attempt-owned `LatestInspectionState<AddTorrentPreview>.Result`. The production failure seam receives the shared note only as a preservation boundary and leaves it untouched. Non-inspection add, lifecycle, snapshot, file, removal, and connection-note paths remain unchanged.
+3. Production Add result-application seam: internal `AddTorrentInspectionResultApplication.apply` in `FixtureLibrary.swift` performs the existing `LatestInspectionState.resolve` generation acceptance and applies success/failure preview, exact error, selected paths, inspecting state, and commit projection only after acceptance. `AddTorrentInspectionResultApplication.failure` preserves the shared note while returning the exact failure result.
+4. Production and tests use the same seam: `AddTorrentSheet.beginInspection` calls `AddTorrentInspectionResultApplication.apply`; `TorrentListViewModel.inspectTorrentFile` calls `AddTorrentInspectionResultApplication.failure`; the app tests call those same production-owned seams. No public API or second generation counter was added.
+5. Removed obsolete test logic: deleted the test-only `InspectionPresentation` and `inspectionPresentation` reducer helper. Direct `LatestInspectionState<String>` helper tests were replaced by production seam tests using `AddTorrentPreview` outcomes. ETA tests no longer call `etaSeconds` directly.
+6. Production-path inspection results: `testProductionAddInspectionOlderFailureAfterNewerSuccessIsIgnored` passed; generation B success stayed visible with no error, inspecting false, and commit available while stale A failure changed nothing. `testProductionAddInspectionOlderSuccessAfterNewerFailureIsIgnored` passed; B's exact localized failure stayed visible, preview remained absent, inspecting was false, and commit stayed unavailable while A success was rejected. `testProductionAddInspectionKeepsExactLatestFailureAcrossInterleaving` passed; the exact latest failure survived older success/failure interleaving without generic replacement. `testProductionAddInspectionSeamRequiresCurrentGenerationAcceptance` passed; an older result was rejected before the current result was accepted. `testProductionAddInspectionStaleFailureLeavesCurrentConnectionNote` passed; the current note and accepted B presentation remained unchanged after stale A failure.
+7. Authoritative ETA/health results: tests construct `TorrentSnapshot` values and then `TorrentListRowProjection(torrent:)`. Healthy running/downloading with positive rate returned 4 seconds and non-unavailable text. `waitingForSpace` and `waitingForNetwork` with stale positive activity/rate returned unavailable. Healthy paused, idle, and zero-rate downloading returned unavailable. Complete rows returned unavailable. Downloaded bytes above total were clamped to total with no negative ETA or overflow. `Int64.max` total at rate 1 returned unavailable rather than `0s`. The exact one-year horizon returned a valid ETA; one second beyond it returned unavailable. No formatter injection was needed; bounded row projection cases protect the final formatter boundary.
+8. Exact files changed by this lane: `Native/TorrentinoApp/Features/AddTorrentSheet.swift`, `Native/TorrentinoApp/Features/TorrentListViewModel.swift`, `Native/TorrentinoApp/Features/FixtureLibrary.swift`, `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`, and this permitted prepend in `AI_Workflow_Kit/docs/AI/FEEDBACK.md`. `STATE.yaml` was not modified.
+9. Accepted-behavior regression sweep: existing picker modes, security-scoped access, latest-only Add flow, localized failures, preflight, file selection, commit/dismiss behavior, DnD/Finder routing, import deduplication, file checkboxes and bulk selection, file opening/Finder reveal, torrent-only Remove, live rates/progress, downloaded amount, health-aware ETA, localization, accessibility, and split-view regression tests remain green. `TorrentListView.swift`, routing, localization, assets, project configuration, engine, bridge, IPC, persistence, transport, and production logging were not changed by this lane.
+10. Focused test command:
+    ```text
+    xcodebuild test \
+      -project Native/Torrentino.xcodeproj \
+      -scheme Torrentino \
+      -destination 'platform=macOS,arch=arm64' \
+      -derivedDataPath build/CoderFix002DerivedData \
+      -only-testing:TorrentinoAppTests
+    ```
+    Exact result: `** TEST SUCCEEDED **`; `41 passed, 0 failed, 0 skipped`.
+11. Full build command:
+    ```text
+    xcodebuild clean build \
+      -project Native/Torrentino.xcodeproj \
+      -scheme Torrentino \
+      -configuration Debug \
+      -destination 'platform=macOS,arch=arm64' \
+      -derivedDataPath build/CoderFix002DerivedData
+    ```
+    Exact result: `** CLEAN SUCCEEDED **` followed by `** BUILD SUCCEEDED **`.
+12. Full test command:
+    ```text
+    xcodebuild test \
+      -project Native/Torrentino.xcodeproj \
+      -scheme Torrentino \
+      -destination 'platform=macOS,arch=arm64' \
+      -derivedDataPath build/CoderFix002DerivedData
+    ```
+    Exact result: `** TEST SUCCEEDED **`; `315 passed, 0 failed, 0 skipped`.
+13. Warning assessment: no new warning attributable to this lane. Known output remains the AppIntents metadata warning (`No AppIntents.framework dependency found`), macOS 13 versus macOS 14 XCTest linker warnings, and the pre-existing `TorrentinoEngineAgentTests` missing explicit dependency warning. The initial cold focused build also exposed that existing dependency-order issue before the engine module was populated; after the required clean build, the exact focused command passed without project-file changes.
+14. `git diff --check`: pass with no output.
+15. Strict whitelist result: lane product/test edits are limited to `AddTorrentSheet.swift`, `TorrentListViewModel.swift`, `FixtureLibrary.swift`, and `TorrentinoAppTests.swift`. Existing Orchestrator-owned workflow files and earlier accepted Native files remain dirty and were not reverted. No Legacy/Tauri working-tree diff exists; Legacy was not read or touched.
+16. Graphify update result: `graphify update .` completed successfully with `5,267 nodes`, `12,938 edges`, and `368 communities`; the graph view was aggregated to `368 community nodes` and `991 cross-community edges`. Existing warnings were the graphify skill/package version mismatch, two asset `Contents.json` files producing zero AST nodes, stale community labels (`365` saved labels versus `368` communities), and `122` fail-closed retained nodes from six files.
+17. Residual risks: full GUI timing, real concurrent file-picker interaction, physical divider drag/relaunch persistence, VoiceOver/localization visual fit, and live engine behavior remain manual or owned by the existing workflow gates. The formatter-invalid path did not require injection because the authoritative row projection rejects out-of-range durations before formatting.
+18. `RESULT: waiting_review`.
+19. `next_actor: orchestrator`.
+
+### [WP13-UI-001-004-REVIEW-FIX-002-OPEN] Orchestrator routing after re-review (2026-08-09)
+- Reviewer verdict `[WP13-UI-001-004-REVIEW-002]`: `CHANGES_REQUESTED`. Clean build succeeded; 314/314 full tests and 40/40 focused app tests passed; no new product warning; Native scope and stability freeze were respected.
+- Remaining production defect: a stale inspection failure can mutate shared visible `connectionNote` before the Add sheet accepts/rejects its generation.
+- Remaining evidence defects: inspection tests exercise helper plumbing rather than the production result-application path; ETA/health tests do not exercise authoritative `TorrentSnapshot → TorrentListRowProjection` boundaries.
+- Orchestrator-owned gate blocker is closed: the trailing blank line was removed from `STATE.yaml`; overall `git diff --check` now passes with no output.
+- Opened narrow Coder lane `[WP13-UI-001-004-REVIEW-FIX-002]`. Product/test whitelist: `AddTorrentSheet.swift`, `TorrentListViewModel.swift`, `FixtureLibrary.swift`, and `TorrentinoAppTests.swift`. No engine, bridge, IPC, persistence, project, localization, logging, or feature changes.
+- Feature freeze and ADR-020 remain active. The queued remove-with-files feature stays deferred. Dedicated engine-stabilization Tester campaign remains blocked until Reviewer APPROVED.
+
+### [WP13-UI-001-004-REVIEW-002] Code Re-review
+
+**1. Verdict**
+
+`CHANGES_REQUESTED`
+
+The original shared `lastAddError` lookup race is removed from the Add sheet, the ETA arithmetic and health gate are present, and the production split-view ownership is singular. Approval is blocked by one remaining attempt-scoping race in the visible connection note, insufficient production-call-path coverage for the inspection fix, incomplete snapshot-to-row coverage for the ETA/health fixes, and an unrelated Orchestrator-owned `git diff --check` failure.
+
+**2. Baseline and Exact Scope**
+
+- Baseline is HEAD `1167751562539e56c451a7943fee4897170af1a4` (`1167751`), subject `chore(torrentino): purge backup branches/tags — single-version policy (2584755)`.
+- `git diff --stat -- Native` verified exactly 8 tracked files, 1,014 insertions, and 184 deletions.
+- The tracked Native paths are `Native/Torrentino.xcodeproj/project.pbxproj`, `Native/TorrentinoApp/Features/AddTorrentSheet.swift`, `FixtureLibrary.swift`, `TorrentDropRouting.swift`, `TorrentListView.swift`, `TorrentListViewModel.swift`, `Native/TorrentinoApp/Resources/Localizable.xcstrings`, and `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`.
+- The only untracked Native paths are the expected AppIcon catalog: `Assets.xcassets/Contents.json`, `AppIcon.appiconset/Contents.json`, and `AppIcon.appiconset/AppIcon.png`.
+- Workflow files are also dirty (`FEEDBACK.md`, `ORCHESTRATOR.md`, `STATE.yaml`, and `DECISIONS.md`) and were treated as Orchestrator-owned context, not product scope. `STATE.yaml` was read and was not modified by this review.
+- No unexpected product path was found. No product file outside the expected Native set was added or changed.
+
+**3. Graphify Query and Result**
+
+- The mandatory query was run before opening source files:
+
+```text
+graphify query "Re-review the four WP13 UI-001-004 fixes: attempt-scoped Add inspection outcomes, bounded health-aware ETA, and actual ControlledNSSplitView drag-versus-programmatic regression coverage"
+```
+
+- Graphify was available and returned a BFS depth-2 scoped graph with 497 nodes. The returned navigation included `AddTorrentSheet`, `LatestInspectionState`, `TorrentListViewModel`, `TorrentListRowProjection`, `ControlledNSSplitView`, `ControlledNSSplitViewCoordinator`, `TorrentHealth`, and all named focused tests.
+- The CLI warned that the loaded graphify skill is 0.9.20 while the installed package is 0.9.33. Traversal completed successfully; this version mismatch did not prevent navigation.
+- The result was truncated after 48 of 497 nodes by the default output budget. Source navigation stayed within the returned scoped nodes and the explicitly required workflow files.
+
+**4. Build and Test Evidence**
+
+Full clean build command:
+
+```text
+xcodebuild clean build -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/ReviewerRecheckDerivedData
+```
+
+- Exact result: `** CLEAN SUCCEEDED **` followed by `** BUILD SUCCEEDED **`.
+- The built artifact contains `AppIcon.icns` (`Mac OS X icon`) and `CFBundleIconName = AppIcon` / `CFBundleIconFile = AppIcon`.
+
+Full test command:
+
+```text
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/ReviewerRecheckDerivedData
+```
+
+- Exact result: `** TEST SUCCEEDED **`.
+- `xcresulttool` summary: 314 passed, 0 failed, 0 skipped, 0 expected failures, total 314.
+
+Focused app-target command:
+
+```text
+xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/ReviewerRecheckDerivedData -only-testing:TorrentinoAppTests
+```
+
+- Exact result: `** TEST SUCCEEDED **`.
+- `xcresulttool` summary: 40 passed, 0 failed, 0 skipped, 0 expected failures, total 40.
+- The focused run passed all four overlapping-inspection tests, all five named ETA/health tests, and all three `ControlledNSSplitView` tests.
+
+**5. Warning Assessment**
+
+- The clean build emitted one generic pre-existing warning: `Metadata extraction skipped. No AppIntents.framework dependency found.`
+- The full test run emitted the known macOS 13-versus-macOS 14 XCTest linker warnings for the existing test targets.
+- The full test run emitted the known warning that `TorrentinoEngineAgentTests` is missing an explicit dependency on `TorrentinoEngineAgent`.
+- No warning points to a changed Swift source line, the new ETA formatter, the AppIcon catalog, or the changed localization entries. The asset compiler completed without an asset warning.
+- No new warning attributable to this UI diff was found. The warnings are known project/toolchain warnings and were not waived blindly; the current output identifies their existing targets and unchanged dependency/settings boundaries.
+
+**6. `git diff --check`**
+
+- Required command `git diff --check`: **FAIL** with exactly:
+
+```text
+AI_Workflow_Kit/docs/AI/STATE.yaml:381: new blank line at EOF.
+```
+
+- Product-only command `git diff --check -- Native`: **PASS** with no output.
+- The failure is outside the product diff and is Orchestrator-owned. This reviewer did not alter `STATE.yaml` as prohibited. The overall gate is nevertheless not green, so it prevents `APPROVED` under the review rules.
+
+**7. Resolution Matrix for Findings 1-4**
+
+| Prior finding | Production resolution | Evidence result |
+|---|---|---|
+| 1. Attempt-scoped Add inspection outcome | `inspectTorrentFile` returns `LatestInspectionState.Result`, and the sheet resolves that result before applying preview/error state. The `lastAddError` value is no longer read after the inspection await. A shared `connectionNote` mutation still occurs before generation acceptance. | **PARTIAL**. The original sheet error-payload race is fixed, but stale failures can still alter the visible status note, and tests do not exercise the production inspection call path. |
+| 2. Bounded and formatter-valid ETA | Remaining bytes are clamped, subtraction and rounding use safe integer bounds, the named one-year horizon is checked before conversion, the formatter is cached, and invalid/zero-equivalent output maps to the localized unavailable marker. | **Production PASS; test evidence PARTIAL**. Boundary math is covered, but the extreme input is not asserted through the complete row projection and formatter-invalid behavior is not exercised. |
+| 3. Authoritative health gate | `TorrentListRowProjection.init(torrent:)` passes `torrent.health`; ETA requires `.healthy`, running, downloading, positive rate, positive total, positive remaining bytes, and an in-range duration. | **Production PASS; test evidence PARTIAL**. The health guard is tested with stale positive activity/rate, but the test calls the helper directly rather than projecting an authoritative `TorrentSnapshot`. |
+| 4. ControlledNSSplitView bridge-level coverage | There is one `ControlledNSSplitView` and one coordinator in `FixtureLibrary.swift`; `ControlledFilesSplitView` uses them. Programmatic updates are guarded by `isApplyingFixedHeight`; persistence requires the same tracking flag used by `mouseDown`; the delegate is weak. | **PASS for the requested narrow seam**. The real coordinator callback and lifetime boundary are exercised. Physical pointer-event and full restart behavior remain manual checks. |
+
+**8. Test-Quality Assessment**
+
+- The new tests are deterministic, contain no sleeps, use no external network, and create no filesystem residue. AppKit tests run on `MainActor`; the existing `TestProfileCase` isolation remains intact.
+- The inspection tests at `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:625-670` instantiate only `LatestInspectionState<String>`. They never call `AddTorrentSheet.beginInspection`, `TorrentListViewModel.inspectTorrentFile`, or a deterministic production completion seam.
+- `inspectionPresentation` at `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:810-828` duplicates the sheet's success/failure projection logic. Removing the production `inspectionState.resolve` call would leave these tests green, so they do not defend the actual production ownership path.
+- The ETA boundary test at `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:394-431` tests `etaSeconds` and `etaText` separately. It does not construct a `TorrentListRowProjection` with `Int64.max` total and rate 1 and assert the displayed row value.
+- The health test at `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:434-481` passes health directly to `etaSeconds`. It would remain green if `TorrentListRowProjection.init(torrent:)` stopped forwarding authoritative snapshot health.
+- The split-view seam is narrow and legitimate: `withUserDividerTracking` drives the exact flag used by `mouseDown`, and `splitViewDidResizeSubviews` is the production coordinator method. The fallback direct callback means this is not a full pointer-event test; that limitation is recorded as manual residual risk rather than a duplicate implementation.
+- A green 314-test suite and green 40-test app target therefore do not close the review while the production-path and projection-path tests above remain weak.
+
+**9. Full Accepted-Behavior Regression Matrix**
+
+| Accepted behavior | Result | Evidence / limitation |
+|---|---|---|
+| Exactly one native sidebar toggle | PASS | `NavigationSplitView` remains at `TorrentListView.swift:22`; the custom navigation toolbar item is absent. |
+| User-controlled global files-pane height | PASS | `@AppStorage` baseline and controlled split view are present at `TorrentListView.swift:19,127-162,616-660`. |
+| Divider persistence across full restart | STATIC PASS; MANUAL | Single existing AppStorage key and AppIcon build are intact; real quit/relaunch was Orchestrator/Human gate evidence, not rerun here. |
+| Selection/loading/removal never moving the divider | STATIC PASS; MANUAL | Both panes stay mounted and the view model invalidates stale file loads; real GUI transitions remain manual. |
+| Add sheet Choose File and Destination | PASS | One mode-driven importer remains at `AddTorrentSheet.swift:148-187`; destination handling is unchanged. |
+| Latest-only inspection | PARTIAL | Sheet preview/error/spinner/commit projection is generation-gated, but the stale `connectionNote` path and production-path test gap remain. |
+| DnD torrent-file routing | PASS | Existing `handleDrop` and shared `TorrentDropRouting` gate remain intact. |
+| Finder open-document/double-click routing | PASS | Existing `presentIncomingTorrent` and row/file activation routes are unchanged. |
+| Import deduplication | PASS | Existing `recentImportURLs` gate remains in `TorrentListViewModel.swift:81-95`. |
+| No empty-window proliferation | PASS by diff review | No new window creation or presentation path was introduced. |
+| Independent file checkboxes | PASS by diff review and full suite | Existing `FileRow` binding and selection command path remain unchanged. |
+| Select All and Deselect All | PASS by diff review and full suite | Existing files header actions remain in `TorrentListView.swift:340-350`. |
+| Initial file selection and priority path | PASS by diff review | Add-sheet selection mapping remains at `AddTorrentSheet.swift:210-215`. |
+| Selected/effective total | PASS by diff review | The row continues using authoritative `progress.totalBytes`. |
+| Torrent-row Reveal in Finder | PASS by diff review | Existing double-click/context routes remain at `TorrentListView.swift:168-175,213-216,243-246`. |
+| File-row default-app opening | PASS by diff review | Existing `openSelectedFile` route remains unchanged. |
+| Existing torrent-only Remove | PASS | Existing context-menu Remove remains at `TorrentListView.swift:236-239`; queued remove-with-files remains absent and out of scope. |
+| Live rates and progress | PASS by diff review and full suite | Existing authoritative snapshot fields and status projection remain in use. |
+| Downloaded `X of Y` | PASS production; localization present | `TorrentListRowProjection` uses downloaded bytes and effective total; EN/RU catalog entries compile. |
+| ETA for valid healthy downloads | PASS production; test evidence partial | Healthy active positive-rate path returns bounded ETA; complete row projection is not boundary-tested end to end. |
+| Em dash for unavailable ETA | PASS production; test evidence partial | Nil, out-of-range, empty, and zero-equivalent guards exist; formatter-unavailable injection is not tested. |
+| Valid AppIcon catalog and app-target wiring | PASS | Catalog compiled to `AppIcon.icns`; pbxproj changes are limited to app-target resource membership and Debug/Release icon setting. |
+| EN/RU localization | PASS static | New ETA/downloaded keys have both locale entries and matching placeholders; visual locale fit remains manual. |
+| Existing accessibility labels | PASS by diff review; MANUAL | Existing labels remain; VoiceOver verification of new columns was not rerun. |
+
+**10. Stability-Freeze and Target-Scope Verification**
+
+- No changed path is under `Native/TorrentinoEngineAgent`, `Native/TorrentinoEngineBridge`, `Native/TorrentinoIPC`, `Native/TorrentinoApp/EngineClient`, persistence, transport, or QA production paths. The corresponding `git diff --name-only` detection command returned empty.
+- No engine behavior, bridge adapter, IPC vocabulary, persistence behavior, transport behavior, or speculative production logging changed.
+- No new runtime dependency, App Sandbox setting, or Homebrew runtime dependency was introduced.
+- The project-file edit is the pre-existing authorized AppIcon wiring only; no test dependency or engine target setting changed.
+- The queued `Remove Torrent and Move Files to Trash...` capability is absent and is not a finding.
+- The only product/test working-tree changes are the eight tracked Native paths and the expected untracked AppIcon catalog. No new parallel split-view state machine was introduced.
+
+**11. Legacy/Tauri Ban Verification**
+
+- `git status --short -- Legacy/Tauri`: empty.
+- `git diff --name-only -- Legacy/Tauri`: empty.
+- Legacy/Tauri was not opened, read, edited, restored, staged, or used as implementation reference.
+
+**12. Findings Ordered by Severity**
+
+1. **P1 - Stale inspection failures still mutate a shared visible status note before generation acceptance.** `Native/TorrentinoApp/Features/TorrentListViewModel.swift:538-549` assigns `connectionNote` in every inspection failure catch before returning the attempt's result. `Native/TorrentinoApp/Features/AddTorrentSheet.swift:352-353` awaits that method and only then checks `inspectionState.resolve`. The note is displayed by `Native/TorrentinoApp/Features/TorrentListView.swift:454-465`. Reproduction: start inspection A, start inspection B, let B succeed, then let A fail. The sheet correctly ignores A for preview/error/commit state, but A still overwrites the visible status note after B was accepted. This violates the stale-completion and generation-before-visible-mutation contract. Correction must be narrowly bounded to making inspection return its result without mutating shared visible note state, or gating that note update with the same accepted generation; add a deterministic interleaving assertion for the note as well as the sheet projection.
+2. **P1 - Inspection tests prove only helper plumbing, not the production call path.** `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:625-670` tests a local `LatestInspectionState<String>` and a duplicated `inspectionPresentation` helper, while production behavior is at `Native/TorrentinoApp/Features/AddTorrentSheet.swift:336-363` and `Native/TorrentinoApp/Features/TorrentListViewModel.swift:521-550`. A regression removing the production `resolve` call or reintroducing attempt-agnostic presentation would not fail these tests. Correction must add a deterministic narrow seam that drives the actual production result application and asserts latest success/latest failure, exact error, stale completion rejection, spinner, preview, error, and commit availability without sleeps or source-text assertions.
+3. **P2 - ETA and health tests do not defend the complete authoritative row projection at the required boundaries.** `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:394-431` separates ETA math from text formatting, and `:434-481` passes health directly to the helper. A regression in `TorrentListRowProjection.init(torrent:)` at `Native/TorrentinoApp/Features/FixtureLibrary.swift:135-143` could stop forwarding `torrent.health` or fail to render the bounded result while all focused tests still pass. Correction must construct authoritative `TorrentSnapshot` values with stale positive rate/activity and non-healthy health, construct a row through `TorrentListRowProjection(torrent:)`, and assert exact-boundary, beyond-boundary, `Int64.max` rate-1, normal, zero-rate, complete, and unavailable-marker output. Add a formatter-invalid seam only where it can be tested without duplicating formatter implementation.
+4. **P2 gate blocker - Overall working-tree `git diff --check` is not clean.** `AI_Workflow_Kit/docs/AI/STATE.yaml:381` has a new blank line at EOF. This is not a Coder product finding and was not changed by the Reviewer, but the required overall command fails and the verdict rule requires a clean result. Orchestrator must resolve this workflow-owned whitespace state without modifying product behavior or having this Reviewer touch `STATE.yaml`.
+
+**13. Residual Risks and Manual-Only Checks**
+
+- The Orchestrator/Human fresh-build gate is reported green, but this review did not repeat real-torrent GUI actions that could modify Human Engine state.
+- Physical divider mouse tracking, selection/loading/removal transitions in a live window, and full quit/relaunch AppStorage persistence remain manual-only checks. The AppKit seam covers callback ownership, not the complete pointer event stream.
+- Real concurrent Choose File inspections with one localized failure and one success remain manual-only for the sheet; the deterministic tests must first be strengthened as described above.
+- EN/RU visual layout, VoiceOver announcements for the new ETA/downloaded columns, Finder/Dock icon appearance, DnD/Finder routing, and 500-row live rendering remain manual/performance checks.
+- The cached `DateComponentsFormatter` is only observed from the current UI projection path; future off-main use of the non-actor-isolated projection would require an explicit thread-safety decision.
+
+**14. Exact Coder Fix List**
+
+1. Remove or generation-gate the `connectionNote` mutation from `inspectTorrentFile`, preserving the exact attempt-owned `Result` and proving that an older failure cannot change the latest sheet or status-note projection.
+2. Replace helper-only inspection tests with a deterministic test of the production Add-sheet result-application path; do not use sleeps or duplicate the production presentation reducer in the test.
+3. Extend ETA/health tests through `TorrentSnapshot` and `TorrentListRowProjection(torrent:)`, including the required Int64 boundary and formatter-invalid cases where a narrow seam makes them testable.
+
+`RESULT: CHANGES_REQUESTED`
+`next_actor: orchestrator`
+
+### [WP13-STABILITY-FREEZE-001] Human priority: preserve engine behavior through evidence (2026-08-09)
+- Human decision: stop adding product functionality. Current priority is preserving the working engine and making regressions immediately diagnosable through deterministic tests and logs.
+- Feature freeze is ACTIVE. `[WP13-LIVE-REMOVE-FILES-001-QUEUED]` and all other capability/UI additions are deferred until Human explicitly lifts the freeze.
+- Production engine/logging changes are also frozen unless a failing test proves a concrete observability or behavior gap. “More logging” is not permission to touch hot engine files speculatively.
+- Safe workflow order: current UI review-fix → mandatory Reviewer re-review → dedicated Tester stabilization campaign. Tester may add tests, QA scripts, fixtures, and test documentation only; no product fixes. Any failure becomes evidence in `BUG_REPORT.md` and routes through Orchestrator to a narrowly scoped Coder → Reviewer → Tester cycle.
+- Coverage must be risk-based rather than raw test-count driven. Every new test must defend an observable contract and fail on a plausible regression; source-text assertions, duplicate checks, sleeps, external-network dependence, and Human Engine-state access are forbidden.
+- Stabilization matrix for the Tester campaign: agent lifecycle/launchd and shutdown veto; cold/unclean boot and monotonic lifecycle; persistence/WAL/schema/generation restore including R0; unified add/restore/resume/pump admission; health/activity/rates/progress convergence; XPC boot races, event ordering, reconnect and concurrent clients; bridge priorities/status/alerts; keep-data/delete-data removal and recovery; diagnostics bootstrap/rotation/redaction/command correlation; app snapshot/event projection; deterministic short stress loops and bounded soak preparation.
+- Every script must use an isolated TestProfile or `mktemp` store, emit a scenario ID and phase markers, preserve failure artifacts, print the exact relevant log window on failure, and return a truthful nonzero exit status. No script may mutate `~/Library/Application Support/com.torrentino.app/Engine` or downloaded Human content.
+- Re-review is authorized now because the Orchestrator fresh-build gate is green and Human has redirected the session from further feature work to formal stability verification. Tester remains blocked until Reviewer returns APPROVED.
+
+### [WP13-UI-001-004-REVIEW-FIX-001-REFRESH-DONE] Orchestrator sterile fresh-build gate (2026-08-09)
+- Coder handoff `[WP13-UI-001-004-REVIEW-FIX-001-DONE]` landed with build green, 314/314 tests green, focused bridge/inspection/ETA tests green, `git diff --check` green, and the strict whitelist satisfied.
+- Old runtime shutdown: app quit through `osascript`; `--cli shutdown` returned `OK shutdown acknowledged=true`; no `Torrentino` or `TorrentinoEngineAgent` process remained.
+- Sterile store reset: moved `~/Library/Application Support/com.torrentino.app/Engine` to `~/.Trash/torrentino-engine-backup-20260809-231358/`. Nothing was hard-deleted and downloaded content was not touched.
+- Fresh build: `xcodebuild clean build -quiet -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData` completed with exit 0.
+- Relaunch: opened `build/DerivedData/Build/Products/Debug/Torrentino.app`.
+- Operational proof: `--cli status` returned `service=enabled` / `STATE operational` (pid 86713); `--cli hello` and `--cli health` returned OK with `network=satisfied`; empty-store `--cli snapshot` completed successfully.
+- Agent-log proof: fresh bootstrap at `2026-08-09T17:44:23Z` reached `unregistered → starting → openingStore → restoringSession → reconcilingRecords → ready`; schema v1-v3 migration, event subscription, restore `rebuilt=0 skipped=0`, transfer-lane wiring, and successful snapshot fetch are present.
+- Human live checklist: (1) Choose File with a valid torrent resolves to the correct preview/error and does not get stuck; (2) a healthy active download shows a plausible ETA; paused/stalled/non-healthy state shows an em dash; (3) drag the files-pane divider, switch torrents, and remove/clear selection — the divider must not move; (4) fully quit/relaunch after setting the divider and confirm the height remains; (5) AppIcon, downloaded `X of Y`, DnD/Finder routing, checkboxes, bulk selection, file opening, Reveal, and existing Remove remain intact.
+- If Human accepts: mandatory next actor is Reviewer re-review, then Tester. If Human rejects: record exact symptoms and return to Coder. The queued remove-with-files feature remains unimplemented.
+
+### [WP13-UI-001-004-REVIEW-FIX-001-DONE]
+
+- Finding 1 root cause: `AddTorrentSheet` awaited an optional inspection result and then read shared `lastAddError`, so an interleaved inspection could replace the failure payload. Resolution: `inspectTorrentFile` now returns the attempt's `LatestInspectionState.Result`, including its exact localized failure. The sheet resolves that result against the generation before changing preview, error, spinner, or commit availability; stale completions are ignored without reading `lastAddError`.
+- Finding 2 root cause: a valid integer ETA could be too large for faithful `DateComponentsFormatter` presentation and render `0s`. Resolution: remaining bytes are clamped to the effective total, rounded integer arithmetic uses overflow reporting, durations are bounded by the named one-year `maximumDisplayHorizonSeconds` before `TimeInterval` conversion, and a cached formatter rejects nil, empty, or zero-equivalent output in favor of the localized em dash.
+- Finding 3 root cause: ETA projection did not receive the authoritative torrent health. Resolution: `TorrentListRowProjection` now passes `snapshot.health` and requires `.healthy`, running desired state, downloading activity, positive rate, valid positive total, positive remaining bytes, and an in-range duration.
+- Finding 4 root cause: existing tests covered only `FilesPaneSizing`; `TorrentListView.swift`'s actual AppKit bridge was not in the app test target. Resolution: the existing `ControlledNSSplitView` and coordinator ownership boundary now lives in the already test-compiled `FixtureLibrary.swift` and is used by `ControlledFilesSplitView` without a second split implementation. A narrow internal seam drives the same user-tracking flag used by `mouseDown`, then the real coordinator callback is exercised.
+- Exact files changed by this lane: `Native/TorrentinoApp/Features/AddTorrentSheet.swift`, `Native/TorrentinoApp/Features/TorrentListViewModel.swift`, `Native/TorrentinoApp/Features/FixtureLibrary.swift`, `Native/TorrentinoApp/Features/TorrentListView.swift`, `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`, and this prepend in `AI_Workflow_Kit/docs/AI/FEEDBACK.md`. `Localizable.xcstrings` was not changed by this lane.
+- Observable behavior preserved: the single mode-driven file importer, security-scoped reads, latest-only inspection, preflight, file selection, localized failures, open-on-failure sheet behavior, and dismiss-on-success commit flow remain intact. The global user-controlled files-pane baseline, drag-only persistence, window clamping, selection/loading/removal stability, native sidebar ownership, independent checkboxes, bulk file selection, activation/Finder reveal, existing Remove, downloaded `X of Y`, rates/progress, ETA column, and DnD/Finder routing remain on their existing paths. No engine state, fake health, bridge adapter, IPC, persistence, transport, or queued remove-with-files behavior was changed.
+- Focused regression tests added/updated: `testOverlappingInspectionsKeepOnlyLatestResult`, `testOverlappingInspectionsIgnoreOlderSuccessAfterLatestFailure`, `testLatestInspectionFailureKeepsItsOwnErrorAcrossOlderCompletions`, `testStaleInspectionCannotChangeLatestPresentationProjection`, `testTorrentListRowProjectionComputesActiveDownloadETA`, `testTorrentListRowProjectionHidesETAWhenStalledPausedOrComplete`, `testTorrentListRowProjectionClampsDownloadedBytesForETA`, `testTorrentListRowProjectionRejectsUnreasonableETADurations`, and `testTorrentListRowProjectionGatesETAOnAuthoritativeHealthAndActivity`.
+- ControlledNSSplitView bridge proof: `testControlledNSSplitViewUserDragInvokesPersistenceCallback` observes one persistence callback after user tracking; `testControlledNSSplitViewProgrammaticUpdatesNeverPersistOrMoveDivider` covers fixed-height application, window-resize clamping, selection/loading/empty/removal update cycles, and 20 repeated update cycles with no callback feedback loop and an unchanged stored baseline; `testControlledNSSplitViewCoordinatorLifetimeHasNoRetainCycle` proves the weak delegate/coordinator lifetime. Focused app-target execution: 40 passed, 0 failed, 0 skipped.
+- Full build command:
+  ```text
+  xcodebuild clean build -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/CoderReviewFixDerivedData
+  ```
+  Exact result: `** BUILD SUCCEEDED **`.
+- Full test command:
+  ```text
+  xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/CoderReviewFixDerivedData
+  ```
+  Exact result: `** TEST SUCCEEDED **`; xcresult summary: 314 passed, 0 failed, 0 skipped, 0 expected failures.
+- `git diff --check`: PASS with no output.
+- Strict whitelist: all product/test edits made by this lane are inside the five whitelisted product/test files listed above. No `Localizable.xcstrings` edit was required. The only workflow edit is this permitted FEEDBACK prepend. No new source files were created.
+- Graphify: `graphify update .` completed successfully and rebuilt the graph with 5,255 nodes, 12,884 edges, and 365 communities. Graphify reported the existing stale community-label set, 122 fail-closed retained nodes, and two asset `Contents.json` files with zero AST nodes; code graph extraction completed.
+- Residual risk: Human live validation is still required for the refreshed build's real torrent inspection and physical divider drag/relaunch behavior; the automated AppKit seam covers callback ownership rather than full pointer-event UX. Existing project warnings remain, including AppIntents metadata absence, macOS 13/14 XCTest link warnings, and the pre-existing missing explicit `TorrentinoEngineAgentTests` dependency warning.
+- Pre-existing or Orchestrator-owned working-tree changes were not reverted: `AI_Workflow_Kit/docs/AI/ORCHESTRATOR.md`, `AI_Workflow_Kit/docs/AI/STATE.yaml`, `Native/Torrentino.xcodeproj/project.pbxproj`, `Native/TorrentinoApp/Features/TorrentDropRouting.swift`, `Native/TorrentinoApp/Resources/Localizable.xcstrings`, and the untracked `Native/TorrentinoApp/Resources/Assets.xcassets/`. No current `Legacy/Tauri` diff was present, and Legacy was not read or touched.
+- `RESULT: waiting_review`
+- `next_actor: orchestrator`
+
+### [WP13-UI-001-004-REVIEW-FIX-001-OPEN] Orchestrator routing after CHANGES_REQUESTED (2026-08-09)
+- Reviewer verdict `[WP13-UI-001-004-REVIEW-001]`: `CHANGES_REQUESTED`. Build succeeded; 305/305 tests passed; `git diff --check` passed; four scoped findings remain.
+- Attempt accounting reached 3 (`2 + this changes-requested round`). Escalation decision: no Architect packet is needed because every finding is localized and the Reviewer supplied an exact bounded fix list. Scope is narrowed to those four findings and attempts are reset to 0 for a clean retry.
+- Coder lane `[WP13-UI-001-004-REVIEW-FIX-001]` is opened. Allowed product files: `AddTorrentSheet.swift`, `TorrentListViewModel.swift`, `FixtureLibrary.swift`, `TorrentListView.swift`, `TorrentinoAppTests.swift`, and `Localizable.xcstrings` only if an existing ETA string must be adjusted. No engine/bridge/IPC/persistence/project-file changes.
+- Required fixes: attempt-scoped Add inspection outcome; bounded/formatter-valid ETA conversion; authoritative healthy-state ETA gate; bridge-level `ControlledNSSplitView` regression coverage for real drag versus programmatic/selection/loading/removal changes.
+- `[WP13-LIVE-REMOVE-FILES-001-QUEUED]` remains queued and MUST NOT be implemented in this fix lane.
+- After Coder handoff: Orchestrator sterile fresh-build gate → Human live check → mandatory Reviewer re-review → mandatory Tester. Do not bypass any role.
+
+### [WP13-UI-001-004-REVIEW-001] Code Review
+- Verdict: CHANGES_REQUESTED
+
+**Scope and baseline reviewed**
+- Baseline: complete product working-tree diff against HEAD `1167751562539e56c451a7943fee4897170af1a4` (`1167751`).
+- The required tracked Native diff was verified as 8 files, 642 insertions, and 170 deletions.
+- The untracked `Native/TorrentinoApp/Resources/Assets.xcassets/` catalog was inspected separately, including both `Contents.json` files and the source-derived `AppIcon.png`.
+- Reviewed the workflow sources of truth: `STATE.yaml`, `FEEDBACK.md`, `ORCHESTRATOR.md`, and `TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md`.
+- Reviewed the complete changed source/test/project/localization diff, the unchanged Finder/openURL routing boundary, authoritative engine projection paths, and the generated AppIcon bundle output.
+- Workflow-document changes in `AI_Workflow_Kit/docs/AI/` were treated as orchestration state and not as product findings. The queued `[WP13-LIVE-REMOVE-FILES-001-QUEUED]` request was not reviewed as an implementation requirement.
+
+**Graphify query/result**
+- The mandatory query was run before opening source files:
+  ```text
+  graphify query "Review the accumulated WP-13 UI-001 through UI-004 working-tree changes: split-pane ownership and persistence, Add-sheet latest-inspection state, torrent row downloaded bytes and ETA projection, AppIcon wiring, DnD/Finder routing, localization, and regression boundaries"
+  ```
+- Graphify was available. It returned a BFS depth-2 scoped graph with 743 nodes, including `AddTorrentSheet`, `LatestInspectionState`, `TorrentListViewModel`, `ControlledNSSplitView`, `TorrentListRowProjection`, `TorrentDropRouting`, the relevant tests, and the UI-003/UI-004 checkpoints. The CLI warned that the installed package was 0.9.33 while the loaded skill was 0.9.20; traversal still completed and was used as the source-navigation scope.
+
+**Build command and exact result**
+- Command:
+  ```text
+  xcodebuild clean build -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/ReviewerDerivedData
+  ```
+- Exact result: `** BUILD SUCCEEDED **`.
+- The generated bundle contains a valid `AppIcon.icns`; `file`, `iconutil`, and `plutil` confirmed the macOS icon and `CFBundleIconName = AppIcon` / `CFBundleIconFile = AppIcon`.
+
+**Test command and exact result**
+- Command:
+  ```text
+  xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/ReviewerDerivedData
+  ```
+- Exact result: `** TEST SUCCEEDED **`.
+- The xcresult summary reports 305 passed, 0 failed, 0 skipped, and 0 expected failures.
+
+**New-warning result**
+- No warning was attributable to the UI-001/UI-004 product diff or the AppIcon catalog. The asset compiler completed without an asset warning.
+- The build emitted the existing generic `appintentsmetadataprocessor` warning: `Metadata extraction skipped. No AppIntents.framework dependency found.` No AppIntents dependency or related build setting was changed here.
+- The test run emitted existing XCTest macOS-13-versus-macOS-14 link warnings and the known `TorrentinoEngineAgentTests` missing explicit dependency warning. This diff adds only the app resource/icon entries and Debug/Release app icon setting; it does not alter test target dependencies or deployment settings.
+- These warnings remain residual project hygiene, but they are not new warnings attributable to this review scope.
+
+**`git diff --check` result**
+- Required command: `git diff --check`
+- Exact result: PASS with no output.
+
+**Findings ordered by severity**
+1. **P1 - Latest inspection failures still read shared, attempt-agnostic error state.** `Native/TorrentinoApp/Features/AddTorrentSheet.swift:349-360` awaits `inspectTorrentFile`, then reads `viewModel.lastAddError` at line 357 before accepting the generation at line 358. Every concurrent inspection writes that shared property in `Native/TorrentinoApp/Features/TorrentListViewModel.swift:521-550` (including success clearing it at line 537 and failure writes at lines 540, 544, and 548). Because the MainActor continuation resumes after the `await`, an older completion can write between the latest attempt's return and line 357. The latest failure can therefore display an older failure or the generic fallback. `LatestInspectionState` correctly rejects the old preview/error mutation, but it does not protect the error string lookup itself. This violates the latest-only error contract and the stated reason for eliminating the shared inspection race.
+2. **P2 - Extreme ETA conversion can render a nonsensical `0s`.** `Native/TorrentinoApp/Features/FixtureLibrary.swift:200-216` safely computes the integer quotient, but converts the resulting `Int64` directly to `TimeInterval` and hands it to `DateComponentsFormatter`. On the review host, `DateComponentsFormatter.string(from: TimeInterval(Int64.max))` returns `0s`. An active projection with `effectiveTotalBytes = Int64.max`, `downloadedBytes = 0`, and `downloadBytesPerSec = 1` therefore returns `etaSeconds == Int64.max` but displays `0s`, violating numeric conversion safety and unreasonable-duration handling. The current tests at `TorrentinoAppTests.swift:327-373` do not cover this boundary.
+3. **P2 - ETA projection omits authoritative health from the availability gate.** `Native/TorrentinoApp/Features/FixtureLibrary.swift:134-141` passes only desired state, activity, and rate into the ETA calculation; the guard at lines 192-194 cannot distinguish a healthy active transfer from a `.waitingForSpace` or other non-healthy snapshot that still reports `.downloading` and a positive/stale rate. The authoritative status path preserves activity and health independently (`Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift:1462-1464` and `1523-1533`). This can expose an ETA for a transfer that is otherwise unavailable, contrary to the active-only/em-dash contract. Add the minimum health gate required by the existing state model and cover a non-healthy active snapshot.
+4. **P2 - The central AppKit divider bridge has no automated regression coverage.** `Native/TorrentinoApp/Features/TorrentListView.swift:616-760` introduces callback ownership and feedback-loop guards (`isTrackingUserDivider`, `isApplyingFixedHeight`, and `onUserResize`), but the new tests at `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift:427-525` exercise only pure `FilesPaneSizing` functions. They do not exercise the actual `NSSplitView` delegate, distinguish a real divider drag from programmatic/window resizing, or verify that selection/loading/removal updates leave the hosted split position untouched. The previously reported failures were native split-view behavior, so helper-only tests do not defend the observable contract or the callback lifetime/feedback-loop boundary.
+
+**Contract matrix: UI-001 through UI-004**
+| Contract | Result | Evidence and review status |
+|---|---|---|
+| UI-001 sidebar ownership | PASS | `NavigationSplitView` remains in `TorrentListView.swift:22`; the custom `.navigation` sidebar button is gone, leaving the native window-chrome control. |
+| UI-001 controlled/persisted divider | PASS with test gap | One global `@AppStorage` baseline, permanently mounted split children, native drag-only persistence, non-persisting programmatic clamp, and disabled collapse are present at `TorrentListView.swift:19`, `127-162`, and `616-760`. Finding 4 covers missing bridge-level regression tests. |
+| UI-002 selection/removal/file-load stability | PASS | Height has no path from file count/loading/selection; `TorrentListViewModel.swift:907-990` invalidates stale file pages and errors on selection, directory, and removal changes. |
+| UI-003 latest-only Add inspection | CHANGES_REQUESTED | Generation gating protects `preview`, visible error, spinner, and commit availability at `AddTorrentSheet.swift:336-360`, but finding 1 shows the shared `lastAddError` race remains. DnD/Finder/Add preview routing remains on the existing path. |
+| UI-004 AppIcon wiring | PASS | The untracked catalog is valid and source-derived; `project.pbxproj:26,271,645-647,987-994,1256-1304` gives the catalog and `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` only to the app target, with no duplicate resource entry. |
+| UI-004 downloaded amount | PASS | `TorrentListRowProjection` uses authoritative snapshot `downloadedBytes` and effective `progress.totalBytes`; the engine-side effective-total and downloaded clamping path was verified in `TransferCoordinator.swift:1194-1212,2131-2153`. EN/RU format strings are present and compile. |
+| UI-004 ETA | CHANGES_REQUESTED | Normal active, paused, stalled, complete, zero-rate, and invalid-total branches are present, but findings 2 and 3 leave extreme conversion and non-healthy active states uncovered. |
+| DnD/Finder/openURL regression boundary | PASS | Window drops still call `importIncomingTorrent`; Finder open-document still calls `presentIncomingTorrent`; the Add sheet still uses one mode-driven importer; deduplication and magnet behavior remain unchanged. |
+| Existing files-pane behavior | PASS | Independent checkboxes, Select All/Deselect All, selection/priorities, selected totals, file opening, Finder reveal, existing Remove, rates, and progress remain on their prior command/snapshot paths. |
+
+**Target-file and Legacy-ban verification**
+- `git diff --name-only -- Native` contains exactly the eight expected tracked files: `Torrentino.xcodeproj/project.pbxproj`, the five listed feature/test files, and `Localizable.xcstrings`.
+- The only additional Native product paths are the explicitly expected untracked `Assets.xcassets/Contents.json`, `AppIcon.appiconset/Contents.json`, and source-derived `AppIcon.png`.
+- `git status --short -- Legacy/Tauri` and `git diff --name-only -- Legacy/Tauri` returned no output. Legacy/Tauri was not read, edited, restored, staged, or used as implementation material.
+- No engine, bridge, IPC, transport, persistence, or QA production surface was changed by this UI batch.
+
+**Localization and accessibility assessment**
+- The three new keys `torrents.col.eta`, `torrents.row.downloaded_of_total`, and `torrents.row.eta_unavailable` each have EN and RU entries. The downloaded format has matching `%@` placeholders in both locales.
+- `xcstringstool compile` passed, and the required build compiled the catalog into EN/RU resources. `ByteCountFormatter` and `DateComponentsFormatter` remain locale-aware.
+- The new values are exposed through table column headers and text rather than color-only state. Existing file-row and torrent-row accessibility labels remain intact.
+- Manual VoiceOver verification of the full downloaded amount, ETA header, em-dash state, and narrow-window column behavior remains outstanding; no static localization/accessibility defect was found beyond the ETA findings above.
+
+**Residual risks and manual-only checks**
+- Human accepted the complete fresh UI-003/UI-004 live checklist; that is additive evidence and does not close the findings or replace the mandatory Tester phase.
+- Real GUI verification remains manual for drag persistence across selection/removal/window resize/quit-relaunch, Finder and window DnD, latest-result timing, Dock/Finder icon appearance, VoiceOver, and EN/RU visual column fit.
+- A 500-row live-rate profile is still advisable because each ETA cell creates a `DateComponentsFormatter` at `FixtureLibrary.swift:210-215` and the table constructs the row projection separately for the size and ETA columns at `TorrentListView.swift:201-209`.
+- The queued remove-with-files feature is explicitly outside this review and is not a finding.
+
+**Coder fix list**
+1. Make the Add-sheet inspection result/error attempt-scoped: return or carry the failure with the inspection generation, and do not read shared `lastAddError` after the awaited operation. Add a timing regression proving an older success/failure cannot affect the latest failure or success projection.
+2. Bound ETA conversion before `TimeInterval`/`DateComponentsFormatter`; render the localized em dash for non-finite, unreasonably large, or formatter-invalid durations. Add `Int64` boundary and downloaded-greater-than-total tests.
+3. Include the authoritative health condition in ETA availability, preserving the existing active/rate/remaining guards, and add a non-healthy active-state regression.
+4. Add an AppKit/UI-level test or narrow test seam for `ControlledNSSplitView` proving only an actual divider drag invokes persistence, while programmatic fixed-height application, window resize, selection, loading, empty state, and removal do not.
+
+RESULT: CHANGES_REQUESTED
+next_actor: orchestrator
+
+### [WP13-LIVE-UI-003-004-HUMAN-ACCEPTED] Fresh-build live review accepted (2026-08-09)
+- Human accepted every remaining item from the fresh UI-003/UI-004 checklist. The real AppIcon, localized downloaded `X of Y`, ETA behavior, controlled/persistent files-pane divider, and latest-only Add-sheet inspection behavior are accepted as live product behavior.
+- Workflow consequence: the accumulated UI working-tree diff must now go to mandatory Code Reviewer, then mandatory Tester. Human acceptance is additive evidence and does not replace either role.
+
+### [WP13-LIVE-REMOVE-FILES-001-QUEUED] Context-menu removal with downloaded content (2026-08-09)
+- Human screenshot request: keep the existing torrent-only removal, and add a second context-menu action that removes the torrent from Torrentino together with its downloaded content.
+- HIG decision: rename/clarify the non-destructive item as `Remove Torrent`; add a separated destructive item named `Remove Torrent and Move Files to Trash…` (localized EN/RU). Do not use ambiguous `Remove + files`, and do not permanently delete content.
+- The destructive action must present a native confirmation naming the torrent and, when authoritative metadata is available, the affected downloaded size/file count. Buttons: `Cancel` and destructive `Remove and Move to Trash`. Explain that files can be recovered from Trash and unrelated files in the destination are untouched.
+- Reuse the existing remove-with-delete-data product path if it still satisfies the contract; do not invent a second deletion mechanism. Stop/release the torrent before recycling content. Delete only authoritative paths belonging to that torrent; never traverse outside its destination, follow an escaping symlink, or remove unrelated siblings in a shared folder.
+- Fail visibly and conservatively: no silent success, no permanent-delete fallback, and no disappearance of the torrent record while an unreported content-removal failure remains. Existing `Remove Torrent` must continue preserving downloaded files.
+- Accessibility: both menu items and the confirmation require explicit localized labels; destructive semantics must not be conveyed by color alone.
+- Scope is queued, not part of the current Reviewer diff. After the current Reviewer + Tester cycle, open Coder lane `[WP13-LIVE-REMOVE-FILES-001]` before WP-13 POST closure.
+
+### [WP13-LIVE-UI-004-REFRESH-DONE] Orchestrator sterile fresh-build gate (2026-08-09)
+- Coder handoff `[WP13-LIVE-UI-004-DONE]` was found complete while `STATE.yaml` was stale. Product changes are now waiting for Human live review before the mandatory Reviewer handoff.
+- Old runtime shutdown: `osascript` quit the app; fresh Debug CLI `--cli shutdown` returned `OK shutdown acknowledged=true`; no `Torrentino` or `TorrentinoEngineAgent` process remained.
+- Sterile store reset: moved `~/Library/Application Support/com.torrentino.app/Engine` to `~/.Trash/torrentino-engine-backup-20260809-202435/`. Nothing was hard-deleted; downloaded content was not touched.
+- Fresh build: `xcodebuild clean build -quiet -project Native/Torrentino.xcodeproj -scheme Torrentino -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData` completed with exit 0.
+- Relaunch: opened `build/DerivedData/Build/Products/Debug/Torrentino.app`.
+- Operational proof: `--cli status` returned `service=enabled` / `STATE operational` (pid 63873); `--cli hello` and `--cli health` returned OK with `network=satisfied`; empty-store `--cli snapshot` completed successfully with no rows.
+- Agent-log proof: fresh bootstrap at `2026-08-09T14:55:02Z` reached `unregistered → starting → openingStore → restoringSession → reconcilingRecords → ready`; schema v1-v3 migration, event subscription, restore `rebuilt=0 skipped=0`, transfer-lane wiring, and successful snapshot fetch are present.
+- Human live checklist for UI-003 + UI-004: (1) Dock and Finder show the real Torrentino logo, not the white placeholder; (2) add a real torrent and confirm each row shows localized downloaded amount as `X of Y`; (3) while actively downloading, confirm ETA is visible and plausible; (4) pause/stall/complete and confirm ETA becomes an em dash; (5) drag the files-pane divider, switch between torrents repeatedly, remove a torrent, fully quit/relaunch, and confirm the chosen height remains stable; (6) Choose File inspection shows only the latest attempt's success/failure and never lets an older result overwrite it.
+- If Human accepts: mandatory next actor is Reviewer, followed by Tester. If Human rejects: record exact symptoms and return to Coder; do not start Reviewer.
+
+### [WP13-LIVE-UI-004-DONE] Dock icon, downloaded amount, and ETA (2026-08-09)
+- Dock icon: added `Native/TorrentinoApp/Resources/Assets.xcassets` with a macOS `AppIcon` set. The committed `LOGO/Main LOGO.png` was resized with `sips -z 1024 1024` into the catalog's single `512x512 @2x` slot. No window or tray logo code changed.
+- Project wiring: added only the asset-catalog file reference/resource build entry and `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` to the app target's Debug and Release settings. `Info.plist` was not changed; the built bundle receives the icon keys from the asset compiler.
+- Icon verification: `file build/DerivedData/Build/Products/Debug/Torrentino.app/Contents/Resources/AppIcon.icns` reported `Mac OS X icon`; `iconutil --convert iconset --output /tmp/Torrentino-AppIcon.iconset .../AppIcon.icns` completed and produced icon sizes; `plutil -p .../Contents/Info.plist` showed `CFBundleIconName = AppIcon` and `CFBundleIconFile = AppIcon`. Orchestrator live gate: launch the built app and confirm the logo in Finder and the Dock.
+- Row rendering: `TorrentListRowProjection` maps authoritative `downloadedBytes`, `downloadBytesPerSec`, and effective `totalBytes` into the Size column as localized ByteCountFormatter text (`downloaded of total`) and a new localized ETA column. ETA is computed only for running, actively downloading torrents with a positive rate; paused, stalled, zero-total, and complete rows render the localized em dash.
+- Localization: added EN/RU entries for the ETA column, downloaded/total format, and unavailable ETA marker.
+- Regression coverage: added byte-counter formatting, active-download ETA, and stalled/paused/complete ETA branch tests; required catalog localization keys are checked for both `en` and `ru`.
+- Constraints: no engine, bridge, IPC, transport, persistence, or QA files were changed. Existing DnD/Finder preview, file selection, Select All/Deselect All, reveal/open, Remove, live rates, native sidebar toggle, and stable files-pane behavior remain on their existing paths.
+- Graphify: mandatory query ran first; the final `graphify update .` completed with 5,232 nodes, 12,822 edges, and 363 communities. Graphify reported stale saved community labels and retained 122 fail-closed nodes from prior scan state; the graph was rebuilt successfully.
+- Verification: required arm64 `xcodebuild build` **BUILD SUCCEEDED**; required arm64 `xcodebuild test` **TEST SUCCEEDED**; scoped `git diff --check` **PASS**.
+- Scoped tracked diff output:
+  ```text
+   .../TorrentinoAppTests/TorrentinoAppTests.swift    | 215 +++++++++++++-----
+   Native/Torrentino.xcodeproj/project.pbxproj        |   6 +
+   Native/TorrentinoApp/Features/FixtureLibrary.swift | 186 ++++++++++++---
+   .../Features/TorrentListView.swift                  | 251 +++++++++++++++++----
+   .../Features/TorrentListViewModel.swift             |  63 +++++-
+   .../Resources/Localizable.xcstrings                 |  51 +++++
+   6 files changed, 630 insertions(+), 142 deletions(-)
+  ```
+- `RESULT: waiting_review`
+- `next_actor: orchestrator/reviewer`
+
+### [WP13-LIVE-UI-003-DONE] Fully controlled files pane and latest inspection (2026-08-09)
+- Root cause, divider: the live path still supplied a content-derived ideal and conditionally removed the files child. Empty files during selection changes, and an empty selection after removal, allowed `VSplitView` to recalculate and collapse the divider.
+- Resolution, divider: `TorrentListView` now keeps both native split panes mounted and hosts them in a controlled `NSSplitView`. The files pane receives only the global `@AppStorage("torrentino.filesPane.height")` baseline, clamped to the current window bounds. File count, selection, loading state, torrent count, and content ideals have no sizing path.
+- Resolution, persistence: only the native divider-drag callback writes the global stored height. Programmatic updates and window resizing only clamp the live position; they never write an automatic height back to the baseline. Split-view collapse is disabled.
+- Root cause, Add sheet: inspection completion was represented by loosely coupled local flags while `TorrentListViewModel.lastAddError` is shared by all inspection attempts. A late superseded failure could leave the sheet's source/error projection inconsistent with a newer success.
+- Resolution, Add sheet: `LatestInspectionState` assigns every selected source a monotonic generation and accepts success/failure only for the current generation. Late results are ignored before changing `preview`, `errorMessage`, or `inspecting`; a valid latest success therefore keeps its file tree and Add action enabled.
+- Resolution, file loading: the allowed selection/loadFiles side of `TorrentListViewModel` now rejects stale file pages and stale file-load errors after a selection, directory, or removal change. Removing the selected record clears the old file content without changing the split height.
+- Files changed in this round: `Native/TorrentinoApp/Features/TorrentListView.swift`, `Native/TorrentinoApp/Features/AddTorrentSheet.swift`, `Native/TorrentinoApp/Features/TorrentListViewModel.swift` (selection/loadFiles side), `Native/TorrentinoApp/Features/FixtureLibrary.swift` (files-pane geometry and inspection reducer), and `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`. The existing UI-002 `TorrentDropRouting.swift` geometry cleanup remains intact; no localization keys changed. No engine, transport, persistence, project, or QA files were changed.
+- Regression coverage: `testFilesPaneSelectionSwitchKeepsGlobalBaseline`, `testFilesPaneRemovalKeepsGlobalBaseline`, and `testFilesPaneWindowResizeOnlyClampsLiveHeight` cover selection/loading, removal, and resize-clamp invariants. `testOverlappingInspectionsKeepOnlyLatestResult` resolves a newer success before an older failure and proves the stale failure cannot overwrite it.
+- Existing behavior remains on its established UI paths: DnD/Finder routing, Add preview, independent file checkboxes, Select All/Deselect All, reveal/open, Remove, live rates, and the single native sidebar toggle were not bypassed or replaced with fake data.
+- Graphify: the mandatory query ran before inspection; `graphify update .` completed with 5,220 nodes, 12,789 edges, and 367 communities. Graphify reported stale saved community labels and retained 122 fail-closed nodes from prior scan state; the graph itself was rebuilt successfully.
+- Verification: required arm64 build **BUILD SUCCEEDED**; required arm64 test **TEST SUCCEEDED** with 302 passed, 0 failed, 0 skipped; `git diff --check` **PASS**.
+- Scoped diff output (the retained UI-002 `TorrentDropRouting.swift` cleanup is included):
+  ```text
+   .../TorrentinoAppTests/TorrentinoAppTests.swift    | 138 +++++++-----
+   Native/TorrentinoApp/Features/AddTorrentSheet.swift |  19 +-
+   Native/TorrentinoApp/Features/FixtureLibrary.swift |  82 ++++---
+   .../Features/TorrentDropRouting.swift              |  21 +---
+   Native/TorrentinoApp/Features/TorrentListView.swift | 236 +++++++++++++++++----
+   .../Features/TorrentListViewModel.swift             |  63 +++++-
+   6 files changed, 402 insertions(+), 157 deletions(-)
+  ```
+- Gate proof, exact steps for the orchestrator/reviewer:
+  1. Quit any running Debug app and agent. Move the old Engine store, never delete it or downloaded content:
+     ```sh
+     timestamp=$(date +%Y%m%d-%H%M%S)
+     engineStore="$HOME/Library/Application Support/com.torrentino.app/Engine"
+     backup="$HOME/.Trash/torrentino-engine-backup-$timestamp"
+     if [ -d "$engineStore" ]; then mkdir -p "$HOME/.Trash"; mv "$engineStore" "$backup"; fi
+     ```
+  2. Launch `build/DerivedData/Build/Products/Debug/Torrentino.app`, add two real `.torrent` files through Choose File, and wait for two real rows. Select torrent A, drag the native horizontal divider to the desired height `X`, and record `defaults read com.torrentino.app torrentino.filesPane.height`.
+  3. Switch A to B, B to A, A to B, B to A, and A to B. Measure the visible files pane after each switch; it must remain `X`, and the `defaults` value must remain identical.
+  4. Remove one torrent through the existing Remove action. Confirm the visible files pane remains `X` while selection moves or empties, and confirm `defaults read com.torrentino.app torrentino.filesPane.height` is unchanged.
+  5. Use Cmd-Q for a full application quit, wait for the app process to exit, and rerun the `defaults read` command.
+  6. Relaunch `build/DerivedData/Build/Products/Debug/Torrentino.app`, select the remaining real torrent, measure the pane within native one-point tolerance of `X`, and rerun `defaults read`; it must still be unchanged.
+  7. Choose File for a valid real `.torrent` while the Add sheet is open. The inspection spinner must resolve to the file tree with no spurious error and Add enabled; a late older inspection must not replace that success.
+- `RESULT: waiting_review`
+- `next_actor: orchestrator/reviewer`
+
+### [WP13-LIVE-UI-002-DONE] Selection-stable files pane (2026-08-09)
+- Root cause: `selectionDidChange()` clears `files` synchronously before its async load begins. `TorrentListView` used that transient empty list, together with `filesLoading`, to remove the files child from `VSplitView`; its content-derived ideal then collapsed the divider. The no-persisted-value fallback could also change with each torrent's file count.
+- Resolution: the files child remains mounted for a single visible selection, rendering the existing empty/loading placeholder while the new page arrives. `FilesPaneSizing.baselineHeight` prioritizes the stored global `@AppStorage("torrentino.filesPane.height")` value, then a one-time session baseline, and only uses content as the initial fallback. Selection file counts cannot replace that baseline.
+- Resolution, auto-shift: `autoShiftedHeight` returns the clamped baseline unless the table-priority demand genuinely leaves insufficient window space. A shortage may temporarily reduce the effective pane height, but it is bounded by `minimumHeight` and the preference observer never writes the automatic value back over the baseline.
+- Files changed in this round: `Native/TorrentinoApp/Features/TorrentListView.swift`, `Native/TorrentinoApp/Features/FixtureLibrary.swift`, and `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`. The existing UI-001 `TorrentDropRouting.swift` geometry cleanup remains intact; no localization keys changed.
+- Regression coverage: `testFilesPaneSelectionKeepsGlobalBaselineAcrossFileLoads` proves loaded and empty/loading content compute the same height; `testFilesPaneAutoShiftOnlyChangesHeightForTableSpaceShortage` proves no shift while the table fits; `testFilesPaneAutoShiftLeavesPersistedBaselineUnchanged` proves a transient shift cannot replace the stored value. The full arm64 test run passed with 303 tests, 0 failures, and 0 skips.
+- DnD remains alive: `TorrentListView` still routes window drops through `handleDrop`, `TorrentDropRouting` remains the shared `.torrent` gate, and `testTorrentDropURLGate` passed.
+- Finder double-click remains alive: `AppDelegate` still sends open-document URLs to `presentIncomingTorrent`, which sets `showAddSheet`; the existing `ContentView` add sheet presentation path is unchanged.
+- Independent file checkboxes remain alive: `FileRow` still calls `setSelection` for each relative path, and the existing file-selection tests passed.
+- Select All and Deselect All remain alive: both existing files-header buttons still call their view-model actions, and the full suite passed the file-selection coverage.
+- Reveal/open activations remain alive: torrent and file double-click/context actions still route to the existing reveal/open methods; no activation code was changed.
+- Remove remains alive: the existing table context-menu and application remove paths remain unchanged, and the full suite passed.
+- Live rates remain alive: table/status projections still render authoritative download/upload rates, and `testTransferRatesAndProgressProjection` passed.
+- Single sidebar toggle remains alive: `NavigationSplitView` remains in `TorrentListView` and no custom `.navigation` toolbar toggle was reintroduced.
+- UI-001 restart persistence remains alive: the same single global AppStorage key is used, with no per-torrent storage. No fake torrent or engine state was created or changed.
+- Orchestrator gate proof: (1) launch the fresh signed app and wait for two real persisted torrent rows; (2) select torrent A, drag the native horizontal `VSplitView` divider to the desired height `X`, and run `defaults read com.torrentino.app torrentino.filesPane.height`; record the exact value; (3) switch A to B, B to A, A to B, B to A, and A to B, measuring the pane after each transition; the visible height and the `defaults` value must remain `X`/identical; (4) use Cmd-Q, wait for the app process to exit, and confirm the recorded defaults value; (5) relaunch with `open build/DerivedData/Build/Products/Debug/Torrentino.app`; (6) select the same real torrent, measure the pane within native one-point tolerance of `X`, and rerun `defaults read com.torrentino.app torrentino.filesPane.height`; it must be unchanged.
+- Graphify: the mandatory query ran before inspection; `graphify update .` completed with 5194 nodes, 12746 edges, and 370 communities.
+- Verification: required arm64 `xcodebuild build` passed; required arm64 `xcodebuild test` passed; `git diff --check` and the scoped whitelist stat are recorded below.
+- Scoped diff output:
+  ```text
+   AI_Workflow_Kit/docs/AI/FEEDBACK.md                | 129 +++++++++++++++++++++
+   .../TorrentinoAppTests/TorrentinoAppTests.swift    | 114 ++++++++++++++++++-
+   Native/TorrentinoApp/Features/FixtureLibrary.swift |  84 ++++++++++++--
+   .../Features/TorrentDropRouting.swift              |  21 +---
+   Native/TorrentinoApp/Features/TorrentListView.swift | 126 ++++++++++++++++-----
+   5 files changed, 414 insertions(+), 60 deletions(-)
+  ```
+- `RESULT: waiting_review`
+- `next_actor: orchestrator/reviewer`
+
+### [WP13-LIVE-UI-004-INTAKE] Dock icon + downloaded-bytes counter + ETA (2026-08-09)
+- Human requests (current UI-003 build):
+  1. **Dock icon** is the white dev placeholder. Integrate the real logo: source asset `LOGO/Main LOGO.png` (committed). Add `Native/TorrentinoApp/Resources/Assets.xcassets` with AppIcon (single 1024×1024 is fine for macOS via Xcode modern catalog), wire `ASSETCATALOG_COMPILER_APPICON_NAME` — ORCHESTRATOR-AUTHORIZED narrow pbxproj change (catalog membership + icon settings ONLY, nothing else). Icon generation from the source PNG via `sips`. Keep the window/tray logo untouched.
+  2. **Downloaded amount text** per torrent row: exact bytes, e.g. «150 МБ из 500 МБ» (localized EN+RU, ByteCountFormatter). Data already projected by the engine (snapshot `bytes=downloaded/total`) — no engine work.
+  3. **ETA** per row: remaining = (effectiveTotalBytes − downloadedBytes) / downloadBytesPerSec when rate > 0; hide or em-dash when stalled/paused/complete (localized). Pure UI/ViewModel computation from existing projected fields.
+- UI-003 verdict from Human still pending; UI-004 layers on the same app files — merged verification at the next gate.
+- Constraints unchanged: ZERO engine files; narrow pbxproj authorization above ONLY; no commits/tags/pushes; no destructive actions; preserve all accepted behaviors + UI-001/002/003 pane/sidebar/inspection fixes.
+- Next Coder microtask: `[WP13-LIVE-UI-004]`. Checkpoint `[WP13-LIVE-UI-004-DONE]` or `[WP13-LIVE-UI-004-BLOCKED]`.
+
+### [WP13-LIVE-UI-003-INTAKE] Human live review UI-002 REJECTED + Add-sheet inspection race + sterile-rebuild order (2026-08-09)
+- Human: UI-002 did NOT fix the divider («воз и ныне там»): pane still collapses/flies down on selection switch AND on torrent removal. attempts=2 — NEXT failure hits the 3-attempt escalation threshold.
+- Directive for the divider fix (hard requirement): make the divider FULLY CONTROLLED by the stored value — pane height is the stored baseline applied as a fixed frame; content NEVER proposes height; ONLY the user's drag gesture writes the stored value; the only automatic adjustment is a clamp on actual window resize. No content-derived ideal heights on the live path at all.
+- NEW defect (screenshot): Add sheet via Choose File showed «The torrent could not be inspected» with Add disabled for `[NNMClub.to]_Soulm8te.2026.1080p...`, while the agent log shows `inspectAddSource result=success` (12:15:55Z, 12:17:42Z, 12:17:48Z) and `commitAdd result=success` (12:16:02Z, 12:17:50Z) — engine side is FINE. Suspect: inspection generation/race in AddTorrentSheet — a superseded/late failure handler sets the error state over a live success. Diagnose and fix the sheet-side state machine; the error must reflect the LATEST inspection only.
+- Human order (sterile builds): «перед ребилдом выжигать все старые торрент-файлы». Orchestrator decision: from now on the fresh-build gate resets the Engine store before relaunch — `~/Library/Application Support/com.torrentino.app/Engine` is MOVED to a timestamped backup under `~/.Trash/torrentino-engine-backup-<ts>/` (never deleted outright; downloaded content files are never touched). Every Human live review starts from a clean slate. Documented as a standing gate step.
+- Same UI-only constraints; AddTorrentSheet.swift + TorrentListViewModel.swift join the whitelist for this lane; still ZERO engine files.
+- Gate proof: set height → switch selection 5× AND remove a torrent → height identical; restart persistence; add via Choose File shows inspection result correctly (success → file tree, failure → error matching the latest attempt only).
+- Next Coder microtask: `[WP13-LIVE-UI-003]`. Checkpoint `[WP13-LIVE-UI-003-DONE]` or `[WP13-LIVE-UI-003-BLOCKED]`.
+
+### [WP13-LIVE-UI-002-INTAKE] Human live review UI-001: divider amnesia on SELECTION change (2026-08-09)
+- Human: «в целом всё работает» — sidebar single toggle OK, restart persistence OK. NEW blocking defect: switching selection between torrents COLLAPSES the files pane to the bottom every time («схлопывается вниз, пряча список файлов»). Requirement: ONE global pane position, set once by the user, that simply STAYS — no per-torrent memory, no hide-and-seek.
+- Orchestrator suspect (hand to Coder as lead, verify not assume): `TorrentListView.swift` L35/L168-190 — `idealFilesPaneHeight` recomputes via `FilesPaneSizing.autoShiftedHeight(...)` from current content; on selection change `loadFiles` is async → file list briefly empty → ideal height collapses → VSplitView follows the new ideal and the pane drops; the @AppStorage baseline is only restored on appear, so the collapse sticks.
+- Fix requirement: pane height = user's stored baseline AT ALL TIMES. Selection changes MUST NOT resize/collapse the pane. While files for the newly selected torrent load, keep the pane at the same height (spinner/empty content is fine — height is not). Auto-shift applies ONLY to genuine window-space shortage (table cannot fit), never to selection switches, and never collapses the pane to hidden.
+- Same constraints as UI-001: UI-only whitelist (TorrentListView.swift, FixtureLibrary.swift geometry, TorrentDropRouting.swift only if geometry dup remains, TorrentinoAppTests, xcstrings only if keys change); ZERO engine files; no pbxproj; no commits; preserve every accepted behavior.
+- Gate proof required: scripted or manual steps — set height → switch selection between two torrents 5× → height unchanged; plus restart persistence still holds.
+- Next Coder microtask: `[WP13-LIVE-UI-002]`. Checkpoint `[WP13-LIVE-UI-002-DONE]` or `[WP13-LIVE-UI-002-BLOCKED]`.
+
+### [WP13-LIVE-UI-001-INTAKE] Human: sidebar duplicate toggle + files-pane divider — UI-ONLY lane, zero engine files (2026-08-09)
+- Human: three attempts at these two UI issues failed; each time the engine broke — because previous lanes bundled UI edits WITH hot engine-file changes. This lane is UI-only BY CONSTRUCTION (whitelist below; engine dirs forbidden).
+- Task 1 (sidebar): TWO sidebar toggles visible — standard window-chrome one (top-left, next to traffic lights) and a custom toolbar one (next to the title, marked by Human's red arrow). REMOVE the custom toolbar toggle; keep exactly ONE — the standard macOS window-chrome toggle. (History note: ENGINE-004 removed the toolbar one and Human flagged its absence; ENGINE-005-era screenshot shows Human pointing at the toolbar one as the duplicate. Decision per latest screenshot: remove the toolbar duplicate, keep the native chrome control.)
+- Task 2 (files-pane divider / «шторка»): (a) user can drag it to ANY height — current hard cap at ~middle (FilesPaneSizing.maxHeight) must go; only window-bounds clamping is allowed; (b) the last user-set height must PERSIST across app restarts (today it resets — diagnose the ACTUAL root cause first: clamp-on-restore ordering, per-window vs global storage, ideal-height recomputation overwriting the stored value, or auto-shift clobbering; do NOT stack a second persistence mechanism over a broken one); (c) keep the accepted space-priority rule: when torrents are added and don't fit, the divider may auto-shift DOWN to reveal the current torrent — but auto-shift must never permanently overwrite the user's stored height (baseline remains user's choice).
+- HARD constraints: NO files under TorrentinoEngineAgent/, TorrentinoEngineBridge/, TorrentinoIPC/, EngineClient/, Persistence — zero engine contact. No pbxproj changes. No QA-script edits. No commits/tags/pushes. Non-destructive only; preserve every accepted UI behavior (DnD, preview sheet, checkboxes, Select All/Deselect All, reveal/open activations, real rates display, remove flow, inspector).
+- Verification must include a REAL restart-persistence proof: set height → quit app → relaunch → height restored (scripted or documented manual steps for the Orchestrator gate).
+- Next Coder microtask: `[WP13-LIVE-UI-001]`. Checkpoint `[WP13-LIVE-UI-001-DONE]` or `[WP13-LIVE-UI-001-BLOCKED]` in this file and stop.
+
+### [WP13-LIVE-UI-001-DONE] UI-only sidebar and files-pane fix (2026-08-09)
+- Root cause, sidebar: `TorrentListView` explicitly added a `.navigation`
+  `ToolbarItem` while `NavigationSplitView` already supplies the native macOS
+  sidebar control. Removing that item leaves the native window-chrome toggle
+  as the only sidebar control. No localization key was removed: the existing
+  `torrents.sidebar.library` key is still used by the sidebar section, and the
+  unused `torrents.sidebar.toggle` key is not present in this tree.
+- Root cause, divider ceiling: the accepted tree had no height persistence or
+  observation path at all; `VSplitView` only received transient min/ideal/max
+  constraints. It also had two different `FilesPaneSizing.maxHeight` values
+  (`280` in `FixtureLibrary.swift`, `320` in the dead duplicate
+  `TorrentDropRouting.swift`), so the content ideal imposed a hard ceiling.
+- Resolution, geometry: `FixtureLibrary.swift` is the single live source for
+  files-pane geometry. Content provides only the ideal height; the permanent
+  clamp is `windowMaximumHeight(availableHeight:)`, which leaves the table
+  minimum visible strip inside the current window. The old `maxHeight` cap and
+  duplicate helper were removed.
+- Resolution, persistence: `TorrentListView` now uses one global
+  `@AppStorage("torrentino.filesPane.height")` baseline. The actual pane size
+  is observed through a non-interactive geometry preference; restore happens
+  before the ideal-height proposal and is clamped only to current window
+  bounds. Invalid stored values are ignored. There is no per-window or second
+  persistence store.
+- Resolution, auto-shift: `autoShiftedHeight` is an effective transient layout
+  value that yields space to the torrent table as its row demand grows. The
+  persistence callback compares against that effective value and never writes
+  an automatic shift as the user's baseline. When the demand falls, the stored
+  baseline is used again.
+- Files changed: `Native/TorrentinoApp/Features/TorrentListView.swift`,
+  `Native/TorrentinoApp/Features/FixtureLibrary.swift`,
+  `Native/TorrentinoApp/Features/TorrentDropRouting.swift` (removed duplicate
+  geometry only), `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`,
+  and this mandatory checkpoint in `AI_Workflow_Kit/docs/AI/FEEDBACK.md`.
+  `Native/TorrentinoApp/Resources/Localizable.xcstrings` was not changed.
+- Behavioral checkpoint: DnD/Finder routing, Add preview flow, independent
+  file checkboxes, Select All/Deselect All, reveal/open, Remove, inspector,
+  and live rate/progress projection remain on their existing UI paths. The
+  full test run passed the existing file-selection, directory-drilldown,
+  transfer-rate/progress, and torrent projection coverage; the new geometry
+  tests cover content ideal, window clamp, invalid restore, and baseline-safe
+  auto-shift. Source inspection confirms `NavigationSplitView` remains and
+  there is no custom sidebar `ToolbarItem`.
+- Live engine checkpoint: the signed app started and `--cli status`,
+  `--cli hello`, and `--cli health` were operational. A read-only snapshot
+  returned a real persisted torrent before the later fresh launch; the current
+  Human store is now empty as already documented above in this file. No fake
+  torrent was created and no engine source/state file was edited. The
+  orchestrator should repeat the live row/files-pane checks with a real
+  persisted torrent.
+- Restart-persistence proof steps for the Orchestrator gate: (1) launch the
+  fresh signed app and wait for a real persisted torrent row; (2) select it and
+  drag the native horizontal `VSplitView` divider until the files pane measures
+  exactly `X` points, recording `defaults read com.torrentino.app
+  torrentino.filesPane.height`; (3) use Cmd-Q for a full application quit, not
+  window close, and wait until the app process exits; (4) relaunch with `open
+  build/DerivedData/Build/Products/Debug/Torrentino.app`; (5) select the same
+  torrent and measure the files pane again: it must be `X` points within the
+  native one-point measurement tolerance, while the `defaults` value remains
+  unchanged; (6) add enough real torrents to trigger table-priority auto-shift
+  and verify the pane may move down temporarily but the same `defaults` value
+  remains `X`; after the list fits again, the pane returns to `X`.
+- Verification: `graphify query` completed before source inspection;
+  `graphify update .` completed with `5190 nodes, 12730 edges, 364
+  communities`; required arm64 `xcodebuild build` passed; required arm64
+  `xcodebuild test` passed on the isolated rerun with `301 passed, 0 failed,
+  0 skipped`; `git diff --check` passed. One earlier test invocation while
+  the manually launched app was still live had a transient
+  `testSetFileSelectionInvalidatesInspection` failure; after closing that app,
+  the exact command passed without source changes.
+- Whitelist stat (the full worktree stat also contains the pre-existing,
+  untouched `AI_Workflow_Kit/docs/AI/STATE.yaml` change):
+  ```text
+   AI_Workflow_Kit/docs/AI/FEEDBACK.md                |  91 +++++++++++++++++
+   .../TorrentinoAppTests/TorrentinoAppTests.swift    |  46 ++++++++-
+   Native/TorrentinoApp/Features/FixtureLibrary.swift |  58 ++++++++++-
+   .../Features/TorrentDropRouting.swift              |  21 +---
+   Native/TorrentinoApp/Features/TorrentListView.swift | 110 +++++++++++++++-----
+   5 files changed, 271 insertions(+), 55 deletions(-)
+  ```
+- `RESULT: waiting_review`
+- `next_actor: orchestrator/reviewer` (perform the real-row divider drag and
+  full quit/relaunch proof above).
+
 ### [WP13-CLEANUP-MAINLINE-002-DONE] Human order: ONE version only — backup branches/tags purged (2026-08-09)
 - Human order: keep only version 2584755, delete everything else («создает путаницу»).
 - Deleted: local branches backup/wp13-engine-004-005-rejected-20260809, backup/wp13-live-lanes-rejected-20260808, backup/wp13-ux-fixes-rejected-20260809; all 7 backup/* tags locally AND on origin. Remote now: single branch native-macos + torrentino/* tags only.

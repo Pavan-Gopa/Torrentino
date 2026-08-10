@@ -16,43 +16,25 @@ struct TorrentListView: View {
 
     @State private var selectedFilter: TorrentListFilter? = .all
     @State private var sortOrder = [KeyPathComparator(\TorrentSnapshot.displayName)]
+    @AppStorage(FilesPaneSizing.persistenceKey) private var persistedFilesPaneHeight = 0.0
 
     var body: some View {
         NavigationSplitView {
             filterSidebar
                 .navigationSplitViewColumnWidth(min: 140, ideal: 180, max: 240)
         } detail: {
-            ZStack {
-                VSplitView {
-                    transferTable
-                        .frame(minHeight: 180)
-                    if showsFilesPane {
-                        filesPane
-                            .frame(
-                                minHeight: FilesPaneSizing.minimumHeight,
-                                idealHeight: idealFilesPaneHeight,
-                                maxHeight: FilesPaneSizing.maxHeight
-                            )
-                    }
+            GeometryReader { geometry in
+                ZStack {
+                    filesSplitView(availableHeight: geometry.size.height)
                 }
-            }
-            .contentShape(Rectangle())
-            .onDrop(of: [.fileURL, .url, .item, .data, .plainText], isTargeted: nil) { providers in
-                handleDrop(providers)
+                .contentShape(Rectangle())
+                .onDrop(of: [.fileURL, .url, .item, .data, .plainText], isTargeted: nil) { providers in
+                    handleDrop(providers)
+                }
             }
             .searchable(text: $viewModel.searchText, prompt: String(localized: "torrents.search.prompt"))
             .background(SearchFieldFocusBridge(request: viewModel.searchFocusRequest))
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
-                    } label: {
-                        Image(systemName: "sidebar.leading")
-                    }
-                    .help(String(localized: "torrents.sidebar.library"))
-                    .accessibilityLabel(String(localized: "torrents.sidebar.library"))
-                }
-
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         viewModel.showAddSheet = true
@@ -142,23 +124,41 @@ struct TorrentListView: View {
         )
     }
 
+    private func filesSplitView(availableHeight: CGFloat) -> some View {
+        let fixedHeight = FilesPaneSizing.fixedHeight(
+            persistedValue: persistedFilesPaneHeight,
+            availableHeight: availableHeight
+        )
+        return ControlledFilesSplitView(
+            top: AnyView(
+                transferTable
+                    .frame(minHeight: FilesPaneSizing.tableMinimumHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ),
+            bottom: AnyView(
+                filesPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ),
+            bottomHeight: fixedHeight,
+            minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+            minimumBottomHeight: FilesPaneSizing.minimumHeight,
+            maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(
+                availableHeight: availableHeight
+            ),
+            onUserResize: { height in
+                persistFilesPaneHeight(height, availableHeight: availableHeight)
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     // MARK: - Files pane sizing (WP13-LIVE-PANE-UX-001)
 
-    private var selectedTorrentIsVisible: Bool {
-        guard let selectedTorrent = viewModel.selectedTorrent else { return false }
-        return filteredTorrents.contains { $0.id == selectedTorrent.id }
-    }
-
-    private var showsFilesPane: Bool {
-        FilesPaneSizing.hasContext(
-            selectedTorrentIsVisible: selectedTorrentIsVisible,
-            fileCount: viewModel.files.count,
-            filesLoading: viewModel.filesLoading
-        )
-    }
-
-    private var idealFilesPaneHeight: CGFloat {
-        FilesPaneSizing.idealHeight(fileCount: viewModel.files.count)
+    private func persistFilesPaneHeight(_ height: CGFloat, availableHeight: CGFloat) {
+        guard height.isFinite, availableHeight.isFinite,
+              height >= FilesPaneSizing.minimumHeight - 1 else { return }
+        let userHeight = FilesPaneSizing.clampedHeight(height, availableHeight: availableHeight)
+        persistedFilesPaneHeight = Double(userHeight)
     }
 
     // MARK: - Table
@@ -199,9 +199,16 @@ struct TorrentListView: View {
             .width(min: 55, ideal: 75)
 
             TableColumn(String(localized: "torrents.col.size"), value: \.progress.totalBytes) { torrent in
-                Text(Self.byteCount(torrent.progress.totalBytes))
+                Text(TorrentListRowProjection(torrent: torrent).downloadedAmountText)
+                    .monospacedDigit()
             }
-            .width(min: 55, ideal: 75)
+            .width(min: 120, ideal: 160)
+
+            TableColumn(String(localized: "torrents.col.eta")) { torrent in
+                Text(TorrentListRowProjection(torrent: torrent).etaText)
+                    .monospacedDigit()
+            }
+            .width(min: 55, ideal: 85)
         }
         .onTapGesture(count: 2) {
             if let torrent = viewModel.selectedTorrent {
@@ -272,8 +279,8 @@ struct TorrentListView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         // Layer: App (Features).
-        // Role: native VSplitView files pane.
-        // Why: remove static hit-test capturing overlay so native NSSplitView divider drags freely.
+        // Role: native NSSplitView files pane.
+        // Why: the split wrapper owns divider tracking without a hit-test overlay.
     }
 
     private func panePlaceholder(title: String, icon: String) -> some View {
@@ -577,10 +584,6 @@ struct TorrentListView: View {
         return formatter
     }()
 
-    private static func byteCount(_ bytes: Int64) -> String {
-        byteFormatter.string(fromByteCount: bytes)
-    }
-
     private static func byteRate(_ bytesPerSecond: Int64) -> String {
         byteFormatter.string(fromByteCount: bytesPerSecond) + "/s"
     }
@@ -604,6 +607,59 @@ struct TorrentListView: View {
         case .idle: return String(localized: "torrents.status.idle")
         }
     }
+}
+
+/// Native split view wrapper that keeps the files pane at the persisted
+/// baseline. AppKit owns divider tracking; only its divider-drag callbacks
+/// write the AppStorage value. Selection and file-list updates only replace
+/// the hosted content, never the pane position.
+private struct ControlledFilesSplitView: NSViewRepresentable {
+    let top: AnyView
+    let bottom: AnyView
+    let bottomHeight: CGFloat
+    let minimumTopHeight: CGFloat
+    let minimumBottomHeight: CGFloat
+    let maximumBottomHeight: CGFloat
+    let onUserResize: (CGFloat) -> Void
+
+    func makeCoordinator() -> ControlledNSSplitViewCoordinator {
+        ControlledNSSplitViewCoordinator()
+    }
+
+    func makeNSView(context: Context) -> ControlledNSSplitView {
+        let splitView = ControlledNSSplitView()
+        splitView.delegate = context.coordinator
+        context.coordinator.onUserResize = onUserResize
+
+        let topView = NSHostingView(rootView: top)
+        let bottomView = NSHostingView(rootView: bottom)
+        splitView.addArrangedSubview(topView)
+        splitView.addArrangedSubview(bottomView)
+        splitView.updateFixedHeight(
+            bottomHeight,
+            minimumTopHeight: minimumTopHeight,
+            minimumBottomHeight: minimumBottomHeight,
+            maximumBottomHeight: maximumBottomHeight
+        )
+        return splitView
+    }
+
+    func updateNSView(_ splitView: ControlledNSSplitView, context: Context) {
+        context.coordinator.onUserResize = onUserResize
+        if let topView = splitView.arrangedSubviews.first as? NSHostingView<AnyView> {
+            topView.rootView = top
+        }
+        if let bottomView = splitView.arrangedSubviews.dropFirst().first as? NSHostingView<AnyView> {
+            bottomView.rootView = bottom
+        }
+        splitView.updateFixedHeight(
+            bottomHeight,
+            minimumTopHeight: minimumTopHeight,
+            minimumBottomHeight: minimumBottomHeight,
+            maximumBottomHeight: maximumBottomHeight
+        )
+    }
+
 }
 
 /// AppKit bridge for the SwiftUI `.searchable` field. SwiftUI does not expose

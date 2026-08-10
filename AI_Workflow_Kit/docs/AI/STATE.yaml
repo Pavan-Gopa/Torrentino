@@ -28,8 +28,8 @@ completed_steps:
 - WP-11
 - WP-12
 implementation:
-  status: pending
-  attempts: 0
+  status: done
+  attempts: 1
   note: >-
     Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
     duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
@@ -257,6 +257,15 @@ implementation:
       all backup/* tags (7) purged locally AND on origin. Salvage code gone;
       fix lane will re-implement from documented FEEDBACK root causes.
       Repo state: single branch native-macos + torrentino/* tags only.
+      2026-08-09 PROCESS RULE: all worker kick prompts are issued in ENGLISH
+      only (Human decision); Human-facing status stays Russian. UI-002 kick
+      reissued in English (supersedes the Russian version).
+      2026-08-09 LANE [WP13-LIVE-UI-001] opened (attempts 0): UI-ONLY by
+      construction — remove duplicate toolbar sidebar toggle (keep the
+      standard window-chrome one), files-pane divider free drag to any height
+      (kill the hard ~middle cap), user height persists across restarts
+      (diagnose actual root cause first), auto-shift never clobbers stored
+      height. Engine dirs forbidden. Real restart-persistence proof required.
       New lane [WP13-LIVE-ENGINE-004] opened: Task A = ENGINE-003 infra debt
       (pbxproj membership for DiagnosticsLogging/RedactedLogFileManager/
       WP13DiagnosticsSecurityTests, facade de-dup out of PersistenceStore,
@@ -291,25 +300,72 @@ implementation:
       activity=checking healthy. Note: P2 literal reading expects idle for
       paused — checking-in-paused observed in first seconds; Reviewer to
       confirm pump convergence.
+    UI-004 Coder handoff landed as `[WP13-LIVE-UI-004-DONE]`: real AppIcon
+    asset catalog + narrow pbxproj wiring, localized per-row downloaded
+    `X of Y`, and ETA projection with em-dash for unavailable states; reported
+    arm64 build/test green. Orchestrator sterile fresh-build gate completed
+    2026-08-09: previous Engine store moved to
+    `~/.Trash/torrentino-engine-backup-20260809-202435/`, clean Debug build
+    exit 0, fresh app relaunched, status/hello/health operational (pid 63873),
+    empty-store snapshot successful, and lifecycle log reached ready.
+    Human accepted the complete fresh UI-003/UI-004 live checklist on
+    2026-08-09. Mandatory Reviewer is next, followed by mandatory Tester.
+    New request `[WP13-LIVE-REMOVE-FILES-001]` is queued after that cycle:
+    preserve `Remove Torrent`, add a separated destructive `Remove Torrent
+    and Move Files to Trash…` action with native confirmation and safe,
+    torrent-scoped Trash semantics. Do not close WP-13 before this queued lane.
+    Reviewer returned CHANGES_REQUESTED with four bounded findings. The third
+    attempt threshold was handled by narrowing to clean retry lane
+    `[WP13-UI-001-004-REVIEW-FIX-001]`; no Architect packet is required and
+    attempts reset to 0. The queued remove-with-files lane remains out of scope.
+    Coder completed `[WP13-UI-001-004-REVIEW-FIX-001-DONE]`: attempt-scoped
+    inspection result ownership, one-year bounded formatter-safe ETA,
+    authoritative healthy-state ETA gating, and bridge-level
+    ControlledNSSplitView regression coverage. Coder reported 314/314 tests
+    green. Orchestrator sterile fresh-build gate completed 2026-08-09:
+    previous Engine store moved to
+    `~/.Trash/torrentino-engine-backup-20260809-231358/`, clean Debug build
+    exit 0, fresh app relaunched, status/hello/health operational (pid 86713),
+    empty-store snapshot successful, and lifecycle log reached ready. Human
+    live acceptance is required before Reviewer re-review.
+    Reviewer re-review `[WP13-UI-001-004-REVIEW-002]` returned
+    CHANGES_REQUESTED: stale inspection failure can still overwrite the shared
+    visible connectionNote before generation acceptance; inspection tests do
+    not drive the production result-application path; ETA/health tests do not
+    drive authoritative TorrentSnapshot-to-row projection boundaries. Engine,
+    bridge, IPC, persistence, and production logging remain untouched.
+    Orchestrator removed the workflow-owned trailing blank-line gate blocker.
+    Narrow correction lane `[WP13-UI-001-004-REVIEW-FIX-002]` is open.
+    Coder completed `[WP13-UI-001-004-REVIEW-FIX-002-DONE]`: stale
+    inspection connectionNote mutation removed, production Add result-
+    application seam shared with tests, and ETA/health tests now drive
+    authoritative TorrentSnapshot → TorrentListRowProjection. Coder reported
+    315/315 full and 41/41 focused tests green; engine and logging untouched.
+    Orchestrator sterile fresh-build gate completed 2026-08-10: Engine store
+    moved to `~/.Trash/torrentino-engine-backup-20260810-160720/`, clean Debug
+    build exit 0, fresh app relaunched, status/hello/health operational
+    (pid 13252), empty-store snapshot successful, lifecycle reached ready, and
+    a live inspectAddSource completed successfully. Formal re-review is next.
 review:
-  status: pending
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: pending
+  verdict: approved
   note: >-
-    Reviewer deferred until the WP-13 screenshot live-feedback fix lane is
-    complete and Human has live-reviewed a fresh rebuilt app. Human live review
-    is additive only; Code Reviewer remains mandatory before Tester.
+    Final re-review `[WP13-UI-001-004-REVIEW-003]` APPROVED. Reviewer verified
+    all REVIEW-002 findings closed, 315/315 full tests and 41/41 focused tests
+    green, clean diff gates, exact scope, and no stability-freeze violation.
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-13
-  bugs_open: WP13-BUG-003, WP13-BUG-004, WP13-BUG-005, WP13-BUG-006, WP13-BUG-007, WP13-BUG-008, WP13-BUG-009, WP13-BUG-010, WP13-BUG-011, WP13-BUG-012, WP13-BUG-013, WP13-BUG-014, WP13-BUG-015, WP13-BUG-016, WP13-BUG-017, WP13-BUG-018, WP13-BUG-019
+  suite: WP-13-STABILITY
+  bugs_open: pending_stabilization_gap_hunt
   note: >-
-    After fix round 2 + Reviewer APPROVED, Tester must run REAL-GUI
-    scenarios (real torrent file, real disk constraints, remove/retry flows)
-    in addition to scripted suites; Human flagged scripted-only QA as
-    insufficient.
-next_actor: human
+    Dedicated ADR-020 stabilization campaign is now open: lifecycle/launchd,
+    restore/R0, admission, health/rates, XPC races, bridge, removal/recovery,
+    diagnostics, projection, deterministic stress, and soak preparation.
+    Tester may modify only tests, QA scripts, fixtures, COVERAGE/REPORT/
+    BUG_REPORT; no product code or production logging.
+next_actor: tester
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -319,20 +375,21 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-12-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: 2584755
+  last_commit: 1167751
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
 reviewer_brief: |
-  Reviewer deferred until the Human screenshot live-feedback fix lane is complete.
+  `[WP13-UI-001-004-REVIEW-003]` APPROVED. No Reviewer action until Tester
+  reports bugs that require a Coder fix and subsequent re-review.
 coder_brief: |
-  Пусто. 2026-08-09 Human ordered rollback to 2584755 (ENGINE-004+005 rejected;
-  salvage on backup/wp13-engine-004-005-rejected-20260809 @ e75ddbf). Next lane
-  будет открыт ТОЛЬКО после Human-acceptance откаченной сборки: кандидат =
-  tight salvage lane (ENGINE-005 wire-DTO fix + localization + toolbar toggle +
-  divider persistence + BUG-005 test + pbxproj membership infra) с явным
-  запретом scope creep и обязательным gate-доказательством admission после
-  restore на реальной записи.
+  Feature freeze ACTIVE. No Coder lane is open. Product or logging changes
+  require concrete failing-test evidence from the stabilization campaign.
+tester_brief: |
+  Run `[WP13-STABILITY-TEST-CAMPAIGN-001]`: inventory existing behavioral
+  evidence, add deterministic isolated coverage for every uncovered ADR-019/
+  ADR-020 engine boundary, wire new scripts into cumulative QA, run all
+  regressions, and report green or evidence-backed bugs without product fixes.
 architect_brief: |
   DONE 2026-08-09: [WP13-ARCH-ENGINE-LIFECYCLE-001-DONE] — ADR-019 appended to
   DECISIONS.md; ARCHITECT_HANDOFF.md rewritten (state machine, ownership map,

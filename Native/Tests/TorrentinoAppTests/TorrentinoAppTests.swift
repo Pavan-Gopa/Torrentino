@@ -3,6 +3,7 @@
 // Must-not: launch network peers or write production Application Support.
 
 import XCTest
+import AppKit
 import UniformTypeIdentifiers
 import TorrentinoDomain
 import TorrentinoIPC
@@ -36,7 +37,13 @@ final class TorrentinoAppTests: TestProfileCase {
         let data = try Data(contentsOf: catalogURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let strings = try XCTUnwrap(json?["strings"] as? [String: Any])
-        for key in ["empty.no_torrents", "empty.subtitle"] {
+        for key in [
+            "empty.no_torrents",
+            "empty.subtitle",
+            "torrents.col.eta",
+            "torrents.row.downloaded_of_total",
+            "torrents.row.eta_unavailable",
+        ] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing catalog key \(key)")
             let locs = try XCTUnwrap(entry["localizations"] as? [String: Any])
             XCTAssertNotNil(locs["en"], "\(key) missing en")
@@ -301,6 +308,123 @@ final class TorrentinoAppTests: TestProfileCase {
         XCTAssertTrue(paused.allSatisfy { $0.desiredState == .paused })
     }
 
+    func testTorrentListRowProjectionFormatsDownloadedAmountWithByteCountFormatter() {
+        let row = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(
+                totalBytes: 500_000_000,
+                downloadedBytes: 150_000_000,
+                downloadBytesPerSec: 1_000_000
+            )
+        )
+        let downloaded = ByteCountFormatter.string(fromByteCount: 150_000_000, countStyle: .file)
+        let total = ByteCountFormatter.string(fromByteCount: 500_000_000, countStyle: .file)
+
+        XCTAssertTrue(row.downloadedAmountText.contains(downloaded))
+        XCTAssertTrue(row.downloadedAmountText.contains(total))
+        XCTAssertEqual(row.downloadedBytes, 150_000_000)
+        XCTAssertEqual(row.effectiveTotalBytes, 500_000_000)
+    }
+
+    func testTorrentListRowProjectionComputesActiveDownloadETA() {
+        let row = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot()
+        )
+
+        XCTAssertEqual(row.etaSeconds, 4)
+        XCTAssertNotEqual(
+            row.etaText,
+            String(localized: "torrents.row.eta_unavailable", defaultValue: "—")
+        )
+    }
+
+    func testTorrentListRowProjectionHidesETAWhenStalledPausedOrComplete() {
+        let unavailable = String(localized: "torrents.row.eta_unavailable", defaultValue: "—")
+        let stalled = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(downloadBytesPerSec: 0)
+        )
+        let paused = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(desiredState: .paused)
+        )
+        let idle = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(activity: .idle)
+        )
+        let complete = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(downloadedBytes: 500)
+        )
+
+        for row in [stalled, paused, idle, complete] {
+            XCTAssertNil(row.etaSeconds)
+            XCTAssertEqual(row.etaText, unavailable)
+        }
+    }
+
+    func testTorrentListRowProjectionClampsDownloadedBytesForETA() {
+        let row = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(downloadedBytes: 600)
+        )
+
+        XCTAssertEqual(row.downloadedBytes, 500)
+        XCTAssertNil(row.etaSeconds)
+        XCTAssertEqual(
+            row.etaText,
+            String(localized: "torrents.row.eta_unavailable", defaultValue: "—")
+        )
+    }
+
+    func testTorrentListRowProjectionRejectsUnreasonableETADurations() {
+        let maximum = TorrentListRowProjection.maximumDisplayHorizonSeconds
+        let unavailable = String(localized: "torrents.row.eta_unavailable", defaultValue: "—")
+        let boundary = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(
+                totalBytes: maximum,
+                downloadedBytes: 0,
+                downloadBytesPerSec: 1
+            )
+        )
+        let beyondBoundary = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(
+                totalBytes: maximum + 1,
+                downloadedBytes: 0,
+                downloadBytesPerSec: 1
+            )
+        )
+        let unreasonable = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(
+                totalBytes: Int64.max,
+                downloadedBytes: 0,
+                downloadBytesPerSec: 1
+            )
+        )
+
+        XCTAssertEqual(boundary.etaSeconds, maximum)
+        XCTAssertNotEqual(
+            boundary.etaText,
+            unavailable
+        )
+        XCTAssertNil(beyondBoundary.etaSeconds)
+        XCTAssertEqual(beyondBoundary.etaText, unavailable)
+        XCTAssertNil(unreasonable.etaSeconds)
+        XCTAssertEqual(unreasonable.etaText, unavailable)
+    }
+
+    func testTorrentListRowProjectionGatesETAOnAuthoritativeHealthAndActivity() {
+        let unavailable = String(localized: "torrents.row.eta_unavailable", defaultValue: "—")
+        let waitingForSpace = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(health: .waitingForSpace)
+        )
+        let waitingForNetwork = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(health: .waitingForNetwork)
+        )
+        let zeroRate = TorrentListRowProjection(
+            torrent: authoritativeTorrentSnapshot(downloadBytesPerSec: 0)
+        )
+
+        for row in [waitingForSpace, waitingForNetwork, zeroRate] {
+            XCTAssertNil(row.etaSeconds)
+            XCTAssertEqual(row.etaText, unavailable)
+        }
+    }
+
     func testFixtureLibrary100And500Performance() {
         XCTAssertEqual(FixtureLibrary.snapshot(count: 100).count, 100)
         XCTAssertEqual(FixtureLibrary.snapshot(count: 500).count, 500)
@@ -353,66 +477,434 @@ final class TorrentinoAppTests: TestProfileCase {
         XCTAssertTrue((docType["LSItemContentTypes"] as? [String])?.contains("com.bittorrent.torrent") == true)
     }
 
-    /// Files-pane sizing: tiny file lists size to content, large lists cap.
-    func testFilesPaneIdealHeightSizing() {
-        let one = FilesPaneSizing.idealHeight(fileCount: 1)
-        let two = FilesPaneSizing.idealHeight(fileCount: 2)
-        let many = FilesPaneSizing.idealHeight(fileCount: 200)
-        XCTAssertGreaterThan(one, FilesPaneSizing.baseHeight)
-        XCTAssertEqual(two - one, FilesPaneSizing.rowHeight, accuracy: 0.5)
-        XCTAssertEqual(many, FilesPaneSizing.maxHeight)
-        XCTAssertLessThanOrEqual(FilesPaneSizing.idealHeight(fileCount: 50), FilesPaneSizing.maxHeight)
-        XCTAssertGreaterThanOrEqual(one, FilesPaneSizing.minimumHeight)
+    /// The live pane uses a constant first-run baseline and never derives its
+    /// size from the selected torrent's file count.
+    func testFilesPaneUsesFixedGlobalBaseline() {
+        let firstLaunch = FilesPaneSizing.fixedHeight(
+            persistedValue: 0,
+            availableHeight: 800
+        )
+        XCTAssertEqual(firstLaunch, FilesPaneSizing.defaultHeight)
+        XCTAssertEqual(
+            FilesPaneSizing.fixedHeight(persistedValue: 310, availableHeight: 800),
+            310
+        )
+        XCTAssertEqual(
+            FilesPaneSizing.windowMaximumHeight(availableHeight: 800),
+            800 - FilesPaneSizing.tableMinimumHeight
+        )
+        XCTAssertEqual(
+            FilesPaneSizing.clampedHeight(10_000, availableHeight: 800),
+            FilesPaneSizing.windowMaximumHeight(availableHeight: 800)
+        )
+        XCTAssertGreaterThanOrEqual(firstLaunch, FilesPaneSizing.minimumHeight)
     }
 
-    func testFilesPaneVisibilityRequiresVisibleSelectionAndContent() {
-        XCTAssertFalse(
-            FilesPaneSizing.hasContext(
-                selectedTorrentIsVisible: false,
-                fileCount: 3,
-                filesLoading: false
-            )
-        )
-        XCTAssertFalse(
-            FilesPaneSizing.hasContext(
-                selectedTorrentIsVisible: true,
-                fileCount: 0,
-                filesLoading: false
-            )
-        )
-        XCTAssertTrue(
-            FilesPaneSizing.hasContext(
-                selectedTorrentIsVisible: true,
-                fileCount: 0,
-                filesLoading: true
-            )
-        )
-        XCTAssertTrue(
-            FilesPaneSizing.hasContext(
-                selectedTorrentIsVisible: true,
-                fileCount: 3,
-                filesLoading: false
-            )
+    func testFilesPaneRestoresGlobalBaselineWithinWindowBounds() {
+        XCTAssertNil(FilesPaneSizing.restoredHeight(0, availableHeight: 800))
+        XCTAssertNil(FilesPaneSizing.restoredHeight(.nan, availableHeight: 800))
+        XCTAssertEqual(FilesPaneSizing.restoredHeight(180, availableHeight: 800), 180)
+        XCTAssertEqual(
+            FilesPaneSizing.restoredHeight(10_000, availableHeight: 800),
+            FilesPaneSizing.windowMaximumHeight(availableHeight: 800)
         )
     }
 
-    func testFilesPaneCollapseHidesContextWithoutDiscardingIt() {
+    func testFilesPaneSelectionSwitchKeepsGlobalBaseline() {
+        let selectedTorrentA = FilesPaneSizing.fixedHeight(
+            persistedValue: 260,
+            availableHeight: 800
+        )
+        let loadingTorrentB = FilesPaneSizing.fixedHeight(
+            persistedValue: 260,
+            availableHeight: 800
+        )
+        let selectedTorrentB = FilesPaneSizing.fixedHeight(
+            persistedValue: 260,
+            availableHeight: 800
+        )
+
+        XCTAssertEqual(selectedTorrentA, 260)
+        XCTAssertEqual(loadingTorrentB, selectedTorrentA)
+        XCTAssertEqual(selectedTorrentB, selectedTorrentA)
+    }
+
+    func testFilesPaneRemovalKeepsGlobalBaseline() {
+        let beforeRemoval = FilesPaneSizing.fixedHeight(
+            persistedValue: 500,
+            availableHeight: 800
+        )
+        let afterSelectionEmpties = FilesPaneSizing.fixedHeight(
+            persistedValue: 500,
+            availableHeight: 800
+        )
+
+        XCTAssertEqual(afterSelectionEmpties, beforeRemoval)
+        XCTAssertEqual(
+            FilesPaneSizing.fixedHeight(persistedValue: 500, availableHeight: 800),
+            beforeRemoval
+        )
+    }
+
+    func testFilesPaneWindowResizeOnlyClampsLiveHeight() {
+        let baseline = FilesPaneSizing.fixedHeight(
+            persistedValue: 500,
+            availableHeight: 800
+        )
+        let clampedForSmallWindow = FilesPaneSizing.fixedHeight(
+            persistedValue: 500,
+            availableHeight: 500
+        )
+
+        XCTAssertEqual(baseline, 500)
+        XCTAssertEqual(
+            clampedForSmallWindow,
+            FilesPaneSizing.windowMaximumHeight(availableHeight: 500)
+        )
+        XCTAssertEqual(
+            FilesPaneSizing.restoredHeight(Double(baseline), availableHeight: 800),
+            baseline
+        )
+    }
+
+    func testProductionAddInspectionOlderFailureAfterNewerSuccessIsIgnored() {
+        var inspectionState = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation()
+        presentation.inspecting = true
+        let olderGeneration = inspectionState.begin()
+        let latestGeneration = inspectionState.begin()
+        let latestPreview = addPreview(
+            named: "latest",
+            operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        )
+
         XCTAssertTrue(
-            FilesPaneSizing.isVisible(
-                selectedTorrentIsVisible: true,
-                fileCount: 3,
-                filesLoading: false,
-                collapsed: false
+            AddTorrentInspectionResultApplication.apply(
+                .success(latestPreview),
+                for: latestGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertEqual(presentation.preview, latestPreview)
+        XCTAssertNil(presentation.errorMessage)
+        XCTAssertFalse(presentation.inspecting)
+        XCTAssertTrue(presentation.canCommit)
+        let acceptedPresentation = presentation
+
+        XCTAssertFalse(
+            AddTorrentInspectionResultApplication.apply(
+                .failure(String(localized: "torrents.add.inspection_failed")),
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertEqual(presentation, acceptedPresentation)
+        XCTAssertEqual(inspectionState.result, .success(latestPreview))
+    }
+
+    func testProductionAddInspectionStaleFailureLeavesCurrentConnectionNote() {
+        var inspectionState = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation()
+        presentation.inspecting = true
+        let olderGeneration = inspectionState.begin()
+        let latestGeneration = inspectionState.begin()
+        let latestPreview = addPreview(
+            named: "latest",
+            operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
+        )
+        var connectionNote: String? = "current connection state"
+
+        XCTAssertTrue(
+            AddTorrentInspectionResultApplication.apply(
+                .success(latestPreview),
+                for: latestGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        let staleFailure = String(localized: "torrents.add.inspection_failed")
+        let staleOutcome = AddTorrentInspectionResultApplication.failure(
+            staleFailure,
+            preserving: &connectionNote
+        )
+        XCTAssertFalse(
+            AddTorrentInspectionResultApplication.apply(
+                staleOutcome,
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+
+        XCTAssertEqual(connectionNote, "current connection state")
+        XCTAssertEqual(presentation.preview, latestPreview)
+        XCTAssertNil(presentation.errorMessage)
+        XCTAssertFalse(presentation.inspecting)
+        XCTAssertTrue(presentation.canCommit)
+    }
+
+    func testProductionAddInspectionOlderSuccessAfterNewerFailureIsIgnored() {
+        var inspectionState = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation()
+        presentation.inspecting = true
+        let olderGeneration = inspectionState.begin()
+        let latestGeneration = inspectionState.begin()
+        let latestFailure = String(localized: "error.permission_denied")
+        let olderPreview = addPreview(
+            named: "older",
+            operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+        )
+
+        XCTAssertTrue(
+            AddTorrentInspectionResultApplication.apply(
+                .failure(latestFailure),
+                for: latestGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertNil(presentation.preview)
+        XCTAssertEqual(presentation.errorMessage, latestFailure)
+        XCTAssertFalse(presentation.inspecting)
+        XCTAssertFalse(presentation.canCommit)
+
+        XCTAssertFalse(
+            AddTorrentInspectionResultApplication.apply(
+                .success(olderPreview),
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertNil(presentation.preview)
+        XCTAssertEqual(presentation.errorMessage, latestFailure)
+        XCTAssertFalse(presentation.inspecting)
+        XCTAssertFalse(presentation.canCommit)
+        XCTAssertEqual(inspectionState.result, .failure(latestFailure))
+    }
+
+    func testProductionAddInspectionKeepsExactLatestFailureAcrossInterleaving() {
+        var inspectionState = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation()
+        presentation.inspecting = true
+        let olderGeneration = inspectionState.begin()
+        let latestGeneration = inspectionState.begin()
+        let latestFailure = String(localized: "error.volume_unavailable")
+        let olderPreview = addPreview(
+            named: "older",
+            operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        )
+        let staleFailure = String(localized: "torrents.add.inspection_failed")
+
+        XCTAssertFalse(
+            AddTorrentInspectionResultApplication.apply(
+                .success(olderPreview),
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertTrue(
+            AddTorrentInspectionResultApplication.apply(
+                .failure(latestFailure),
+                for: latestGeneration,
+                to: &inspectionState,
+                presentation: &presentation
             )
         )
         XCTAssertFalse(
-            FilesPaneSizing.isVisible(
-                selectedTorrentIsVisible: true,
-                fileCount: 3,
-                filesLoading: false,
-                collapsed: true
+            AddTorrentInspectionResultApplication.apply(
+                .failure(staleFailure),
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
             )
         )
+
+        XCTAssertEqual(presentation.errorMessage, latestFailure)
+        XCTAssertNotEqual(presentation.errorMessage, staleFailure)
+        XCTAssertNil(presentation.preview)
+        XCTAssertFalse(presentation.inspecting)
+        XCTAssertFalse(presentation.canCommit)
+        XCTAssertEqual(inspectionState.result, .failure(latestFailure))
+    }
+
+    func testProductionAddInspectionSeamRequiresCurrentGenerationAcceptance() {
+        var inspectionState = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation()
+        presentation.inspecting = true
+        let olderGeneration = inspectionState.begin()
+        let latestGeneration = inspectionState.begin()
+        let staleFailure = String(localized: "torrents.add.inspection_failed")
+        let latestPreview = addPreview(
+            named: "latest",
+            operationID: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
+        )
+
+        XCTAssertFalse(
+            AddTorrentInspectionResultApplication.apply(
+                .failure(staleFailure),
+                for: olderGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertNil(inspectionState.result)
+        XCTAssertNil(presentation.preview)
+        XCTAssertNil(presentation.errorMessage)
+        XCTAssertTrue(presentation.inspecting)
+        XCTAssertFalse(presentation.canCommit)
+
+        XCTAssertTrue(
+            AddTorrentInspectionResultApplication.apply(
+                .success(latestPreview),
+                for: latestGeneration,
+                to: &inspectionState,
+                presentation: &presentation
+            )
+        )
+        XCTAssertEqual(presentation.preview, latestPreview)
+        XCTAssertTrue(presentation.canCommit)
+    }
+
+    // MARK: - ControlledNSSplitView bridge ownership
+
+    @MainActor
+    func testControlledNSSplitViewUserDragInvokesPersistenceCallback() {
+        let (splitView, coordinator) = makeControlledSplitView()
+        var persistedHeights: [CGFloat] = []
+        coordinator.onUserResize = { persistedHeights.append($0) }
+        splitView.delegate = coordinator
+
+        let initialHeight = splitView.arrangedSubviews[1].frame.height
+        let draggedHeight = splitView.clampedBottomHeight(360)
+        splitView.withUserDividerTracking {
+            splitView.setPosition(splitView.position(forBottomHeight: draggedHeight), ofDividerAt: 0)
+            // AppKit normally posts this notification during a real drag. The
+            // direct coordinator call keeps the bridge test deterministic when
+            // an unattached view does not post it automatically.
+            if persistedHeights.isEmpty {
+                coordinator.splitViewDidResizeSubviews(
+                    Notification(name: Notification.Name("ControlledNSSplitView.didResize"), object: splitView)
+                )
+            }
+        }
+
+        XCTAssertEqual(persistedHeights.count, 1)
+        XCTAssertNotEqual(splitView.arrangedSubviews[1].frame.height, initialHeight)
+        XCTAssertEqual(persistedHeights[0], splitView.arrangedSubviews[1].frame.height, accuracy: 1)
+    }
+
+    @MainActor
+    func testControlledNSSplitViewProgrammaticUpdatesNeverPersistOrMoveDivider() {
+        let (splitView, coordinator) = makeControlledSplitView()
+        var persistedHeights: [CGFloat] = []
+        coordinator.onUserResize = { persistedHeights.append($0) }
+        splitView.delegate = coordinator
+        let persistedBaseline = 500.0
+
+        let initialPosition = splitView.position(forBottomHeight: splitView.arrangedSubviews[1].frame.height)
+        splitView.updateFixedHeight(
+            persistedBaseline,
+            minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+            minimumBottomHeight: FilesPaneSizing.minimumHeight,
+            maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(availableHeight: 800)
+        )
+        coordinator.splitViewDidResizeSubviews(
+            Notification(name: Notification.Name("programmatic"), object: splitView)
+        )
+        XCTAssertTrue(persistedHeights.isEmpty)
+
+        splitView.setFrameSize(NSSize(width: 600, height: 500))
+        splitView.updateFixedHeight(
+            persistedBaseline,
+            minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+            minimumBottomHeight: FilesPaneSizing.minimumHeight,
+            maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(availableHeight: 500)
+        )
+        XCTAssertEqual(persistedBaseline, 500)
+        XCTAssertLessThanOrEqual(
+            splitView.arrangedSubviews[1].frame.height,
+            FilesPaneSizing.windowMaximumHeight(availableHeight: 500) + 1
+        )
+        XCTAssertNotEqual(
+            splitView.position(forBottomHeight: splitView.arrangedSubviews[1].frame.height),
+            initialPosition
+        )
+
+        let clampedPosition = splitView.position(forBottomHeight: splitView.arrangedSubviews[1].frame.height)
+        for state in ["selection", "loading", "empty", "removal"] {
+            splitView.updateFixedHeight(
+                persistedBaseline,
+                minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+                minimumBottomHeight: FilesPaneSizing.minimumHeight,
+                maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(availableHeight: 500)
+            )
+            coordinator.splitViewDidResizeSubviews(
+                Notification(name: Notification.Name(state), object: splitView)
+            )
+            XCTAssertEqual(
+                splitView.position(forBottomHeight: splitView.arrangedSubviews[1].frame.height),
+                clampedPosition,
+                accuracy: 1,
+                state
+            )
+        }
+
+        for _ in 0..<20 {
+            splitView.updateFixedHeight(
+                persistedBaseline,
+                minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+                minimumBottomHeight: FilesPaneSizing.minimumHeight,
+                maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(availableHeight: 500)
+            )
+            coordinator.splitViewDidResizeSubviews(
+                Notification(name: Notification.Name("update-cycle"), object: splitView)
+            )
+        }
+        XCTAssertTrue(persistedHeights.isEmpty)
+        XCTAssertEqual(
+            splitView.position(forBottomHeight: splitView.arrangedSubviews[1].frame.height),
+            clampedPosition,
+            accuracy: 1
+        )
+    }
+
+    @MainActor
+    func testControlledNSSplitViewCoordinatorLifetimeHasNoRetainCycle() {
+        let splitView = ControlledNSSplitView(frame: NSRect(x: 0, y: 0, width: 600, height: 800))
+        weak var weakCoordinator: ControlledNSSplitViewCoordinator?
+
+        do {
+            let coordinator = ControlledNSSplitViewCoordinator()
+            coordinator.onUserResize = { _ in }
+            splitView.delegate = coordinator
+            weakCoordinator = coordinator
+        }
+
+        XCTAssertNil(weakCoordinator)
+        XCTAssertNil(splitView.delegate)
+    }
+
+    @MainActor
+    private func makeControlledSplitView() -> (
+        ControlledNSSplitView,
+        ControlledNSSplitViewCoordinator
+    ) {
+        let splitView = ControlledNSSplitView(frame: NSRect(x: 0, y: 0, width: 600, height: 800))
+        splitView.isVertical = false
+        splitView.addArrangedSubview(NSView(frame: .zero))
+        splitView.addArrangedSubview(NSView(frame: .zero))
+        splitView.layoutSubtreeIfNeeded()
+        splitView.updateFixedHeight(
+            260,
+            minimumTopHeight: FilesPaneSizing.tableMinimumHeight,
+            minimumBottomHeight: FilesPaneSizing.minimumHeight,
+            maximumBottomHeight: FilesPaneSizing.windowMaximumHeight(availableHeight: 800)
+        )
+        return (splitView, ControlledNSSplitViewCoordinator())
     }
 
     private static func locateInfoPlist() -> URL? {
@@ -427,6 +919,58 @@ final class TorrentinoAppTests: TestProfileCase {
             dir = parent
         }
         return nil
+    }
+
+    private func authoritativeTorrentSnapshot(
+        desiredState: DesiredTorrentState = .running,
+        activity: TorrentActivity = .downloading,
+        health: TorrentHealth = .healthy,
+        totalBytes: Int64 = 500,
+        downloadedBytes: Int64 = 150,
+        downloadBytesPerSec: Int64 = 100
+    ) -> TorrentSnapshot {
+        TorrentSnapshot(
+            id: TorrentRecordID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!),
+            contentIdentity: nil,
+            displayName: "Authoritative fixture",
+            desiredState: desiredState,
+            activity: activity,
+            health: health,
+            progress: TransferProgress(
+                fraction: 0.5,
+                totalBytes: totalBytes,
+                downloadedBytes: downloadedBytes,
+                uploadedBytes: 0
+            ),
+            rates: TransferRates(
+                downloadBytesPerSec: downloadBytesPerSec,
+                uploadBytesPerSec: 0
+            ),
+            peers: PeerSummary(connected: 1, halfOpen: 0, total: 1),
+            saveLocation: PersistedLocation(path: profile.rootURL.path),
+            revision: 1
+        )
+    }
+
+    private func addPreview(named name: String, operationID: UUID) -> AddTorrentPreview {
+        AddTorrentPreview(
+            inspection: AddSourceInspection(
+                operationID: AddOperationID(rawValue: operationID),
+                contentIdentity: nil,
+                displayName: name,
+                sizeBytes: 100,
+                warnings: []
+            ),
+            files: [
+                FileEntry(
+                    relativePath: "\(name).bin",
+                    name: "\(name).bin",
+                    sizeBytes: 100,
+                    kind: .file,
+                    selection: .normal
+                )
+            ]
+        )
     }
 
     private func notificationSnapshot(

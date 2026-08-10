@@ -23,6 +23,7 @@
 		4A000000000000000000050E /* ServiceRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010E /* ServiceRegistration.swift */; };
 		4A000000000000000000050F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010F /* SettingsView.swift */; };
 		4A0000000000000000000510 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000110 /* Localizable.xcstrings */; };
+		4A0000000000000000000511 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000115 /* Assets.xcassets */; };
 		4A0000000000000000000521 /* TorrentinoEngineAgent in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000202 /* TorrentinoEngineAgent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4A0000000000000000000522 /* com.torrentino.app.engine-agent.plist in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */; };
 		4A0000000000000000000531 /* TorrentState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000131 /* TorrentState.swift */; };
@@ -267,6 +268,7 @@
 		4A000000000000000000010E /* ServiceRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceRegistration.swift; sourceTree = "<group>"; };
 		4A000000000000000000010F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		4A0000000000000000000110 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		4A0000000000000000000115 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "com.torrentino.app.engine-agent.plist"; sourceTree = "<group>"; };
 		4A0000000000000000000121 /* Torrentino.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Torrentino.entitlements; sourceTree = "<group>"; };
 		4A0000000000000000000122 /* TorrentinoEngineAgent.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TorrentinoEngineAgent.entitlements; sourceTree = "<group>"; };
@@ -641,6 +643,7 @@
 			isa = PBXGroup;
 			children = (
 				4A0000000000000000000110 /* Localizable.xcstrings */,
+				4A0000000000000000000115 /* Assets.xcassets */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -987,6 +990,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4A0000000000000000000510 /* Localizable.xcstrings in Resources */,
+				4A0000000000000000000511 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1254,6 +1258,7 @@
 			baseConfigurationReference = 4A0000000000000000000124 /* Debug.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Torrentino.entitlements;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
 				STRIP_INSTALLED_PRODUCT = NO;
@@ -1278,6 +1283,7 @@
 			baseConfigurationReference = 4A0000000000000000000125 /* Release.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Torrentino.entitlements;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
 				STRIP_INSTALLED_PRODUCT = NO;

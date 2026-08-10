@@ -1614,6 +1614,23 @@
         }
       }
     },
+    "torrents.col.eta": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ETA"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Осталось"
+          }
+        }
+      }
+    },
     "torrents.col.name": {
       "extractionState": "manual",
       "localizations": {
@@ -1627,6 +1644,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Имя"
+          }
+        }
+      }
+    },
+    "torrents.row.downloaded_of_total": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ of %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ из %@"
+          }
+        }
+      }
+    },
+    "torrents.row.eta_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "—"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "—"
           }
         }
       }
