@@ -1,3 +1,22 @@
+### [WP13-ARCH-CREATOR-PRODUCTIZE-001-DONE] Architect Option A accepted (2026-08-10)
+- Human asked for Architect plan to create own torrents.
+- Architect inventory: **Creator already fully implemented in WP-11** (UI sheet, menu ⌘⌥N, XPC, CreatorPlanStore, CPU hash, atomic write, libtorrent verify, optional seed) under ADR-016/017/018.
+- **Decision A accepted by Orchestrator:** no greenfield module, no speculative polish lanes, **no new ADR**.
+- Next: Human live acceptance checklist C1–C12 in `AI_Workflow_Kit/docs/AI/ARCHITECT_HANDOFF.md`.
+- Failures from live use → narrow Coder fix lanes only. Option B polish only if Human explicitly wants it after trying Creator.
+- Feature freeze otherwise remains (ADR-020).
+
+### [WP13-ARCH-CREATOR-PRODUCTIZE-001-OPEN] Human ordered Creator planning (2026-08-10)
+- Human wants in-app ability to create own torrents and asked for Architect plan.
+- Inventory (Orchestrator): WP-11 already shipped Creator backend + UI under ADR-016/017:
+  - Domain: `CreatorPlanStore`, `CPUHasher`, `MetainfoGenerator`, `SourceScanner`, `CreateOptions`
+  - Agent/XPC: `inspectCreateSource` / `fetchCreatorManifestPage` / `commitCreate` + progress events
+  - App: `CreateTorrentSheet`, `EngineClient` creator API, menu `File → Create Torrent` (⌘⌥N), `showCreateSheet`
+  - Metal REJECT (ADR-018); creator stays CPU-only
+- This is NOT greenfield. Architect must inventory, gap-hunt vs usable daily product, and produce ordered lanes (discoverability/polish/bugs/missing UX) without redesigning accepted contracts unless a real defect forces it.
+- ADR-020 feature freeze: planning authorized; product coding stays frozen until Human accepts Architect packet and opens a Coder lane.
+- Architect returns package to Main only; Main persists ADR/handoff/steps.
+
 ### [WP13-STABILITY-TEST-CAMPAIGN-002-DONE] Orchestrator verified Tester handoff (2026-08-10)
 - Worker `WP13StabTest002` completed structured `qa_green`. Orchestrator did **not** author tests; verified only.
 - **XCTest:** 323/323 PASS (`build/WP13StabilityTester002DerivedData`).
