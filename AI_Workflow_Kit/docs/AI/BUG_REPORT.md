@@ -9,7 +9,7 @@
 
 | Field | Value |
 |-------|--------|
-| Step | WP-13 `[WP13-STABILITY-TEST-CAMPAIGN-001]` |
+| Step | WP-13 `[WP13-STABILITY-TEST-CAMPAIGN-002]` |
 | Date | 2026-08-10 |
 | bugs_open | 0 |
 
@@ -17,7 +17,8 @@
 
 _No product-functional bugs opened this campaign._
 
-Environmental only (not bugs):
+Environmental / seam notes (not bugs):
 
 - 13× `test_wp02_*.sh` **BLOCKED** — pre-existing Human launchd agent session.
 - `test_wp03_legacy_untouched.sh` **WAIVED** — Legacy HARD BAN / tree removed.
+- I7/I9 in-process **BLOCKED-seam** — `AgentService` / diagnostics sources not in XCTest target; pbxproj frozen under ADR-020. Source-contract proofs green; live disposable deferred.

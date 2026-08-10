@@ -494,3 +494,51 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | Disposable live I1/I9 first-boot markers | P2 | Same; in-process contracts already green |
 | Multi-hour soak | N/A | Wall-clock WP-14/15; smoke only here |
 | WP-02 live suite on this host | ENV | Re-run when Human agent stopped or on disposable machine |
+
+
+---
+
+## WP-13 ADR-020 Stabilization Campaign-002 — 2026-08-10
+
+Updated: 2026-08-10 (Test Engineer, [WP13-STABILITY-TEST-CAMPAIGN-002])
+Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
+**Campaign-002 result:** **PRODUCT GREEN**
+**XCTest:** **323/323 PASS** (+6 new campaign-002 tests; baseline was 317)
+**QA suite:** **109 PASS / 0 FAIL / 13 BLOCKED / 1 WAIVED** (2 new wp13 scripts)
+
+### Campaign-002 Cell Closure
+
+| Cell | Evidence | Status |
+| --- | --- | --- |
+| I3 restore summary fields consistent (success) | `testWP13C002I3RestoreSummarySuccessFieldsConsistent` — RestoreSummary.stored/rebuilt/skipped/failure + sessionPhase/degradedReason + restoreRebuiltCount/restoreSkippedCount | **CLOSED** |
+| I3 restore summary fields consistent (anomaly) | `testWP13C002I3RestoreSummaryAnomalyFieldsConsistent` — anomaly sets failure="restoreAnomaly", sessionPhase=.degraded, degradedReason matches | **CLOSED** |
+| I3 restore count identity | `testWP13C002I3RestoreSummaryCountsAreConsistent` — stored == rebuilt + skipped invariant | **CLOSED** |
+| I8 event bus register/unregister | `testWP13C002I8EventBusRegisterAndUnregisterMaintainsCount` — sinkCount tracks add/remove accurately | **CLOSED** |
+| I8 event bus same-ID replace | `testWP13C002I8EventBusSameIDReplacesExistingSink` — second register with same ID replaces, count stays 1 | **CLOSED** |
+| I8 event bus unregister unknown noop | `testWP13C002I8EventBusUnregisterNeverRegisteredIsNoop` — unregister unknown ID leaves count 0 | **CLOSED** |
+| I7 shutdown veto source contracts | `test_wp13_stability_i7i9.sh` I7-A/B/C/D — shutdownAuthorization var, guard, reply(false), reply(true) before hook | **SOURCE-CONTRACT CLOSED** |
+| I9 diagnostics/bootstrap source contracts | `test_wp13_stability_i7i9.sh` I9-A/B/C/D/E/F — env override, markers, last-line proof, degraded flag, redact function, record path | **SOURCE-CONTRACT CLOSED** |
+| I7 shutdown veto live | Requires disposable launchd agent (Human-authorized) | **BLOCKED-seam** |
+| I9 bootstrap live first-boot marker | Requires agent executable process (pbxproj frozen) | **BLOCKED-seam** |
+
+### New Artifacts
+
+| Artifact | Contract |
+| --- | --- |
+| `TransferSmokeTests.testWP13C002I3RestoreSummarySuccessFieldsConsistent` | I3: RestoreSummary fields correct on success restore |
+| `TransferSmokeTests.testWP13C002I3RestoreSummaryAnomalyFieldsConsistent` | I3: RestoreSummary fields correct on anomaly (degraded) |
+| `TransferSmokeTests.testWP13C002I3RestoreSummaryCountsAreConsistent` | I3: stored == rebuilt + skipped invariant |
+| `TransferSmokeTests.testWP13C002I8EventBusRegisterAndUnregisterMaintainsCount` | I8: sinkCount tracks register/unregister |
+| `TransferSmokeTests.testWP13C002I8EventBusSameIDReplacesExistingSink` | I8: same-ID register replaces, count stays 1 |
+| `TransferSmokeTests.testWP13C002I8EventBusUnregisterNeverRegisteredIsNoop` | I8: unregister unknown ID is a no-op |
+| `scripts/qa/test_wp13_stability_campaign002.sh` | Deterministic 6-test matrix for campaign-002 new XCTests |
+| `scripts/qa/test_wp13_stability_i7i9.sh` | I7/I9 source-contract proofs (9 static assertions); BLOCKED-seam documented |
+
+### Remaining Open Gaps
+
+| Gap | Severity | Notes |
+| --- | --- | --- |
+| I7 live shutdown veto | P2 | Requires Human-authorized sterile disposable launchd agent identity |
+| I9 live bootstrap first-boot marker | P2 | Requires agent executable process (pbxproj frozen under ADR-020) |
+| Multi-hour soak | N/A | Wall-clock WP-14/15; smoke only here |
+| WP-02 live suite on this host | ENV | Re-run when Human agent stopped or on disposable machine |

@@ -1,3 +1,27 @@
+### [WP13-STABILITY-TEST-CAMPAIGN-002-DONE] Orchestrator verified Tester handoff (2026-08-10)
+- Worker `WP13StabTest002` completed structured `qa_green`. Orchestrator did **not** author tests; verified only.
+- **XCTest:** 323/323 PASS (`build/WP13StabilityTester002DerivedData`).
+- **Spot-check:** `test_wp13_stability_campaign002.sh` 6/6 PASS; `test_wp13_stability_i7i9.sh` 9/9 PASS.
+- **QA suite (Tester-reported):** 123 scripts → 109 PASS / 0 FAIL / 13 BLOCKED / 1 WAIVED.
+- **Closed in-process:** I3 restore summary field consistency (×3); I8 event-bus register/replace/unregister (×3) in `TransferSmokeTests`.
+- **BLOCKED-seam (not bugs):** I7 `AgentService` shutdown veto + I9 diagnostics bootstrap not in XCTest target Sources; pbxproj frozen under ADR-020. Source-contract script substitutes; live disposable still needs Human OK.
+- **Orphan on-disk (same pattern as WP13DiagnosticsSecurityTests):** `WP13StabilizationCampaign002Tests.swift` not in pbxproj — documentation/seam attempt only; live coverage is TransferSmokeTests + scripts.
+- **Product bugs:** 0. Scope = Tests + scripts/qa only.
+- **next_actor:** human. Freeze remains; WP-13 not closed.
+
+### [WP13-STABILITY-TEST-CAMPAIGN-002-OPEN] Human-ordered Tester continue (2026-08-10)
+- Human ordered Orchestrator to continue Tester work only (Orchestrator must not write tests).
+- Prior campaign-001 PRODUCT GREEN with PARTIAL live/disposable cells remaining.
+- Lane closes remaining **in-process** ADR-020 gaps without mutating Human launchd/`Application Support` Engine:
+  - I3 restore summary on health (`restoreRebuilt`/`restoreSkipped`/sessionPhase)
+  - I7 shutdown veto via `AgentService.shutdownAuthorization`
+  - I8 `subscribeEvents` success before coordinator ready
+  - I9 bootstrap/diagnostics marker contracts beyond redaction unit test
+  - remaining I4/I5/I6 edges if still uncovered
+- Forbidden: product code, production logging, pbxproj, Human Engine dir, stopping Human agent, external network, Legacy, Orchestrator-authored tests.
+- Live disposable launchd proofs still deferred unless Human later authorizes sterile identity.
+- Deliverables owned by Tester worker: new XCTest and/or `test_wp13_stability_*.sh`, QA COVERAGE/REPORT under `scripts/qa`, full regression counts, structured handoff to Main.
+
 ### [WP13-STABILITY-TEST-CAMPAIGN-001-DONE] Orchestrator verified (2026-08-10)
 - Tester worker hit runtime limit mid-suite; Orchestrator verified leftover test diffs, finished suite, and wrote reports.
 - **XCTest:** 317/317 PASS (`build/WP13StabilityTesterDerivedData`, +2 new stability tests).

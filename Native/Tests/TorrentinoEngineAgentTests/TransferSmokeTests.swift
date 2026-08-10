@@ -2983,6 +2983,166 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertFalse(fm.fileExists(atPath: missing.path),
                        "probe must not auto-create a missing volume path")
     }
+
+    // MARK: - WP-13 ADR-020 Campaign-002 (I3 / I8)
+    //
+    // I7 (shutdown veto) and I9 (bootstrap/RedactedLogFileManager) require
+    // AgentService and RedactedLogFileManager, which are compiled only into
+    // the agent executable target (not the test target's Sources list).
+    // Those cells are covered by source-contract assertions in the new
+    // test_wp13_stability_i7i9.sh QA script (BLOCKED-seam; no pbxproj change
+    // allowed under ADR-020 feature freeze).
+
+    // I3-a: RestoreSummary fields are consistent after a successful restore
+    //        (rebuilt > 0, skipped == 0, phase == ready).
+    func testWP13C002I3RestoreSummarySuccessFieldsConsistent() async throws {
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: TransferEventBus(flushIntervalMilliseconds: 0))
+        // Add two valid torrents with full core identity.
+        let magnet1 = "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))"
+        let magnet2 = "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))"
+        _ = try await addMagnet(coordinator, uri: magnet1)
+        _ = try await addMagnet(coordinator, uri: magnet2)
+
+        // Restart via a fresh coordinator over the same store.
+        let store2 = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await store2.open()
+        let coordinator2 = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store2,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        let summary = await coordinator2.restoreFromPersistence()
+
+        XCTAssertEqual(summary.stored, 2, "stored must equal the number of persisted records")
+        XCTAssertEqual(summary.rebuilt, 2, "rebuilt must equal stored on a clean restore")
+        XCTAssertEqual(summary.skipped, 0, "skipped must be 0 on a clean restore")
+        XCTAssertNil(summary.failure, "failure must be nil on a clean restore")
+
+        let phase = await coordinator2.sessionPhase
+        let reason = await coordinator2.degradedReason
+        XCTAssertEqual(phase, .ready, "sessionPhase must be ready after a successful restore")
+        XCTAssertNil(reason, "degradedReason must be nil after a successful restore")
+
+        let rebuilt = await coordinator2.restoreRebuiltCount
+        let skipped = await coordinator2.restoreSkippedCount
+        XCTAssertEqual(rebuilt, 2, "restoreRebuiltCount must match summary.rebuilt")
+        XCTAssertEqual(skipped, 0, "restoreSkippedCount must match summary.skipped")
+    }
+
+    // I3-b: RestoreSummary fields are consistent after a restore anomaly
+    //        (all records have invalid core identity → rebuilt==0, degraded).
+    //        (Mirrors the existing testWP13StabilityR0DegradesAndFailsSnapshotClosed
+    //        but focuses on the summary field contract.)
+    func testWP13C002I3RestoreSummaryAnomalyFieldsConsistent() async throws {
+        let store = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await store.open()
+        // Inject a record with invalid core identity (nil v1 + nil v2 → skipped).
+        try await store.addTorrent(StoredTorrent(
+            id: UUID().uuidString,
+            infoHashV1: nil,
+            infoHashV2: nil,
+            name: "invalid-core-identity",
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+
+        let coordinator = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        let summary = await coordinator.restoreFromPersistence()
+
+        XCTAssertEqual(summary.stored, 1, "stored must be 1 (the invalid record)")
+        XCTAssertEqual(summary.rebuilt, 0, "rebuilt must be 0 when all records are invalid")
+        XCTAssertEqual(summary.skipped, 1, "skipped must be 1")
+        XCTAssertEqual(summary.failure, "restoreAnomaly",
+                       "failure must be 'restoreAnomaly' when stored > 0 and rebuilt == 0")
+
+        let phase = await coordinator.sessionPhase
+        let reason = await coordinator.degradedReason
+        XCTAssertEqual(phase, .degraded,
+                       "sessionPhase must be degraded when failure is restoreAnomaly")
+        XCTAssertEqual(reason, "restoreAnomaly",
+                       "degradedReason must match the failure string")
+
+        let rebuilt = await coordinator.restoreRebuiltCount
+        let skipped = await coordinator.restoreSkippedCount
+        XCTAssertEqual(rebuilt, 0, "restoreRebuiltCount must be 0 on anomaly")
+        XCTAssertEqual(skipped, 1, "restoreSkippedCount must be 1 on anomaly")
+    }
+
+    // I3-c: RestoreSummary.stored == RestoreSummary.rebuilt + RestoreSummary.skipped
+    //        is a numeric identity that must hold after any restore.
+    func testWP13C002I3RestoreSummaryCountsAreConsistent() async throws {
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: TransferEventBus(flushIntervalMilliseconds: 0))
+        _ = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))")
+
+        // Second coordinator — clean restore.
+        let store2 = PersistenceStore(dataDirectory: profile.rootURL)
+        _ = try await store2.open()
+        let coordinator2 = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store2,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        let summary = await coordinator2.restoreFromPersistence()
+        // Invariant: stored == rebuilt + skipped (no records are lost).
+        XCTAssertEqual(summary.stored, summary.rebuilt + summary.skipped,
+                       "stored must equal rebuilt + skipped (no records lost)")
+    }
+
+    // I8-a: TransferEventBus.register adds a sink; unregister removes it;
+    //        sinkCount reflects the count accurately (in-process seam).
+    func testWP13C002I8EventBusRegisterAndUnregisterMaintainsCount() async {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let id1 = UUID()
+        let id2 = UUID()
+        let countBefore = await bus.sinkCount()
+        XCTAssertEqual(countBefore, 0, "bus must start with 0 sinks")
+
+        await bus.register(TransferEventBus.Sink(id: id1) { _ in })
+        let countAfterFirst = await bus.sinkCount()
+        XCTAssertEqual(countAfterFirst, 1, "bus must have 1 sink after first register")
+
+        await bus.register(TransferEventBus.Sink(id: id2) { _ in })
+        let countAfterSecond = await bus.sinkCount()
+        XCTAssertEqual(countAfterSecond, 2, "bus must have 2 sinks after second register")
+
+        await bus.unregister(id: id1)
+        let countAfterUnsub = await bus.sinkCount()
+        XCTAssertEqual(countAfterUnsub, 1, "bus must have 1 sink after first unregister")
+
+        await bus.unregister(id: id2)
+        let countAfterAll = await bus.sinkCount()
+        XCTAssertEqual(countAfterAll, 0, "bus must have 0 sinks after all unregistered")
+    }
+
+    // I8-b: registering a second sink with the same ID replaces the first
+    //        (count stays 1, not 2).
+    func testWP13C002I8EventBusSameIDReplacesExistingSink() async {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let id = UUID()
+        await bus.register(TransferEventBus.Sink(id: id) { _ in })
+        await bus.register(TransferEventBus.Sink(id: id) { _ in })
+        let count = await bus.sinkCount()
+        XCTAssertEqual(count, 1, "registering the same ID twice must yield 1 sink (replace, not add)")
+    }
+
+    // I8-c: unregistering an ID that was never registered is a no-op (count stays 0).
+    func testWP13C002I8EventBusUnregisterNeverRegisteredIsNoop() async {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        await bus.unregister(id: UUID())
+        let count = await bus.sinkCount()
+        XCTAssertEqual(count, 0, "unregistering an unknown ID must be a no-op")
+    }
 }
 
 private final class LockedFlag: @unchecked Sendable {
@@ -3001,6 +3161,7 @@ private final class LockedFlag: @unchecked Sendable {
         return storage
     }
 }
+
 
 // MARK: - Stub engine
 
