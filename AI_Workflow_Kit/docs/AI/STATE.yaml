@@ -1,3 +1,9 @@
+project_prefix: torrentino
+onboarding:
+  status: pending
+  model_pairs_confirmed: false
+  completed_at: null
+
 current_step: WP-13
 step_description: >-
   Diagnostics, security, dependencies per plan §WP-13: OSLog/signposts,
@@ -27,6 +33,7 @@ completed_steps:
 - WP-10
 - WP-11
 - WP-12
+skipped_steps: []
 implementation:
   status: done
   attempts: 1
@@ -346,6 +353,15 @@ implementation:
     build exit 0, fresh app relaunched, status/hello/health operational
     (pid 13252), empty-store snapshot successful, lifecycle reached ready, and
     a live inspectAddSource completed successfully. Formal re-review is next.
+retry_guard:
+  max_attempts_without_progress: 3
+  repeated_failure_count: 0
+  last_failure_signature: null
+  blocker: null
+omp:
+  active_agent: null
+  active_role: null
+  last_result_artifact: null
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -354,6 +370,7 @@ review:
     Final re-review `[WP13-UI-001-004-REVIEW-003]` APPROVED. Reviewer verified
     all REVIEW-002 findings closed, 315/315 full tests and 41/41 focused tests
     green, clean diff gates, exact scope, and no stability-freeze violation.
+  enabled: true
 qa:
   status: in_progress
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
@@ -365,6 +382,10 @@ qa:
     diagnostics, projection, deterministic stress, and soak preparation.
     Tester may modify only tests, QA scripts, fixtures, COVERAGE/REPORT/
     BUG_REPORT; no product code or production logging.
+  enabled: true
+security:
+  next_run: none
+  note: Pending optional release audit.
 next_actor: tester
 track: RELEASE
 prior_track: RESEARCH
@@ -379,6 +400,10 @@ checkpoint:
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
+- AI_Workflow_Kit/docs/STEPS.md
+- PIPELINE.md
+- AI_Workflow_Kit/docs/DECISIONS.md
+- AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
   `[WP13-UI-001-004-REVIEW-003]` APPROVED. No Reviewer action until Tester
   reports bugs that require a Coder fix and subsequent re-review.
