@@ -52,6 +52,9 @@ struct CachedTorrentStatus: Sendable, Equatable {
     let uploadedBytes: Int64
     let peersConnected: Int
     let seedsTotal: Int
+    /// Metadata fields use nil/-1 while a magnet is still unresolved.
+    let name: String?
+    let totalSize: Int64
     let errorObservedAt: Date?
 
     init(
@@ -68,6 +71,8 @@ struct CachedTorrentStatus: Sendable, Equatable {
         uploadedBytes: Int64 = -1,
         peersConnected: Int = -1,
         seedsTotal: Int = -1,
+        name: String? = nil,
+        totalSize: Int64 = -1,
         errorObservedAt: Date? = nil
     ) {
         self.fraction = fraction
@@ -80,6 +85,8 @@ struct CachedTorrentStatus: Sendable, Equatable {
         self.uploadedBytes = uploadedBytes
         self.peersConnected = peersConnected
         self.seedsTotal = seedsTotal
+        self.name = name
+        self.totalSize = totalSize
         self.errorObservedAt = errorObservedAt
     }
 }
@@ -140,6 +147,8 @@ struct ByteBoundedStatusCache: Sendable {
                 uploadedBytes: status.uploadedBytes >= 0 ? status.uploadedBytes : previous.uploadedBytes,
                 peersConnected: status.peersConnected >= 0 ? status.peersConnected : previous.peersConnected,
                 seedsTotal: status.seedsTotal >= 0 ? status.seedsTotal : previous.seedsTotal,
+                name: status.name ?? previous.name,
+                totalSize: status.totalSize >= 0 ? status.totalSize : previous.totalSize,
                 errorObservedAt: status.health == .healthy ? nil : (status.errorObservedAt ?? Date())
             ),
             for: key
@@ -165,6 +174,8 @@ struct ByteBoundedStatusCache: Sendable {
                     uploadedBytes: status.uploadedBytes,
                     peersConnected: status.peersConnected,
                     seedsTotal: status.seedsTotal,
+                    name: status.name,
+                    totalSize: status.totalSize,
                     errorObservedAt: nil
                 ),
                 for: key
@@ -197,6 +208,6 @@ struct ByteBoundedStatusCache: Sendable {
     private static func estimatedBytes(key: String, status: CachedTorrentStatus) -> Int {
         // The fixed portion covers the scalar fields and dictionary storage;
         // UTF-8 counts cover the only variable-size retained payloads.
-        64 + key.utf8.count + (status.error?.utf8.count ?? 0)
+        64 + key.utf8.count + (status.error?.utf8.count ?? 0) + (status.name?.utf8.count ?? 0)
     }
 }

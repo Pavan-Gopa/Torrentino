@@ -101,9 +101,22 @@ final class TorrentListViewModel: ObservableObject {
     private var filesLoadRequestID = UUID()
     private var eventHandler: (@Sendable ([EngineEventV1]) -> Void)?
     private var recoveryInFlight = false
-
+    /// Push events are authoritative but intentionally best-effort. This
+    /// backstop heals a missed batch while a transfer is live.
+    private var snapshotBackstopTask: Task<Void, Never>?
+    private var appActivationObserver: NSObjectProtocol?
+    private var snapshotRequestGeneration: UInt64 = 0
     init(client: EngineClient) {
         self.client = client
+        appActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.refreshAfterAppActivation()
+            }
+        }
     }
 
     // MARK: - Derived presentation
@@ -165,6 +178,7 @@ final class TorrentListViewModel: ObservableObject {
                 lifecycleDegradedReason = nil
                 connectionNote = nil
                 connectionGeneration &+= 1
+                startSnapshotBackstop()
                 return
             } catch let error as EngineClientError {
                 if case .fault(let fault) = error, fault.code == .engineNotReady {
@@ -205,6 +219,46 @@ final class TorrentListViewModel: ObservableObject {
         Task {
             try? await fetchFullSnapshot()
         }
+    }
+    
+    /// Keeps the authoritative snapshot moving even if an event batch is
+    /// dropped or a short-lived XPC client interrupts push delivery.
+    private func startSnapshotBackstop() {
+        guard snapshotBackstopTask == nil else { return }
+        snapshotBackstopTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                } catch {
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                guard self.hasActiveTransfers else { continue }
+                await self.refreshActiveSnapshot()
+            }
+        }
+    }
+
+    private var hasActiveTransfers: Bool {
+        torrents.contains { torrent in
+            guard torrent.desiredState == .running else { return false }
+            switch torrent.activity {
+            case .fetchingMetadata, .queued, .checking, .downloading, .seeding, .moving:
+                return true
+            case .pendingAdd, .removing, .idle:
+                return false
+            }
+        }
+    }
+
+    private func refreshActiveSnapshot() async {
+        guard !usingFixture, !recoveryInFlight else { return }
+        try? await fetchFullSnapshot()
+    }
+
+    private func refreshAfterAppActivation() async {
+        guard !usingFixture else { return }
+        try? await fetchFullSnapshot()
     }
 
     func restartEngineSafely() {
@@ -365,10 +419,15 @@ final class TorrentListViewModel: ObservableObject {
     // MARK: - Commands
 
     private func fetchFullSnapshot() async throws {
+        snapshotRequestGeneration &+= 1
+        let requestGeneration = snapshotRequestGeneration
         let command = EngineCommandV1.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
         guard case .snapshot(let snapshot) = try await client.sendCommand(command) else {
             throw EngineClientError.protocolMismatch(details: "unexpected fetchSnapshot reply")
         }
+        // A newer backstop/mutation fetch wins if an older XPC reply arrives
+        // later; stale snapshots must never roll the published list backwards.
+        guard requestGeneration == snapshotRequestGeneration else { return }
         torrents = snapshot.torrents
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         engineRevision = snapshot.engineRevision

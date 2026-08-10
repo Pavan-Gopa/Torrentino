@@ -1012,7 +1012,9 @@ final class TransferSmokeTests: TestProfileCase {
                 downloadedBytes: 10_000,
                 uploadedBytes: 2_000,
                 peersConnected: 4,
-                seedsTotal: 6
+                seedsTotal: 6,
+                name: "resolved-name",
+                totalSize: 40_000
             ),
             for: "hash"
         )
@@ -1031,8 +1033,8 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(cache.entries["hash"]?.uploadRate, 300)
         XCTAssertEqual(cache.entries["hash"]?.downloadedBytes, 10_000)
         XCTAssertEqual(cache.entries["hash"]?.uploadedBytes, 2_000)
-        XCTAssertEqual(cache.entries["hash"]?.peersConnected, 4)
-        XCTAssertEqual(cache.entries["hash"]?.seedsTotal, 6)
+        XCTAssertEqual(cache.entries["hash"]?.name, "resolved-name")
+        XCTAssertEqual(cache.entries["hash"]?.totalSize, 40_000)
 
         // A successful partial sample may update known fields while retaining
         // unknown fields, and zero is real when the native status says idle.
@@ -1074,6 +1076,45 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(cache.entries["hash"]?.peersConnected, 0)
         XCTAssertEqual(cache.entries["hash"]?.seedsTotal, 0)
     }
+    
+    func testMagnetLiveMetadataProjectsNameSizeAndActivity() async throws {
+        let engine = StubTransferEngine()
+        let (coordinator, _, engineRef) = try await makeCoordinator(
+            engine: engine,
+            bus: TransferEventBus(flushIntervalMilliseconds: 0)
+        )
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))"
+        )
+
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0.25,
+            downloadedBytes: 1_024,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 12_000,
+            uploadBytesPerSec: 0,
+            peersConnected: 2,
+            seedsTotal: 1,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: "Resolved metadata name",
+            totalBytes: 4_096
+        )])
+        await coordinator.pumpOnce()
+
+        let snapshot = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        let torrent = try XCTUnwrap(snapshot.torrents.first { $0.id == recordID })
+        XCTAssertEqual(torrent.displayName, "Resolved metadata name")
+        XCTAssertEqual(torrent.progress.totalBytes, 4_096)
+        XCTAssertEqual(torrent.progress.downloadedBytes, 1_024)
+        XCTAssertEqual(torrent.activity, .downloading)
+        XCTAssertEqual(torrent.rates.downloadBytesPerSec, 12_000)
+    }
 
     func testEngineAlertDTOMarksMissingLiveScalarsUnknown() throws {
         let data = Data(#"{"kind":"state_changed","torrent-id":"hash","progress":0.5,"state":3}"#.utf8)
@@ -1085,7 +1126,11 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(alert.uploadedBytes, -1)
         XCTAssertEqual(alert.peersConnected, -1)
         XCTAssertEqual(alert.seedsTotal, -1)
+        XCTAssertNil(alert.name)
+        XCTAssertEqual(alert.totalSize, -1)
+
     }
+    
 
     func testRedactedLogSinkRotatesAndWritesDisposableEvidence() async throws {
         // Layer: Tests / Engine Agent
@@ -3624,3 +3669,4 @@ private actor DeliveryCollector {
         return collected
     }
 }
+    

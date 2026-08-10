@@ -1,3 +1,26 @@
+### [WP13-LIVE-EVENT-SINK-CLOBBER-001-DONE] Coder + Orchestrator gate (2026-08-11)
+- Root fix: `AgentService` per-connection event subscribers; sink bound on `subscribeEvents`, not every accept; CLI invalidate cannot clear GUI sink. `AgentRuntime` exports connection-scoped session.
+- UI: 2s active-transfer `fetchFullSnapshot` backstop + refresh on app become active; stale snapshot generation guard.
+- Metadata: bridge DTO name/totalSize plumbed into status cache/record apply (existing magnet row may keep `magnet:` name until next metadata-bearing update/re-add).
+- Orchestrator: killed all other UIs; launched only `build/EventSinkClobberDerivedData/.../Torrentino.app`; agent path/md5 match.
+- Live CLI proof under snapshot spam: checking with growing bytes + non-zero downBps/peers, then `seeding` complete `8956155983/8956155983`.
+- **Human:** use THIS window only. Confirm UI leaves Fetching metadata, shows progress/rates while transferring, and stays live even if background tools hit the agent.
+
+### [WP13-LIVE-EVENT-SINK-CLOBBER-001-OPEN] Human: UI frozen Fetching metadata while agent seeds (2026-08-11)
+- Human screenshot: row `magnet:28ffa0eb`, State **Fetching metadata**, all zeros, No files — while external network shows active torrent traffic.
+- Forensics (same UIAuthority bundle for UI+agent, not stale-app this time):
+  - CLI snapshot: `name="magnet:28ffa0eb" activity=seeding health=healthy downBps≈60 peers>=0 bytes=8956155983/9102222206`
+  - UI still shows initial magnet inspect snapshot (`fetchingMetadata`, zero size)
+  - Agent log: many `accepted ui connection` + immediate `ui connection invalidated` from short CLI/XPC sessions; `setEventSink` on **every** accept replaces the single global sink; invalidate clears it → **GUI push stream dies**
+  - UI has **no periodic snapshot poll**; after start()+mutation refresh it relies on events only
+  - Magnet `displayName` stays `magnet:<hashprefix>` even in agent snapshot after seed (metadata name not applied to record)
+- Required fixes:
+  1. **Event delivery multi-connection safe**: do not let transient CLI connections clobber/clear the GUI event sink. Prefer per-connection subscriber map; set sink on `subscribeEvents` (via `NSXPCConnection.current`) rather than every accept; clear only that connection.
+  2. **UI backstop**: while window has active transfers (metadata/checking/downloading/seeding desired running), periodic lightweight `fetchFullSnapshot` (e.g. 1–2s) so UI heals if push drops.
+  3. **Magnet metadata projection**: when engine has metadata/name/size, update record displayName/totalBytes/activity in snapshots (not forever stuck on magnet:hash + fetchingMetadata).
+  4. Keep rates merge sentinels, cold-start rebind, creator discoverability, post-mutation snapshot refresh.
+- Non-goals: deleting downloads; redesigning whole XPC protocol version.
+
 ### [WP13-LIVE-UI-AUTHORITY-REFRESH-001-DONE] Coder + Orchestrator gate (2026-08-10)
 - Fix in `TorrentListViewModel`: after successful pause/resume/remove → `fetchFullSnapshot`; completed removal drops row immediately; `recordNotFound` clears ghost without Remove failed.
 - Build: `build/UIAuthorityRefreshDerivedData` SUCCEEDED; focused AppTests 41/41.

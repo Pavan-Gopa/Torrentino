@@ -699,6 +699,8 @@ struct EngineBridge::Impl {
 			dto.uploaded_bytes = static_cast<std::int64_t>(status.total_upload);
 			dto.peers_connected = static_cast<int>(status.num_peers);
 			dto.seeds_total = static_cast<int>(status.num_seeds);
+			dto.name = status.name;
+			dto.total_size = status.total_wanted > 0 ? static_cast<std::int64_t>(status.total_wanted) : -1;
 			if (status.errc) {
 				dto.error = status.errc.message();
 			}

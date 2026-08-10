@@ -179,7 +179,9 @@ public actor BridgeTransferEngine: TransferEngine {
                     downloadedBytes: alert.downloadedBytes,
                     uploadedBytes: alert.uploadedBytes,
                     peersConnected: alert.peersConnected,
-                    seedsTotal: alert.seedsTotal
+                    seedsTotal: alert.seedsTotal,
+                    name: alert.name,
+                    totalSize: alert.totalSize
                 ),
                 for: torrentID
             )
@@ -209,7 +211,9 @@ public actor BridgeTransferEngine: TransferEngine {
                 seedsTotal: max(0, snapshot.seedsTotal),
                 activity: Self.activity(from: snapshot.state),
                 health: snapshot.health,
-                etaSeconds: nil
+                etaSeconds: nil,
+                metadataName: snapshot.name,
+                totalBytes: snapshot.totalSize
             )
         }
         for status in projected {

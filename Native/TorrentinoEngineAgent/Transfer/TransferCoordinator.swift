@@ -2131,6 +2131,10 @@ extension TransferRecord {
         let effectiveTotal: Int64
         if let metainfoData, let metainfo = try? Preflight.validateTorrentData(metainfoData) {
             effectiveTotal = TransferCoordinator.effectiveTotalBytes(for: metainfo, selection: fileSelection)
+        } else if status.totalBytes > 0 {
+            // A magnet has no persisted metainfo until the engine receives it;
+            // use the live torrent_status total as soon as it is available.
+            effectiveTotal = status.totalBytes
         } else if self.totalBytes > 0 {
             effectiveTotal = self.totalBytes
         } else if status.downloadedBytes > 0 && fraction > 0 {
@@ -2145,9 +2149,18 @@ extension TransferRecord {
         } else {
             downloaded = Int64(fraction * Double(effectiveTotal))
         }
+        let projectedDisplayName: String
+        if displayName.hasPrefix("magnet:"),
+           let metadataName = status.metadataName,
+           !metadataName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           metadataName != "(unknown)" {
+            projectedDisplayName = metadataName
+        } else {
+            projectedDisplayName = displayName
+        }
 
         let candidate = TransferRecord(
-            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            id: id, contentIdentity: contentIdentity, displayName: projectedDisplayName,
             desiredState: desiredState, activity: status.activity, health: health,
             totalBytes: effectiveTotal, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
             downloadBytesPerSec: status.downloadBytesPerSec, uploadBytesPerSec: status.uploadBytesPerSec,

@@ -562,11 +562,16 @@ final class AgentRuntime: @unchecked Sendable {
                                  argumentIndex: 0,
                                  ofReply: true)
             connection.exportedInterface = interface
-            connection.exportedObject = service
-            // WP-07: the UI exports its TorrentinoEventSink object on this
-            // connection; we push event batches through the remote proxy. The
-            // client-side exportedInterface must declare the same protocol.
+            // Export a forwarding object scoped to this accepted connection.
+            // AgentService binds its event sink only if this connection calls
+            // subscribeEvents; snapshot/health CLI clients never overwrite
+            // the GUI subscriber.
             connection.remoteObjectInterface = NSXPCInterface(with: TorrentinoEventSink.self)
+            let eventSink = connection.remoteObjectProxy as? TorrentinoEventSink
+            connection.exportedObject = service.makeConnection(
+                connectionID: connectionID,
+                eventSink: eventSink
+            )
             connection.interruptionHandler = { [weak service, weak self] in
                 self?.log.notice("ui connection interrupted")
                 service?.clearEventSink(connectionID: connectionID)
@@ -578,10 +583,6 @@ final class AgentRuntime: @unchecked Sendable {
                 lease.releaseOnce()
             }
             connection.resume()
-            service.setEventSink(
-                connection.remoteObjectProxy as? TorrentinoEventSink,
-                connectionID: connectionID
-            )
             log.notice("accepted ui connection effectiveUserIdentifier=\(connection.effectiveUserIdentifier)")
             TorrentinoLog.record(
                 category: "xpc",

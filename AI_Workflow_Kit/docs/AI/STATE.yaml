@@ -38,15 +38,11 @@ implementation:
   status: waiting_review
   attempts: 1
   note: >-
-    [WP13-LIVE-UI-AUTHORITY-REFRESH-001-DONE] pause/resume/remove now refresh
-    authoritative snapshot; remove ghosts on recordNotFound; no false Remove
-    failed. Orchestrator force-quit stale UIs and launched only
-    UIAuthorityRefreshDerivedData (agent md5 match). Awaiting Human verify:
-    live rates when downloading, resume works, remove drops row, Create visible.
-    Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
-    duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
-    BUG-003 files-from-metainfo UI (302/302 XCTest). Residual: selection is
-    persisted/dispatched but BridgeTransferEngine is a no-op — native bridge
+    [WP13-LIVE-EVENT-SINK-CLOBBER-001-DONE] Per-connection event subscribers;
+    CLI no longer clobbers GUI sink. UI 2s active-transfer snapshot backstop +
+    becomeActive refresh. Magnet metadata fields plumbed. Orchestrator opened
+    only EventSinkClobberDerivedData; agent md5 match; CLI spam still shows
+    live downBps/peers and checking→seeding. Awaiting Human UI live proof.
     lacks a file-priority API, so skip|normal is not applied to libtorrent.
     ORCHESTRATOR DECISION: scope extension APPROVED — Native/
     TorrentinoEngineBridge/bridge/ + adapter/ join target files for round 2b
@@ -367,8 +363,8 @@ omp:
   active_agent: null
   active_role: null
   last_result_artifact: null
-  dispatched_at: 2026-08-10T22:40:00Z
-  completed_at: 2026-08-10T22:20:00Z
+  dispatched_at: 2026-08-11T02:35:00Z
+  completed_at: 2026-08-11T02:50:00Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -413,9 +409,9 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Pending Human accept of UI authority refresh (+ rates/cold-start/creator).
+  Pending Human accept of event-sink clobber + live UI link fix.
 coder_brief: |
-  UI authority refresh delivered; waiting Human. No further coder unless reject.
+  Event-sink clobber fix delivered; waiting Human UI proof.
 tester_brief: |
   Idle until Reviewer after Human accept.
 architect_brief: |

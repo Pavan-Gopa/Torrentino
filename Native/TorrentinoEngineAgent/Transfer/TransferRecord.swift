@@ -160,6 +160,10 @@ public struct TransferTorrentStatus: Sendable, Equatable {
     public let uploadBytesPerSec: Int64
     public let peersConnected: Int
     public let seedsTotal: Int
+    /// Engine metadata projection; nil/-1 mean the magnet has not resolved
+    /// its torrent info yet.
+    public let metadataName: String?
+    public let totalBytes: Int64
     public let activity: TorrentActivity
     public let health: TorrentHealth
     public let etaSeconds: Int64?
@@ -175,7 +179,9 @@ public struct TransferTorrentStatus: Sendable, Equatable {
         seedsTotal: Int,
         activity: TorrentActivity,
         health: TorrentHealth,
-        etaSeconds: Int64?
+        etaSeconds: Int64?,
+        metadataName: String? = nil,
+        totalBytes: Int64 = -1
     ) {
         self.engineID = engineID
         self.progressFraction = progressFraction
@@ -185,6 +191,8 @@ public struct TransferTorrentStatus: Sendable, Equatable {
         self.uploadBytesPerSec = uploadBytesPerSec
         self.peersConnected = peersConnected
         self.seedsTotal = seedsTotal
+        self.metadataName = metadataName
+        self.totalBytes = totalBytes
         self.activity = activity
         self.health = health
         self.etaSeconds = etaSeconds

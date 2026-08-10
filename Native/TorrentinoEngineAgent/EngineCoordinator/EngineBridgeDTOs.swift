@@ -281,6 +281,10 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
     public let uploadedBytes: Int64
     public let peersConnected: Int
     public let seedsTotal: Int
+    /// Populated once a magnet's metadata is available; empty while unknown.
+    public let name: String?
+    /// -1 while metadata is unknown, otherwise the engine's total wanted size.
+    public let totalSize: Int64
 
     public init(
         kind: String,
@@ -294,7 +298,9 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         downloadedBytes: Int64 = -1,
         uploadedBytes: Int64 = -1,
         peersConnected: Int = -1,
-        seedsTotal: Int = -1
+        seedsTotal: Int = -1,
+        name: String? = nil,
+        totalSize: Int64 = -1
     ) {
         self.kind = kind
         self.torrentID = torrentID
@@ -308,6 +314,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         self.uploadedBytes = uploadedBytes
         self.peersConnected = peersConnected
         self.seedsTotal = seedsTotal
+        self.name = name
+        self.totalSize = totalSize
     }
 
     enum CodingKeys: String, CodingKey {
@@ -323,6 +331,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         case uploadedBytes = "uploaded-bytes"
         case peersConnected = "peers-connected"
         case seedsTotal = "seeds-total"
+        case name = "name"
+        case totalSize = "total-size"
     }
 
     public init(from decoder: Decoder) throws {
@@ -339,6 +349,9 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         uploadedBytes = try container.decodeIfPresent(Int64.self, forKey: .uploadedBytes) ?? -1
         peersConnected = try container.decodeIfPresent(Int.self, forKey: .peersConnected) ?? -1
         seedsTotal = try container.decodeIfPresent(Int.self, forKey: .seedsTotal) ?? -1
+        let decodedName = try container.decodeIfPresent(String.self, forKey: .name)
+        name = decodedName?.isEmpty == true ? nil : decodedName
+        totalSize = try container.decodeIfPresent(Int64.self, forKey: .totalSize) ?? -1
     }
 }
 

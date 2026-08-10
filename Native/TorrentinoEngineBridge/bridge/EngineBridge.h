@@ -168,6 +168,10 @@ struct EngineAlertDTO {
 	std::int64_t uploaded_bytes = -1;
 	int peers_connected = -1;
 	int seeds_total = -1;
+	// Metadata is populated by the same status() sample after a magnet has
+	// received its torrent info. Empty/-1 retain the previous sample.
+	std::string name;
+	std::int64_t total_size = -1;
 };
 
 struct HealthDTO {

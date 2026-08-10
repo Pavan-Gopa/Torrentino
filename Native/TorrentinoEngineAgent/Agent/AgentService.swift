@@ -2,8 +2,8 @@
 // Role: implements TorrentinoEngineXPCProtocol over CounterStore + a shutdown
 // hook owned by AgentRuntime. WP-07 adds the v1 command lane (sendCommand →
 // TransferCoordinator) and the event stream subscription (subscribeEvents →
-// TransferEventBus) with the client-side TorrentinoEventSink as the single
-// delivery endpoint.
+// TransferEventBus). Each accepted XPC connection receives a small forwarding
+// session so event subscriptions and sinks are scoped to that connection.
 // Must-not: block XPC queues with file IO, hold mutable state, or touch
 // libtorrent (all engine work happens inside the coordinator/bridge actors).
 // Invariants: all state access goes through the CounterStore/PersistenceStore
@@ -36,11 +36,19 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     var coordinator: TransferCoordinator?
     private let eventBus: TransferEventBus
     private let log = TorrentinoLog.logger(category: "xpc")
-    /// Single active event sink (the UI process). Guarded by sinkLock.
+    /// Event subscribers are keyed by the accepted XPC connection. A
+    /// short-lived CLI connection therefore cannot replace or invalidate the
+    /// GUI's sink. Guarded by sinkLock.
+    private struct EventSubscriber {
+        let busSinkID: UUID
+        let sink: TorrentinoEventSink?
+    }
     private let sinkLock = NSLock()
-    private var eventSink: TorrentinoEventSink?
-    private var eventSinkConnectionID: UUID?
-    private var busSinkID: UUID?
+    private let legacyConnectionID = UUID()
+    private var eventSubscribers: [UUID: EventSubscriber] = [:]
+    /// Kept for source-compatible in-process callers that bind a sink before
+    /// subscribing. Runtime XPC sessions pass their sink at subscribe time.
+    private var pendingEventSinks: [UUID: TorrentinoEventSink] = [:]
 
     init(
         store: CounterStore,
@@ -52,6 +60,62 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         self.persistence = persistence
         self.healthLane = healthLane
         self.eventBus = eventBus
+    }
+    
+    /// A connection-scoped exported object. NSXPC invokes methods on one
+    /// exported object per accepted connection, which gives subscribe and
+    /// unsubscribe an unambiguous connection identity without changing the
+    /// frozen wire protocol.
+    func makeConnection(connectionID: UUID, eventSink: TorrentinoEventSink?) -> TorrentinoEngineXPCProtocol {
+        Connection(service: self, connectionID: connectionID, eventSink: eventSink)
+    }
+
+    private final class Connection: NSObject, TorrentinoEngineXPCProtocol, @unchecked Sendable {
+        private let service: AgentService
+        private let connectionID: UUID
+        private let eventSink: TorrentinoEventSink?
+
+        init(service: AgentService, connectionID: UUID, eventSink: TorrentinoEventSink?) {
+            self.service = service
+            self.connectionID = connectionID
+            self.eventSink = eventSink
+        }
+
+        func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
+            service.hello(reply: reply)
+        }
+
+        func health(reply: @escaping @Sendable ([String: Any]) -> Void) {
+            service.health(reply: reply)
+        }
+
+        func incrementCounter(reply: @escaping @Sendable (Int64) -> Void) {
+            service.incrementCounter(reply: reply)
+        }
+
+        func getCounter(reply: @escaping @Sendable (Int64) -> Void) {
+            service.getCounter(reply: reply)
+        }
+
+        func shutdown(reply: @escaping @Sendable (Bool) -> Void) {
+            service.shutdown(reply: reply)
+        }
+
+        func sendCommand(commandData: Data, reply: @escaping @Sendable (Data) -> Void) {
+            service.sendCommand(commandData: commandData, reply: reply)
+        }
+
+        func subscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+            service.subscribeEvents(
+                connectionID: connectionID,
+                sink: eventSink,
+                reply: reply
+            )
+        }
+
+        func unsubscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+            service.unsubscribeEvents(connectionID: connectionID, reply: reply)
+        }
     }
 
     func hello(reply: @escaping @Sendable (String, Int64) -> Void) {
@@ -157,28 +221,59 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
     }
 
     func subscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+        subscribeEvents(connectionID: legacyConnectionID, sink: nil, reply: reply)
+    }
+
+    /// Registers one event-bus sink for one accepted XPC connection. The
+    /// remote sink is intentionally consumed here, not during listener
+    /// acceptance, so CLI health/snapshot connections never become event
+    /// subscribers unless they explicitly opt in.
+    func subscribeEvents(
+        connectionID: UUID,
+        sink: TorrentinoEventSink?,
+        reply: @escaping @Sendable (Bool) -> Void
+    ) {
         TorrentinoLog.record(category: "xpc", level: "info", message: "event subscription start")
         let id = UUID()
+        let previousID: UUID?
         sinkLock.lock()
-        let previousID = busSinkID
-        busSinkID = id
+        let boundSink = sink ?? pendingEventSinks[connectionID]
+        pendingEventSinks.removeValue(forKey: connectionID)
+        previousID = eventSubscribers[connectionID]?.busSinkID
+        eventSubscribers[connectionID] = EventSubscriber(busSinkID: id, sink: boundSink)
         sinkLock.unlock()
-        Task {
+        Task { [weak self] in
+            guard let self else {
+                reply(false)
+                return
+            }
             if let previousID {
                 await eventBus.unregister(id: previousID)
             }
             await eventBus.register(TransferEventBus.Sink(id: id) { [weak self] events in
-                await self?.deliver(events)
+                await self?.deliver(events, connectionID: connectionID)
             })
+            // A connection can invalidate while registration is suspended on
+            // the actor. Do not leave a stale sink behind in that race.
+            if !isCurrentSubscriber(connectionID: connectionID, busSinkID: id) {
+                await eventBus.unregister(id: id)
+            }
             TorrentinoLog.record(category: "xpc", level: "info", message: "event subscription complete result=success")
             reply(true)
         }
     }
 
     func unsubscribeEvents(reply: @escaping @Sendable (Bool) -> Void) {
+        unsubscribeEvents(connectionID: legacyConnectionID, reply: reply)
+    }
+
+    func unsubscribeEvents(
+        connectionID: UUID,
+        reply: @escaping @Sendable (Bool) -> Void
+    ) {
         sinkLock.lock()
-        let id = busSinkID
-        busSinkID = nil
+        let id = eventSubscribers.removeValue(forKey: connectionID)?.busSinkID
+        pendingEventSinks.removeValue(forKey: connectionID)
         sinkLock.unlock()
         guard let id else {
             reply(false)
@@ -190,27 +285,41 @@ final class AgentService: NSObject, TorrentinoEngineXPCProtocol, @unchecked Send
         }
     }
 
-    /// Replaces the connection-side sink (called by the listener on accept).
+    /// Stores a connection's sink for source-compatible callers that bind
+    /// before subscribing. Runtime sessions pass the proxy directly to
+    /// `subscribeEvents`, which is the ownership boundary.
     func setEventSink(_ sink: TorrentinoEventSink?, connectionID: UUID) {
         sinkLock.lock()
-        eventSink = sink
-        eventSinkConnectionID = connectionID
-        sinkLock.unlock()
-    }
-
-    /// Clears only the sink belonging to the connection that ended. An old UI
-    /// connection must not erase a newer session's live event sink.
-    func clearEventSink(connectionID: UUID) {
-        sinkLock.lock()
-        if eventSinkConnectionID == connectionID {
-            eventSink = nil
-            eventSinkConnectionID = nil
+        if let sink {
+            pendingEventSinks[connectionID] = sink
+        } else {
+            pendingEventSinks.removeValue(forKey: connectionID)
         }
         sinkLock.unlock()
     }
 
-    private func deliver(_ events: [EngineEventV1]) async {
-        let sink = sinkLock.withLock { eventSink }
+    /// Clears only the event subscription belonging to the connection that
+    /// ended. An old CLI connection therefore cannot erase the GUI sink.
+    func clearEventSink(connectionID: UUID) {
+        sinkLock.lock()
+        let id = eventSubscribers.removeValue(forKey: connectionID)?.busSinkID
+        pendingEventSinks.removeValue(forKey: connectionID)
+        sinkLock.unlock()
+        guard let id else { return }
+        Task {
+            await eventBus.unregister(id: id)
+        }
+    }
+
+    private func isCurrentSubscriber(connectionID: UUID, busSinkID: UUID) -> Bool {
+        sinkLock.lock()
+        let isCurrent = eventSubscribers[connectionID]?.busSinkID == busSinkID
+        sinkLock.unlock()
+        return isCurrent
+    }
+
+    private func deliver(_ events: [EngineEventV1], connectionID: UUID) async {
+        let sink = sinkLock.withLock { eventSubscribers[connectionID]?.sink }
         guard let sink else { return }
         let envelopes = events.map { IPCEnvelope.event($0) }
         guard let data = try? JSONEncoder().encode(envelopes) else { return }

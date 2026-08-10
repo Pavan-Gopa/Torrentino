@@ -422,6 +422,8 @@ NSDictionary* alertToJSON(const EngineAlertDTO& alert)
 		jsonKey("uploaded-bytes") : @(alert.uploaded_bytes),
 		jsonKey("peers-connected") : @(alert.peers_connected),
 		jsonKey("seeds-total") : @(alert.seeds_total),
+		jsonKey("name") : [NSString stringWithUTF8String:alert.name.c_str()],
+		jsonKey("total-size") : @(alert.total_size),
 	};
 }
 

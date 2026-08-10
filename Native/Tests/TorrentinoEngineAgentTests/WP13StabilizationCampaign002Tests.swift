@@ -252,6 +252,49 @@ final class WP13I8SubscribeEventsTests: XCTestCase {
         }
         await fulfillment(of: [secondUnsubExp], timeout: 2)
     }
+    
+    // I8-d: each XPC session owns its own event-bus registration. Ending a
+    // second connection must not unregister the first connection's sink.
+    func testSecondConnectionInvalidationLeavesFirstSubscriberDelivery() async throws {
+        let (svc, bus) = makeService()
+        let firstID = UUID()
+        let secondID = UUID()
+        let firstSink = RecordingEventSinkI8()
+        let secondSink = RecordingEventSinkI8()
+        let first = svc.makeConnection(connectionID: firstID, eventSink: firstSink)
+        let second = svc.makeConnection(connectionID: secondID, eventSink: secondSink)
+
+        let firstExp = expectation(description: "first subscribe")
+        first.subscribeEvents { subscribed in
+            XCTAssertTrue(subscribed)
+            firstExp.fulfill()
+        }
+        await fulfillment(of: [firstExp], timeout: 2)
+
+        let secondExp = expectation(description: "second subscribe")
+        second.subscribeEvents { subscribed in
+            XCTAssertTrue(subscribed)
+            secondExp.fulfill()
+        }
+        await fulfillment(of: [secondExp], timeout: 2)
+        XCTAssertEqual(await bus.sinkCount(), 2)
+
+        svc.clearEventSink(connectionID: secondID)
+        for _ in 0..<20 {
+            if await bus.sinkCount() == 1 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(await bus.sinkCount(), 1)
+
+        await bus.publish(
+            [.snapshotRequired(SnapshotRequiredEvent(reason: .droppedDelta, afterRevision: 0))],
+            urgent: true
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(firstSink.deliveryCount, 1, "first subscriber must still receive events")
+        XCTAssertEqual(secondSink.deliveryCount, 0, "invalidated subscriber must not receive later events")
+    }
+
 }
 
 // MARK: - I9 Diagnostics bootstrap via temp-dir env override
@@ -369,3 +412,17 @@ private final class LockedCounterI7: @unchecked Sendable {
     func increment() { lock.withLock { count += 1 } }
     var value: Int { lock.withLock { count } }
 }
+    
+private final class RecordingEventSinkI8: NSObject, TorrentinoEventSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var deliveries = 0
+
+    func deliver(eventData: Data) {
+        lock.withLock { deliveries += 1 }
+    }
+
+    var deliveryCount: Int {
+        lock.withLock { deliveries }
+    }
+}
+    
