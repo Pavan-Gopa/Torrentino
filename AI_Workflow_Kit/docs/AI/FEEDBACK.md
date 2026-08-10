@@ -1,3 +1,27 @@
+### [WP13-LIVE-COLDSTART-AGENT-REBIND-001-DONE] Coder + Orchestrator gate (2026-08-10)
+- Fix: `AppDelegate.applicationDidFinishLaunching` awaits `EngineViewModel.prepareForLaunch()` (`AgentServiceRegistration.register()` BTM self-heal + status) **before** `TorrentListViewModel.start()`. Removed ContentView `.task` startup races.
+- Files: `AppDelegate.swift`, `EngineViewModel.swift`, `ContentView.swift` only (+ prior discoverability UI still present).
+- Orchestrator proof after sterile Engine move:
+  - Launched only `build/ColdStartRebindDerivedData/.../Torrentino.app`
+  - Live agent path = that app’s `Contents/Library/LaunchAgents/TorrentinoEngineAgent`
+  - live_md5 == emb_md5 == `b5ac681cf356c0b53e8ef9dc828bd036` (no stale CoderFix002 agent)
+  - `--cli status|hello|health` operational (pid 61077)
+- **Human live check (critical):** in THIS already-open fresh window, Add a torrent **immediately** (no quit, no Finder double-click). Expect progress/rates, not permanent Checking/zero. Also spot Create Torrent button still visible.
+- If still stuck Checking with zero after ~30–60s on a normal public torrent, report with torrent type (private/public) and whether peers stay 0.
+
+### [WP13-LIVE-COLDSTART-AGENT-REBIND-001-OPEN] Human: fresh build stuck Checking until quit+double-click (2026-08-10)
+- Symptom (long-standing): after Orchestrator opens a new Debug build, first add shows Checking / zero rates and appears frozen. Full quit + Finder double-click `.torrent` makes subsequent session work.
+- Screenshot: House of the Dragon stuck Checking, Zero kB/s, one file selected.
+- Forensics (Orchestrator):
+  - Live processes were `build/CoderFix002DerivedData/.../Torrentino.app` + matching LaunchAgent, NOT the just-built `CreatorDiscoverabilityFreshGate` bundle.
+  - Agent binary md5 differed from fresh gate agent.
+  - `ContentView` startup: `refreshServiceStatus()` + `transfers.start()` only — **no** automatic `AgentServiceRegistration.register()` on GUI launch.
+  - `ServiceRegistration.register()` already contains BTM self-heal (unregister+register when enabled) but is only used from CLI/manual EngineViewModel.register, not cold start.
+  - LaunchServices dump also shows multiple historical `com.torrentino.app` paths (dmg/Tauri) — double-click can re-anchor differently than `open` on a build path.
+- Required fix direction: every normal GUI launch from a signed app bundle must rebind/register the LaunchAgent from **this** bundle before relying on XPC transfer connect; wait/retry for agent ready; if `.requiresApproval`/denied, show degraded banner and do not pretend engine is healthy.
+- Non-goals: creator redesign; changing libtorrent checking semantics if rebind alone fixes stall; deleting Human downloads.
+- Keep creator discoverability UI changes intact.
+
 ### [WP13-LIVE-CREATOR-DISCOVERABILITY-001-DONE] Coder + fresh-build gate (2026-08-10)
 - Coder `waiting_review`: Create Torrent now in-window.
   - Empty state (`ContentView`): Add + **Create Torrent** (`doc.badge.plus`).

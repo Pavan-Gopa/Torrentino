@@ -36,8 +36,6 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 860, minHeight: 520)
-        .task { viewModel.refreshServiceStatus() }
-        .task { await transfers.start() }
         .sheet(isPresented: $transfers.showAddSheet) {
             AddTorrentSheet(viewModel: transfers)
         }

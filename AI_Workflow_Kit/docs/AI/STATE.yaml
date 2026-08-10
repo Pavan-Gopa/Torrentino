@@ -38,12 +38,12 @@ implementation:
   status: waiting_review
   attempts: 1
   note: >-
-    [WP13-LIVE-CREATOR-DISCOVERABILITY-001-DONE] Coder delivered toolbar +
-    empty-state Create Torrent buttons (doc.badge.plus), EN/RU strings.
-    Orchestrator fresh-build gate GREEN: signed Debug relaunched from
-    build/CreatorDiscoverabilityFreshGate, status/hello/health OK (pid 58346),
-    sterile Engine store moved to Trash backup-20260810-212857. Awaiting
-    Human live acceptance before Reviewer.
+    [WP13-LIVE-COLDSTART-AGENT-REBIND-001-DONE] GUI launch now
+    prepareForLaunch()=SMAppService.register BTM rebind then transfers.start().
+    Orchestrator gate: open ColdStartRebindDerivedData app → live agent path+md5
+    match embedded agent (b5ac681c...); status/hello/health OK pid 61077;
+    sterile Engine backup-20260810-214353. Awaiting Human first-add live test
+    without quit+double-click workaround. Creator discoverability UI preserved.
     Fix round 2 delivered BUG-004 preflight, BUG-005 faulted removal, BUG-006
     duplicateAdd typed fault, BUG-007 redacted command/transfer logging,
     BUG-003 files-from-metainfo UI (302/302 XCTest). Residual: selection is
@@ -368,8 +368,8 @@ omp:
   active_agent: null
   active_role: null
   last_result_artifact: null
-  dispatched_at: 2026-08-10T21:50:00Z
-  completed_at: 2026-08-10T21:29:00Z
+  dispatched_at: 2026-08-10T22:10:00Z
+  completed_at: 2026-08-10T21:45:00Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
@@ -414,11 +414,11 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Pending Human live acceptance of creator discoverability UI, then re-review.
+  Pending Human live acceptance of cold-start rebind (+ creator discoverability).
 coder_brief: |
-  Discoverability lane delivered; waiting Human. No further coder work unless
-  Human rejects.
+  Cold-start rebind delivered; waiting Human first-add proof. No further coder
+  unless Human rejects.
 tester_brief: |
-  Idle until Reviewer approves discoverability lane.
+  Idle until Reviewer after Human accepts cold-start + discoverability.
 architect_brief: |
-  Idle. Option A stands; this lane is UI discoverability only.
+  Idle.

@@ -17,7 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         attachWindowDelegate()
-        AppContext.shared.refreshServiceStatus()
+        // Keep registration and the first XPC session in one ordered,
+        // process-lifetime path. A view `.task` can be recreated before BTM
+        // has re-anchored the LaunchAgent to this app bundle.
+        Task { @MainActor in
+            await AppContext.shared.prepareForLaunch()
+            await AppContext.transfers.start()
+        }
         NotificationManager.shared.requestAuthorization()
     }
 

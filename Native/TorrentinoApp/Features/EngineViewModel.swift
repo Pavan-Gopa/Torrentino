@@ -38,6 +38,28 @@ final class EngineViewModel: ObservableObject {
 
     // MARK: - Service registration
 
+    /// Rebinds the LaunchAgent once during normal GUI startup, then records
+    /// the resulting SMAppService state before the transfer client connects.
+    /// This belongs to the app lifecycle rather than a view task: SwiftUI
+    /// views can be recreated, while BTM must be re-anchored only once per
+    /// process launch.
+    func prepareForLaunch() async {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "unknown"
+        appendLog("SMAppService launch rebind started (bundle=\(bundleIdentifier))")
+        do {
+            try await AgentServiceRegistration.register()
+            appendLog("SMAppService launch rebind completed (bundle=\(bundleIdentifier))")
+        } catch {
+            // Keep lifecycle diagnostics useful without exposing paths or
+            // system-service details that can contain user data.
+            let errorType = String(reflecting: type(of: error))
+            appendLog("SMAppService launch rebind failed (bundle=\(bundleIdentifier), errorType=\(errorType))")
+        }
+
+        let snapshot = await AgentServiceRegistration.status()
+        applyStatus(snapshot, note: "after launch rebind")
+    }
+
     func refreshServiceStatus() {
         Task {
             let snapshot = await AgentServiceRegistration.status()
