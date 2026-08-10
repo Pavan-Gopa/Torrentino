@@ -62,12 +62,26 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
-            Button {
-                transfers.showAddSheet = true
-            } label: {
-                Label(String(localized: "torrents.add"), systemImage: "plus")
+            HStack(spacing: 10) {
+                Button {
+                    transfers.showAddSheet = true
+                } label: {
+                    Label(String(localized: "torrents.add"), systemImage: "plus")
+                }
+                .controlSize(.large)
+                .help(String(localized: "torrents.add.help"))
+                .accessibilityLabel(String(localized: "torrents.add"))
+
+                Button {
+                    transfers.showCreateSheet = true
+                } label: {
+                    Label(String(localized: "torrents.create"), systemImage: "doc.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help(String(localized: "torrents.create.help"))
+                .accessibilityLabel(String(localized: "torrents.create"))
             }
-            .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))

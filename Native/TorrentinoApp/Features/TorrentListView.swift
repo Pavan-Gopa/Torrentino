@@ -43,6 +43,13 @@ struct TorrentListView: View {
                     }
                     .help(String(localized: "torrents.add.help"))
                     .accessibilityLabel(String(localized: "torrents.add"))
+                    Button {
+                        viewModel.showCreateSheet = true
+                    } label: {
+                        Label(String(localized: "torrents.create"), systemImage: "doc.badge.plus")
+                    }
+                    .help(String(localized: "torrents.create.help"))
+                    .accessibilityLabel(String(localized: "torrents.create"))
 
                     Button {
                         viewModel.toggleInspector()

@@ -1,3 +1,29 @@
+### [WP13-LIVE-CREATOR-DISCOVERABILITY-001-DONE] Coder + fresh-build gate (2026-08-10)
+- Coder `waiting_review`: Create Torrent now in-window.
+  - Empty state (`ContentView`): Add + **Create Torrent** (`doc.badge.plus`).
+  - Toolbar (`TorrentListView`): Create beside Add.
+  - Strings EN/RU: `torrents.create` / `torrents.create.help`.
+  - Menu File → Create / ⌘⌥N unchanged.
+- Files: `ContentView.swift`, `TorrentListView.swift`, `Localizable.xcstrings` only.
+- Orchestrator sterile fresh-build gate GREEN:
+  - `BUILD SUCCEEDED` → `build/CreatorDiscoverabilityFreshGate/.../Torrentino.app`
+  - Engine store moved to `~/.Trash/torrentino-engine-backup-20260810-212857/`
+  - `--cli status|hello|health` operational (agent pid 58346)
+  - App relaunched for Human empty-state click-test
+- **Human check now:** empty window → Create Torrent opens sheet; after any add, toolbar Create still opens sheet; Add unchanged.
+- Next after Human accept: mandatory Reviewer (then Tester).
+
+### [WP13-LIVE-CREATOR-DISCOVERABILITY-001-OPEN] Human: Creator must be in-window (2026-08-10)
+- After Architect Option A, Human reports Creator is effectively hidden: only macOS menu bar File → Create Torrent (⌘⌥N). Empty state and toolbar expose Add only.
+- Intent: users must find Create by poking the main UI without knowing macOS menus.
+- Lane scope (UI-only):
+  1. Toolbar primary actions: Create Torrent control beside Add (`showCreateSheet = true`).
+  2. Empty state: secondary/primary pair — keep Add, add Create.
+  3. EN+RU String Catalog keys + help + accessibility labels.
+  4. Preserve existing menu + ⌘⌥N.
+- Non-goals: engine/creator algorithm, sheet redesign, Metal, pbxproj unless a new Swift file is unavoidable (prefer edit existing views).
+- ADR-020: Human-requested discoverability defect → authorized narrow product UI change.
+
 ### [WP13-ARCH-CREATOR-PRODUCTIZE-001-DONE] Architect Option A accepted (2026-08-10)
 - Human asked for Architect plan to create own torrents.
 - Architect inventory: **Creator already fully implemented in WP-11** (UI sheet, menu ⌘⌥N, XPC, CreatorPlanStore, CPU hash, atomic write, libtorrent verify, optional seed) under ADR-016/017/018.

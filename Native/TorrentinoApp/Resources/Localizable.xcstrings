@@ -1291,6 +1291,40 @@
         }
       }
     },
+    "torrents.create": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create Torrent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создать торрент"
+          }
+        }
+      }
+    },
+    "torrents.create.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a torrent from a file or folder"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создайте торрент из файла или папки"
+          }
+        }
+      }
+    },
     "torrents.add.cancel": {
       "extractionState": "manual",
       "localizations": {
