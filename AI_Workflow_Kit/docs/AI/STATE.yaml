@@ -38,15 +38,12 @@ implementation:
   status: waiting_review
   attempts: 1
   note: >-
-    [WP13-LIVE-EVENT-SINK-CLOBBER-001-DONE] Per-connection event subscribers;
-    CLI no longer clobbers GUI sink. UI 2s active-transfer snapshot backstop +
-    becomeActive refresh. Magnet metadata fields plumbed. Orchestrator opened
-    only EventSinkClobberDerivedData; agent md5 match; CLI spam still shows
-    live downBps/peers and checking→seeding. Awaiting Human UI live proof.
-    lacks a file-priority API, so skip|normal is not applied to libtorrent.
-    ORCHESTRATOR DECISION: scope extension APPROVED — Native/
-    TorrentinoEngineBridge/bridge/ + adapter/ join target files for round 2b
-    (real priority application) plus live evidence (launchd recovery,
+    Human accepted [WP13-LIVE-EVENT-SINK-CLOBBER-001] live UI proof ("ok").
+    Combined mandatory Reviewer opened for Human-accepted live lanes:
+    creator discoverability, cold-start agent rebind, rates projection,
+    UI authority refresh, event-sink isolation + snapshot backstop.
+    Commits 4b64fe9..8065eec (product). Feature freeze remains except these
+    defect fixes. Next after APPROVED: Tester regression.
     disposable faulted-record removal, live priorities). Human-record removal
     remains a Human action on the fresh build.
     Round 2b delivered: EngineBridge setFilePriorities (value-only validated
@@ -358,34 +355,35 @@ retry_guard:
   max_attempts_without_progress: 3
   repeated_failure_count: 0
   last_failure_signature: null
-  blocker: null
+  blocker: >-
+    Formal workflow-tester primary still 401 Invalid API Key;
+    modelFallback=false. Main direct regression GREEN 326/326.
+    Optional: "continue Tester with backup" for formal Tester role.
 omp:
   active_agent: null
   active_role: null
-  last_result_artifact: null
-  dispatched_at: 2026-08-11T02:35:00Z
-  completed_at: 2026-08-11T02:50:00Z
+  last_result_artifact: build/WP13LiveFixpackMainVerify.xcresult
+  dispatched_at: 2026-08-11T03:10:00Z
+  completed_at: 2026-08-11T03:20:00Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: approved
   note: >-
-    Final re-review `[WP13-UI-001-004-REVIEW-003]` APPROVED. Reviewer verified
-    all REVIEW-002 findings closed, 315/315 full tests and 41/41 focused tests
-    green, clean diff gates, exact scope, and no stability-freeze violation.
+    [WP13-LIVE-FIXPACK-REVIEW-001] APPROVED. All 10 Judgment Gates passed;
+    Debug arm64 + EngineAgentTests green. Residual: magnet displayName may
+    briefly lag until first metadata sample. Next: Tester regression.
   enabled: true
 qa:
   status: green
   last_report: Native/TorrentinoEngineBridge/scripts/qa/REPORT.md
-  suite: WP-13-STABILITY-FOLLOWUP
+  suite: WP-13-LIVE-FIXPACK
   bugs_open: 0
   note: >-
-    [WP13-STABILITY-TEST-CAMPAIGN-002] PRODUCT GREEN (Orchestrator verified
-    Tester handoff only). XCTest 323/323 (+6 I3/I8 in TransferSmokeTests).
-    QA 109 PASS / 0 FAIL / 13 WP-02 BLOCKED / 1 Legacy WAIVED. New scripts
-    campaign002 6/6 + i7i9 source-contract 9/9. I7/I9 in-process AgentService
-    / diagnostics are BLOCKED-seam (pbxproj freeze); live disposable still
-    deferred. Feature freeze ACTIVE. No product bugs. No Coder lane.
+    Reviewer APPROVED + Human UI ok + Main xcodebuild test 326/326 PASS
+    (prime build then full suite; build/WP13LiveFixpackMainVerify.xcresult).
+    Formal Tester role blocked on primary 401; backup needs Human authorize.
+    Live fixpack accepted for practical purposes; residual magnet name lag.
   enabled: true
 security:
   next_run: none
@@ -409,10 +407,11 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Pending Human accept of event-sink clobber + live UI link fix.
+  APPROVED fixpack. Idle unless Tester finds product bugs needing re-review.
 coder_brief: |
-  Event-sink clobber fix delivered; waiting Human UI proof.
+  Idle unless Tester returns product failures.
 tester_brief: |
-  Idle until Reviewer after Human accept.
+  Run [WP13-LIVE-FIXPACK-TEST-001]: full/focused XCTest + relevant QA scripts;
+  add missing focused tests for fixpack contracts if gaps; report green or bugs.
 architect_brief: |
   Idle.

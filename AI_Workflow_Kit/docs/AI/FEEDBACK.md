@@ -1,3 +1,31 @@
+### [WP13-LIVE-FIXPACK-TEST-001-MAIN-VERIFY-GREEN] (2026-08-11)
+- Formal Tester primary still blocked (**401 Invalid API Key**); no auto-backup.
+- Main direct regression after prime build:
+  - `xcodebuild build` Debug arm64 **SUCCEEDED**
+  - `xcodebuild test` **326 passed / 0 failed** (`build/WP13LiveFixpackMainVerify.xcresult`)
+  - Includes magnet metadata, StatusCache sentinel, rate projection, WP13 stability, creator, removal suites
+- Combined with Reviewer **APPROVED** + Human event-sink **ok**: live fixpack is **practically green**.
+- Optional: Human may still say **continue Tester with backup** for formal role evidence.
+- Residual non-blocking: magnet displayName may lag briefly until metadata sample.
+
+### [WP13-LIVE-FIXPACK-TEST-001-BLOCKED] Tester primary 401 (2026-08-11)
+- `workflow-tester` failed in 1.4s: **401 Invalid API Key** (provider/model auth).
+- Per updated workflow policy (`modelFallback: false`), automatic backup was not used.
+- Reviewer remains **APPROVED**; Human event-sink UI remains **ok**.
+- Main is running direct `xcodebuild test` regression as interim verification.
+- Human: say **«continue Tester with backup»** to authorize formal Tester backup run, or accept Main verify counts if green.
+
+### [WP13-LIVE-FIXPACK-REVIEW-001] APPROVED (2026-08-11)
+- Reviewer verdict: **APPROVED** (0 issues).
+- Gates 1–10 passed for commits `4b64fe9`..`8065eec`: multi-connection event sinks, UI snapshot backstop, StatusCache -1 sentinels, remove/pause/resume authority refresh, cold-start LaunchAgent rebind, creator discoverability, PIMPL, no MainActor IO, scoped defect fixes, adequate comments.
+- Objective: Debug arm64 build + EngineAgentTests green (Reviewer evidence).
+- Residual non-blocking: magnet displayName may briefly lag until first metadata sample.
+- Next: `[WP13-LIVE-FIXPACK-TEST-001]` Tester regression.
+
+### [WP13-LIVE-EVENT-SINK-CLOBBER-001-HUMAN-OK] (2026-08-11)
+- Human: **ok** on EventSinkClobber live UI proof.
+- Combined mandatory Reviewer opened: `[WP13-LIVE-FIXPACK-REVIEW-001]` covering creator discoverability + cold-start rebind + rates projection + UI authority refresh + event-sink isolation (commits `4b64fe9`..`8065eec`).
+
 ### [WP13-LIVE-EVENT-SINK-CLOBBER-001-DONE] Coder + Orchestrator gate (2026-08-11)
 - Root fix: `AgentService` per-connection event subscribers; sink bound on `subscribeEvents`, not every accept; CLI invalidate cannot clear GUI sink. `AgentRuntime` exports connection-scoped session.
 - UI: 2s active-transfer `fetchFullSnapshot` backstop + refresh on app become active; stale snapshot generation guard.
