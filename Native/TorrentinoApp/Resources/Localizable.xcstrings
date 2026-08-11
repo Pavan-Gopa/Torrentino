@@ -5270,6 +5270,23 @@
           }
         }
       }
+    },
+    "creator.fault.verification": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The created torrent failed verification. No incomplete output was kept. Try again, or choose v1 if the source is unusual."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Созданный торрент не прошёл проверку. Неполный файл не сохранён. Попробуйте снова или выберите v1 для необычного источника."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

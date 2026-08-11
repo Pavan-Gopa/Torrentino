@@ -3366,6 +3366,11 @@ extension TransferCoordinator {
             let outcome: OperationOutcome = fault.code == .operationCancelled
                 ? .cancelled
                 : .failed(fault)
+            TorrentinoLog.record(
+                category: "transfer",
+                level: fault.code == .operationCancelled ? "info" : "error",
+                message: "creator commit failed code=\(fault.code.rawValue) key=\(fault.localizationKey) details=\(fault.redactedContext ?? fault.localizedDescription)"
+            )
             finishCreatorOperation(operationID, token: request.token)
             await eventBus.publish([.operationCompleted(OperationCompletedEvent(
                 operationID: operationID,
@@ -3373,7 +3378,12 @@ extension TransferCoordinator {
                 timestamp: Date()
             ))], urgent: true)
         } catch {
-            let fault = EngineFault.creatorStorageFailure(details: "commitCreate failed: \(error.localizedDescription)")
+            let fault = EngineFault.creatorStorageFailure(details: "commitCreate failed: \(error)")
+            TorrentinoLog.record(
+                category: "transfer",
+                level: "error",
+                message: "creator commit failed untyped details=\(error)"
+            )
             finishCreatorOperation(operationID, token: request.token)
             await eventBus.publish([.operationCompleted(OperationCompletedEvent(
                 operationID: operationID,

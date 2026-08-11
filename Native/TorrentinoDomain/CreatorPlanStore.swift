@@ -626,14 +626,24 @@ public actor CreatorPlanStore {
             let independentIdentity: IndependentMetainfoIdentity
             do {
                 independentIdentity = try await independentVerifier(writtenData)
+            } catch let fault as EngineFault {
+                throw fault
             } catch {
                 throw EngineFault.corruptData(details: "pinned libtorrent verification failed: \(error)")
             }
-            try Self.verifyTorrent(
-                parsed, against: freshScan, options: options, hashingResult: hashingResult,
-                expectedIdentity: expectedIdentity, independentIdentity: independentIdentity,
-                requireIndependentVerification: true
-            )
+            do {
+                try Self.verifyTorrent(
+                    parsed, against: freshScan, options: options, hashingResult: hashingResult,
+                    expectedIdentity: expectedIdentity, independentIdentity: independentIdentity,
+                    requireIndependentVerification: true
+                )
+            } catch let fault as EngineFault {
+                throw fault
+            } catch let error as MetainfoError {
+                throw EngineFault.corruptData(details: "creator verification failed: \(error.description)")
+            } catch {
+                throw EngineFault.corruptData(details: "creator verification failed: \(error)")
+            }
             try cancelledFault()
             try revalidateSourceGeneration()
 

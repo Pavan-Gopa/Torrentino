@@ -3387,3 +3387,60 @@ N/A — no changes requested.
   3. Three-way compare only the pane/remove/state hunks above, then retain the accepted DnD, selected-size, rates/progress, checkbox/bulk, and double-click hunks explicitly.
   4. Rebuild the resulting Native tree and run the focused selection/rates/DnD/double-click tests plus a fresh live review before any further fix work. Keep `Legacy/Tauri/` excluded.
 - Verification for this checkpoint: rollback inspection only; no product build or live behavior claim is made, and no commit or push was performed.
+
+### [WP13-CREATOR-LIVE-001-MAIN-FIX-DONE] Creator crash + invalid hybrid metainfo
+- **Human repro:** Create Torrent on
+  `Drugaja.Zemlja.2011.x264.BDRip.(1080p).mkv` (8.96 GB), Hybrid, Automatic
+  piece size. The first run left the sheet at `Creating... / Backend:
+  Unavailable`; the second reached 96% Verification and failed.
+- **Root cause 1 — deterministic hasher crash:** production `CPUHasher` used
+  `Data.removeFirst` for v2 buffer compaction. `Data` retained a non-zero
+  `startIndex`, while the next pass sliced it with a zero-based range; the
+  agent trapped in `Data.subdata(in:)` (`EXC_BREAKPOINT`). Buffer compaction now
+  rebases through `Data(dropFirst:)`, matching the safe reference hasher.
+- **Root cause 2 — invalid BEP-52 piece-layer verification:** the Domain parser
+  reconstructed omitted beyond-EOF piece roots as 32 zero bytes. BEP-52 omits
+  those hashes, but their reconstruction value is the Merkle root of an
+  all-zero 16 KiB leaf subtree at the configured piece height. The parser now
+  derives that value before reconstructing the file root. This removes the
+  `invalid v2 piece layers: layer does not reconstruct ... root` failure from
+  pinned libtorrent.
+- **Fail-closed UI recovery:** reconnect during an active Creator operation now
+  terminates the sheet with `creator.fault.interrupted` instead of leaving
+  `Creating...` forever. Progress stages use the actual event stage name, with
+  localized Hashing/Building Metadata/Writing Torrent/Verification/Starting
+  Seed labels. Corrupt-data verification faults retain the frozen
+  `.internalError` wire code and now use `creator.fault.verification`.
+- **Regression coverage:** added a multi-buffer CPUHasher rebase test, a hybrid
+  partial-final-piece BEP-52 reconstruction test, and IPC fault-factory
+  localization assertions.
+- **Fresh-build proof:** signed Debug arm64 build from
+  `build/CreatorFinalDerivedData` returned `BUILD SUCCEEDED`; fresh app pid
+  `24951`, fresh agent pid `24959`, and `--cli health` were operational.
+- **Human-file end-to-end proof:** the fresh app processed the exact 8.96 GB
+  source to `Completed / 100% / Backend: CPU / 8.96 GB of 8.96 GB / Files:
+  1 of 1`. Atomic output exists at 28,179 bytes. The pinned libtorrent 2.1.0
+  verifier accepts both identities:
+  v1 `080f73389c5f93995d31de9495452a1575765f46`,
+  v2 `51b3125d6a785d32279255e02365a780141df848f38d68989046d2271b618112`.
+- **Regression gate:** `build/CreatorFinalRegression.xcresult` =
+  328 passed, 0 failed, 0 skipped. Focused BEP-52 and fault-factory tests also
+  pass. No Metal path was enabled; ADR-018 `REJECT_METAL` remains unchanged.
+- **Next:** mandatory Reviewer lane
+  `[WP13-CREATOR-LIVE-001-REVIEW-001]`; no unrelated `.omp`, measurement, or
+  workflow-install artifacts are in scope.
+
+### [WP13-CREATOR-LIVE-001-REVIEW-001] APPROVED (2026-08-11)
+- Mandatory `workflow-reviewer` verdict: **APPROVED**.
+- Reviewer independently confirmed the `Data(dropFirst:)` rebase removes the
+  production `Data.removeFirst` index trap; BEP-52 zero-subtree padding
+  reconstructs omitted piece roots across small, exact-boundary,
+  partial-final-piece, and larger-file shapes.
+- Reviewer confirmed reconnect fails the active Creator operation closed,
+  EN/RU localization exists, `EngineFault.corruptData` preserves the frozen
+  `.internalError` wire code, and ADR-018 remains CPU-only.
+- Gate evidence accepted: signed fresh build, successful live 8.96 GB hybrid
+  creation, pinned libtorrent v1/v2 verification, and 328/328 XCTest.
+- Result: no findings, no required changes. Return control to Human; formal
+  Tester backup remains optional and requires Human authorization because the
+  primary Tester provider returns 401.

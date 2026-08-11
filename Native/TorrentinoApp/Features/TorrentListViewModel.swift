@@ -1283,6 +1283,8 @@ final class TorrentListViewModel: ObservableObject {
             key = fault.localizationKey
         case "creator.fault.invalid_options":
             key = fault.localizationKey
+        case "creator.fault.verification":
+            key = fault.localizationKey
         default:
             switch fault.code {
             case .operationCancelled:
@@ -1293,6 +1295,8 @@ final class TorrentListViewModel: ObservableObject {
                 key = "creator.fault.invalid_options"
             case .permissionDenied, .insufficientSpace, .volumeUnavailable, .storeError:
                 key = "creator.fault.storage"
+            case .internalError where fault.localizationKey == "creator.fault.verification":
+                key = fault.localizationKey
             default:
                 key = fallback
             }

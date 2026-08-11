@@ -687,6 +687,7 @@ public enum MetainfoParser {
             layers[root] = bytes
         }
 
+        let omittedPieceHash = zeroHashForPieceLayer(pieceLength: pieceLength)
         var expectedRoots: Set<Data> = []
         for file in files where file.sizeBytes > pieceLength {
             guard let root = file.v2PiecesRoot, root.count == 32 else {
@@ -707,7 +708,7 @@ public enum MetainfoParser {
                 let start = index * 32
                 pieceRoots.append(layer.subdata(in: start..<(start + 32)))
             }
-            guard merkleRoot(pieceRoots) == root else {
+            guard merkleRoot(pieceRoots, paddingHash: omittedPieceHash) == root else {
                 throw MetainfoError.invalidPieceLayers("layer does not reconstruct '\(file.path)' root")
             }
             expectedRoots.insert(root)
@@ -718,24 +719,41 @@ public enum MetainfoParser {
         return layers
     }
 
-    private static func merkleRoot(_ leaves: [Data]) -> Data {
-        guard !leaves.isEmpty else { return Data(repeating: 0, count: 32) }
-        let zeroHash = Data(repeating: 0, count: 32)
+    /// Reconstructs the file root from the piece layer. BEP-52 omits hashes
+    /// covering only bytes beyond EOF, but those omitted piece hashes are the
+    /// roots of all-zero 16 KiB leaf subtrees — not 32 zero bytes.
+    private static func merkleRoot(_ leaves: [Data], paddingHash: Data) -> Data {
+        guard !leaves.isEmpty else { return paddingHash }
         var targetCount = 1
         while targetCount < leaves.count { targetCount *= 2 }
-        var layer = leaves + Array(repeating: zeroHash, count: targetCount - leaves.count)
+        var layer = leaves + Array(repeating: paddingHash, count: targetCount - leaves.count)
         while layer.count > 1 {
             var next: [Data] = []
             next.reserveCapacity(layer.count / 2)
             for index in stride(from: 0, to: layer.count, by: 2) {
-                var input = Data()
-                input.append(layer[index])
-                input.append(layer[index + 1])
-                next.append(Data(SHA256.digest(input)))
+                next.append(hashPair(layer[index], layer[index + 1]))
             }
             layer = next
         }
         return layer[0]
+    }
+
+    private static func zeroHashForPieceLayer(pieceLength: Int64) -> Data {
+        var hash = Data(repeating: 0, count: 32)
+        var blocks = pieceLength / CreatorLayout.v2BlockSize
+        while blocks > 1 {
+            hash = hashPair(hash, hash)
+            blocks /= 2
+        }
+        return hash
+    }
+
+    private static func hashPair(_ left: Data, _ right: Data) -> Data {
+        var input = Data()
+        input.reserveCapacity(64)
+        input.append(left)
+        input.append(right)
+        return Data(SHA256.digest(input))
     }
 }
 

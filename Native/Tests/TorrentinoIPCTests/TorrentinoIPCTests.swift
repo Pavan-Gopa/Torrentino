@@ -355,6 +355,11 @@ final class TorrentinoIPCTests: TestProfileCase {
         let record = TorrentRecordID(rawValue: UUID())
         let notFound = EngineFault.recordNotFound(recordID: record)
         XCTAssertEqual(notFound.affectedRecord, record)
+
+        let corrupt = EngineFault.corruptData(details: "identity mismatch")
+        XCTAssertEqual(corrupt.code, .internalError)
+        XCTAssertEqual(corrupt.localizationKey, "creator.fault.verification")
+        XCTAssertEqual(corrupt.redactedContext, "identity mismatch")
     }
 
     // MARK: - IPCEnvelope v1

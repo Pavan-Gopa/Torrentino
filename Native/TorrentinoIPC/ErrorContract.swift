@@ -549,6 +549,7 @@ public struct EngineFault: Codable, Sendable, Equatable, Error, LocalizedError {
         EngineFault(
             code: .internalError,
             severity: .error,
+            localizationKey: "creator.fault.verification",
             recoveryActions: ["retry_op"],
             redactedContext: details
         )

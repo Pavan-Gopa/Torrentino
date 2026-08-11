@@ -118,6 +118,40 @@ final class TorrentCreatorDomainTests: XCTestCase {
     }
 
 
+    func testHybridPartialFinalPieceLayerReconstructsBEP52Root() async throws {
+        let sourceFile = tempDirURL.appendingPathComponent("movie (sample).mkv")
+        let payload = Data(repeating: 0xA5, count: 160 * 1024 + 123)
+        try payload.write(to: sourceFile)
+        let scan = try SourceScanner.scan(sourcePath: sourceFile.path, manualPieceSizeKiB: 64)
+        let hashing = try await CPUHasher().hash(
+            scannedFiles: scan.files,
+            pieceSizeBytes: scan.pieceSizeBytes,
+            format: .hybrid,
+            onProgress: { _, _, _, _ in }
+        )
+        let options = CreateOptions(
+            outputPath: tempDirURL.appendingPathComponent("partial.torrent").path,
+            format: .hybrid,
+            trackers: [["https://tracker.example/announce"]],
+            pieceSizeKiB: 64,
+            seedWhileDownloading: false
+        )
+
+        let torrent = try MetainfoGenerator.buildTorrentFile(
+            scanResult: scan,
+            options: options,
+            hashingResult: hashing
+        )
+        let parsed = try MetainfoParser.parse(torrent)
+
+        XCTAssertEqual(parsed.pieceLength, 64 * 1024)
+        XCTAssertEqual(parsed.totalSize, Int64(payload.count))
+        XCTAssertEqual(parsed.v1PiecesData?.count, 60)
+        XCTAssertEqual(parsed.v2PieceLayers.values.first?.count, 96)
+        XCTAssertNotNil(parsed.infoHashV1)
+        XCTAssertNotNil(parsed.infoHashV2)
+    }
+
     func testBencodeEncoderAndMetainfoParserRoundTrip() async throws {
         // Round trip through the real pipeline: scan → hash (CPUHasher) →
         // generate (MetainfoGenerator) → parse (MetainfoParser). Fabricated

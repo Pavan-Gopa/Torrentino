@@ -324,33 +324,3 @@ public actor EngineCoordinator {
         }
     }
 }
-
-/// Keeps the independent creator verifier on the production bridge side while
-/// TransferCoordinator depends only on a value/async protocol. No C++ object
-/// crosses this extension's boundary.
-extension BridgeTransferEngine: CreatorIndependentVerifier {
-    func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity {
-        let dto = try await EngineCoordinator().verifyTorrent(data: data)
-        let v1 = dto.hasV1 ? Self.creatorDataFromHex(dto.v1Hash) : nil
-        let v2 = dto.hasV2 ? Self.creatorDataFromHex(dto.v2Hash) : nil
-        guard (!dto.hasV1 || v1?.count == 20), (!dto.hasV2 || v2?.count == 32) else {
-            throw EngineFault.corruptData(details: "pinned libtorrent returned malformed info identity")
-        }
-        return IndependentMetainfoIdentity(v1: v1, v2: v2)
-    }
-
-    private static func creatorDataFromHex(_ value: String) -> Data? {
-        let normalized = value.lowercased()
-        guard normalized.count % 2 == 0, normalized.allSatisfy({ $0.isHexDigit }) else { return nil }
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(normalized.count / 2)
-        var index = normalized.startIndex
-        while index < normalized.endIndex {
-            let next = normalized.index(index, offsetBy: 2)
-            guard let byte = UInt8(normalized[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
-        }
-        return Data(bytes)
-    }
-}
