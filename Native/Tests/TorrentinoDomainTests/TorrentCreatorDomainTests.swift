@@ -84,6 +84,40 @@ final class TorrentCreatorDomainTests: XCTestCase {
         XCTAssertEqual(SourceScanner.calculateAutomaticPieceSize(totalSizeBytes: 2 * 1024 * 1024 * 1024), 4 * 1024 * 1024)
     }
 
+    /// Production CPUHasher used to call `Data.removeFirst`, which leaves a
+    /// non-zero `startIndex`. The next 0-based `subdata` then traps inside
+    /// Foundation (`EXC_BREAKPOINT`) and kills the LaunchAgent mid-create.
+    /// A file larger than one 64 KiB read buffer forces that second pass.
+    func testCPUHasherHybridSurvivesMultiBufferV2Rebase() async throws {
+        let sourceFile = tempDirURL.appendingPathComponent("multibuffer.bin")
+        // 80 KiB = one full 64 KiB read + one 16 KiB block on the next read.
+        let payload = Data(repeating: 0x5A, count: 80 * 1024)
+        try payload.write(to: sourceFile)
+
+        let scanResult = try SourceScanner.scan(
+            sourcePath: sourceFile.path,
+            manualPieceSizeKiB: 16
+        )
+        XCTAssertEqual(scanResult.files.count, 1)
+        XCTAssertEqual(scanResult.totalSizeBytes, Int64(payload.count))
+
+        let hashingResult = try await CPUHasher().hash(
+            scannedFiles: scanResult.files,
+            pieceSizeBytes: scanResult.pieceSizeBytes,
+            format: .hybrid,
+            onProgress: { _, _, _, _ in }
+        )
+
+        XCTAssertEqual(hashingResult.totalBytesHashed, Int64(payload.count))
+        XCTAssertEqual(hashingResult.totalFilesHashed, 1)
+        XCTAssertFalse(hashingResult.v1PiecesData.isEmpty)
+        XCTAssertEqual(hashingResult.v2FileTrees.count, 1)
+        let tree = try XCTUnwrap(hashingResult.v2FileTrees[scanResult.files[0].relativePath])
+        XCTAssertEqual(tree.piecesRoot.count, 32)
+        XCTAssertEqual(tree.sizeBytes, Int64(payload.count))
+    }
+
+
     func testBencodeEncoderAndMetainfoParserRoundTrip() async throws {
         // Round trip through the real pipeline: scan → hash (CPUHasher) →
         // generate (MetainfoGenerator) → parse (MetainfoParser). Fabricated

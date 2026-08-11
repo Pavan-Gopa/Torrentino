@@ -551,9 +551,30 @@ final class TorrentListViewModel: ObservableObject {
         // EngineClient has already restored the event subscription before this
         // callback. The snapshot is still required because the agent may have
         // restarted and its revision/instance are authoritative again.
+        // An in-flight creator op died with the previous agent process; there
+        // will be no matching operationCompleted, so fail the sheet closed.
+        failActiveCreatorAfterAgentLoss()
         await recoverFromFullSnapshot()
         // A fresh engine session may hold unsettled removal batches (Gate 4/9).
         await refreshPendingRemovals()
+    }
+
+    /// Agent restart drops in-memory creator plans and progress publishers.
+    /// Without a terminal event the sheet would stay on "Creating..." forever.
+    private func failActiveCreatorAfterAgentLoss() {
+        guard creatorTerminalOutcome == nil else { return }
+        guard creatorOperationActive
+            || awaitingCreatorOperationID
+            || creatorOperationID != nil else { return }
+        creatorOperationActive = false
+        awaitingCreatorOperationID = false
+        creatorCancelPending = false
+        bufferedCreatorEvents.removeAll()
+        creatorProgressStage = "Failed"
+        creatorTerminalOutcome = .failed(
+            EngineFault.creatorUnavailable(details: "agent restarted during creation")
+        )
+        creatorError = String(localized: "creator.fault.interrupted")
     }
 
     @discardableResult

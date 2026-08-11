@@ -580,6 +580,7 @@ struct CreateTorrentSheet: View {
         case "Writing Torrent": return String(localized: "creator.stage.writing")
         case "Verification": return String(localized: "creator.stage.verification")
         case "Seeding": return String(localized: "creator.stage.seeding")
+        case "Creating...", "Creating…": return String(localized: "creator.stage.creating")
         case "Completed": return String(localized: "creator.stage.completed")
         case "Cancelled": return String(localized: "creator.progress_cancelled")
         case "Cancelling": return String(localized: "creator.progress_cancelling")

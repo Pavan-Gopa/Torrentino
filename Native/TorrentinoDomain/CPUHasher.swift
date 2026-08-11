@@ -200,7 +200,11 @@ public actor CPUHasher {
                         v2BlockStart += blockSize
                     }
                     if v2BlockStart > 0 {
-                        v2BlockBuffer.removeFirst(v2BlockStart)
+                        // Data.removeFirst leaves a non-zero internal
+                        // startIndex, so a later 0-based subdata traps
+                        // (EXC_BREAKPOINT in Data._Representation.subscript).
+                        // Re-base via dropFirst — same fix as CPUReference.
+                        v2BlockBuffer = Data(v2BlockBuffer.dropFirst(v2BlockStart))
                         v2BlockStart = 0
                     }
                 }
