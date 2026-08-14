@@ -6,19 +6,17 @@ onboarding:
 
 current_step: WP-13
 step_description: >-
-  Diagnostics, security, dependencies per plan §WP-13: OSLog/signposts,
-  rotating redacted logs, diagnostic export, XPC peer verification, re-audit
-  of input-limit/parser/path, re-audit of Keychain/redaction,
-  SBOM/licenses/CVE review, release entitlements audit.
+  WP-13 release work remains open. Current bounded lane
+  [TRACKER-SHARING-IMPL-001] implements ADR-021 as a narrow ADR-020 exception
+  on the existing Creator surface; WP-13 diagnostics/security scope is unchanged.
 target_files:
-- Native/TorrentinoApp/
-- Native/TorrentinoEngineAgent/
-- Native/TorrentinoIPC/
-- Native/Config/
-- Native/Tests/
-- Native/TorrentinoEngineBridge/bridge/
-- Native/TorrentinoEngineBridge/adapter/
-- Native/TorrentinoEngineBridge/scripts/qa/
+- Native/TorrentinoApp/Features/CreateTorrentSheet.swift
+- Native/TorrentinoApp/Features/CreatorTrackerSharingPolicy.swift
+- Native/TorrentinoApp/Resources/Localizable.xcstrings
+- Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift
+- Native/Tests/TorrentinoEngineAgentTests/TorrentCreatorAgentTests.swift
+- Native/Torrentino.xcodeproj/project.pbxproj
+- Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift
 completed_steps:
 - WP-00
 - WP-01
@@ -36,359 +34,43 @@ completed_steps:
 skipped_steps: []
 implementation:
   status: done
-  attempts: 1
+  attempts: 3
   note: >-
-    Human accepted [WP13-LIVE-EVENT-SINK-CLOBBER-001] live UI proof ("ok").
-    Combined mandatory Reviewer opened for Human-accepted live lanes:
-    creator discoverability, cold-start agent rebind, rates projection,
-    UI authority refresh, event-sink isolation + snapshot backstop.
-    Commits 4b64fe9..8065eec (product). Feature freeze remains except these
-    defect fixes. Next after APPROVED: Tester regression.
-    disposable faulted-record removal, live priorities). Human-record removal
-    remains a Human action on the fresh build.
-    Round 2b delivered: EngineBridge setFilePriorities (value-only validated
-    batches, prioritize_files, readback), adapter + BridgeTransferEngine
-    wiring on add/restore/edit; live proofs green (skipped_allocated=false,
-    launchd register/unregister cycle, disposable faulted removal keep-data
-    and delete-data); test_wp13_bug_closure.sh 15/15 PASS; QA 121/122 (sole
-    Legacy env fail); full XCTest green.
-    Fresh-build Human run opened BUG-008: Add sheet "Choose File..." never
-    opens a picker (two stacked .fileImporter modifiers in
-    AddTorrentSheet.swift L116/L130). Rounds 2+2b re-review came back
-    CHANGES_REQUESTED narrowly: 003-006 PASS; BUG-007 residual raw-Logger
-    redaction bypasses (TransferCoordinator.swift:375, :2695), missing
-    scripted per-command-class observability test, and an overclaimed QA
-    suite result (closure runner refused over a suite-left Engine dir).
-    Round 3 = BUG-008 + Reviewer §5 items; combined re-review afterwards.
-    Round 3 delivered: single mode-driven .fileImporter (AddTorrentPickerMode)
-    with security-scoped access and localized failures; raw Logger confined
-    to facades, String(describing: error) bypasses removed; observability
-    command-matrix XCTest + test_wp13_observability.sh; suite reordered
-    fail-closed (closure runner last). XCTest 308/308. Full QA suite and
-    observability live phase REFUSED over pre-existing Human Engine state by
-    design; no suite count claimed.
-    Live forensics on the round-3 build opened round 4: BUG-009 (app-side add
-    flow never emits inspectAddSource/commitAdd — zero add commands in live
-    agent log; death before XPC, suspect round-3 picker/commit wiring) and
-    BUG-010 (idle DEBUG spam count=0 at 2Hz; libtorrent alerts logged with
-    empty kind/error). Combined re-review of 2+2b+3 deferred until round 4
-    lands.
-    Round 4 delivered: root cause found (importer binding cleared pickerMode
-    before result callback, routing valid .torrent to .ignored; mode now
-    retained until consumed), stale inspection generations rejected, every
-    failure branch localized + redacted app-side client log sink
-    (~/Library/Logs/com.torrentino.app.engine-client/), idle count=0 spam
-    removed, libtorrent alerts mapped with type/severity/message. XCTest
-    green; live observability phase refused over Human state by design.
-    Human live run on round-4 build: add flow reaches the engine (commitAdd
-    success, record persisted and announcing) but two UI projection bugs
-    opened round 5: BUG-011 (list shows "No torrents yet" despite live engine
-    record; no post-commit snapshot refresh / event merge) and BUG-012
-    (inspectAddSource insufficientSpace fault reached the client but the
-    sheet rendered nothing). BUG-010 residual: alert type still "unknown".
-    Round 5 delivered: snapshot-authoritative list (event sink registered
-    before first fetchSnapshot, refresh after commitAdd/didBecomeActive/
-    reconnect, revision-contiguous merge, stale events ignored, gap => full
-    snapshot), Add sheet keeps faults visible (localized insufficientSpace
-    with required/free + destination hint, dismiss only on success), alert
-    type names mapped. XCTest green; live observability still refused over
-    Human state by design. Human live acceptance on round-5 build: one
-    episode torrent downloaded successfully (full pipeline works), but live
-    run opened     round 6: BUG-013 (preflight blocks on TOTAL size; selection
-    must exist inside the add flow), BUG-014 (preflight rejects 2 KB =>
-    available-bytes computation broken), BUG-015 (invalidEnvelope rejections
-    silent), BUG-016 (double-click .torrent => kAEOpenDocuments unhandled,
-    empty window proliferation, no pickup).
-    Round 6 delivered: add-sheet tri-state file tree with selected-bytes
-    accounting and selection-aware preflight (commit sends initial selection
-    before resume); preflight resolves aliases via resource values + statfs;
-    envelope rejections logged with redacted reason/provenance/request-ID and
-    client-side validation; AppDelegate forwards Finder .torrent opens to the
-    existing window + Add sheet (magnet stays onOpenURL). XCTest green.
-    Standing rule recorded in ORCHESTRATOR.md: build refresh cycle after
-    every Coder round.
-     Human live run on round-6 build: episode selection works, but opened
-     round 7: BUG-017 (round-6 fileSelection key broke inspectAddSource
-     decoding => invalidEnvelope decode_failure, add freezes), BUG-018 (no
-     Select All/Deselect All in add sheet/files pane), BUG-019 (cryptic
-     truncated "Recoverable en..." state, no connecting/activity indication,
-     frozen add without visible error). Round 7 delivered: backward-compatible
-     fileSelection decoding for inspect/commit payloads, bulk Select All /
-     Deselect All in Add sheet and main files pane, readable localized state
-     text/tooltips/inspector banners, connecting activity indication, visible
-     terminal add-flow errors, selection-aware storage preflight for active file
-     selection, and removal of disconnected demo fallback. Human screenshot live
-     feedback opened a narrow follow-up before Reviewer: torrent-row activation
-     should reveal/open content in Finder, file-row activation should open the
-     local file with the default macOS app, main files-pane checkboxes must be
-     independently toggleable, and Select All / Deselect All must be present and
-     wired through the same selection/priorities path. Screenshot microtasks 001
-     and 002 are done with arm64 builds green: torrent row activation now reveals
-     content in Finder, and file row activation opens an existing local file with
-     the default macOS app / reveals the folder with a localized note when the
-     file is unavailable. Refresh blocker is DONE in FEEDBACK.md: signed Debug
-     app registers/runs the agent and `--cli status|hello|health` are operational.
-     Human live review after refresh accepted Finder double-click `.torrent` direct
-     add (paused), Remove, torrent-row folder open, and file-row default-app open.
-    Blocking live bugs remained: main files pane lacked Select All / Deselect All,
-    file checkboxes were radio-like (only one file could be unchecked at a time),
-    upper total size did not recalculate when files were unchecked, and Resume
-    showed silent zero throughput/progress for minutes. `[WP13-LIVE-001-DONE]`
-    is now complete in FEEDBACK.md: Coder added independent files-pane multi-
-    checkbox selection, visible Select All / Deselect All, and dynamic selected /
-    download size recalculation. Orchestrator fresh-build gate after LIVE-001 is
-    also complete: signed Debug app relaunched and `--cli status|hello|health`
-    are operational. Human accepted LIVE-001: Select All / Deselect All are visible
-    and file checkboxes now toggle correctly. `[WP13-LIVE-002-DONE]` is now
-    complete in FEEDBACK.md: Coder connected real transfer rates, upload rates,
-    peer counters, and progress projection through the engine bridge/status cache
-    path. Orchestrator fresh-build gate after LIVE-002 is also complete: signed
-    Debug app relaunched and `--cli status|hello|health` are operational. Human
-    live review accepted LIVE-002 rates/progress: screenshot shows `Downloading`,
-    progress, `Down: 8.9 MB/s`, and `Up: 12 bytes/s`. However, the same screenshot
-    reopened a selected-size projection residual from LIVE-001: the torrent row
-    still showed `Size: 31.45 GB` while only one `5.2 GB` file was selected, making
-    the UI imply the whole torrent was being downloaded. `[WP13-LIVE-SIZE-001-DONE]`
-    is now complete in FEEDBACK.md: Coder fixed status-update and restore paths so
-    selected/effective total bytes are preserved instead of reverting to full
-    metainfo size. Orchestrator fresh-build gate after LIVE-SIZE-001 is complete:
-    signed Debug app relaunched and `--cli status|hello|health` are operational.
-    Human has now opened a consolidated live-feedback lane before final handoff:
-    `[WP13-LIVE-DND-UI-001]`. It combines torrent-file ingestion stability with
-    lower files-pane empty/adaptive behavior: drag-and-drop of a torrent file into
-    the app window is ignored; Finder double-click/open-document sometimes crashes;
-    and the lower files pane showed a large meaningless `Select a torrent` block
-    for empty filtered states or tiny file lists. `[WP13-LIVE-DND-UI-001-DONE]`
-    is now complete in FEEDBACK.md: Coder added window-level `.torrent` drop
-    routing, import deduplication for Finder/openURL/openFiles races, hidden lower
-    files pane for empty/no-selection contexts, and adaptive files-pane sizing.
-    Orchestrator fresh-build gate after DND-UI is complete: signed Debug app
-    relaunched and `--cli status|hello|health` are operational. Human accepted
-    the functional DnD behavior: torrent files can be dragged into the app and are
-    picked up correctly. Remaining active issue is `[WP13-LIVE-PANE-UX-001]`: the
-    lower files pane is rigid/static, cannot be resized/collapsed/moved by the
-    user, consumes more than half the window, and leaves the torrent table visually
-    cramped/centered with poor focus. `[WP13-LIVE-PANE-UX-001-DONE]` is now
-    complete in FEEDBACK.md: Coder kept native VSplitView, removed torrent-table
-    height cap, added explicit min/ideal/max geometry, capped/compact files pane,
-    visible divider grip, resize help, per-window collapse state, `Hide Files`,
-    and toolbar `Show Files`. Orchestrator fresh-build gate after PANE-UX is
-    complete: signed Debug app relaunched and `--cli status|hello|health` are
-    operational. Human rejected PANE-UX-001 as insufficient and opened
-    `[WP13-LIVE-PANE-REMOVE-STATE-001]`: removing torrents fails with visible
-    `Remove failed`; the files/content pane is still bottom-fixed, not truly
-    responsive or edge-draggable enough, and remains hard to use for selecting
-    audio tracks/episodes; some torrents show `Idle` with zero rates and need real
-    engine/state projection diagnosis. Coder then claimed
-    `[WP13-LIVE-PANE-REMOVE-STATE-001-DONE]`, but Human emergency-rejected the
-    result: app/engine now appears unusable, torrents ingest but broad orange
-    warning triangles appear, previous issues are not accepted, and Human requests
-    rollback to the state before the latest Coder changes if possible. Orchestrator
-    spot-check: Debug app/agent are operational (`status|hello|health` OK), only
-    stale `/Applications/Torrentino.app.stale-2217` remains, and `--cli snapshot`
-    shows `health=waitingForSpace`; nonetheless latest lane is rejected. The
-     rollback inspection found no commit, stash, or patch boundary: pane/remove/state
-     hunks overlap the accepted DnD, selected-size, rates/progress, checkbox/bulk,
-     and double-click hunks in the same uncommitted Native files. Checkpoint
-     `[WP13-LIVE-ROLLBACK-001-BLOCKED]`; no product rollback was applied.
-     HUMAN DECISION 2026-08-08: roll back while preserving accepted work
-     («давай попробуем всё восстановить, будем откатываться назад»), then re-fix
-     the original `[WP13-LIVE-PANE-REMOVE-STATE-001]` intake (remove failure,
-     adaptive files pane, truthful Idle/state projection). New Human symptoms on
-     the rejected build: warning icons next to torrent rows and transfers no
-     longer working although they worked before. Orchestrator created a full
-     safety snapshot first: commit 8d29d94 on branch
-     `backup/wp13-live-lanes-rejected-20260808`, tag
-     `backup/wp13-pre-rollback-20260808` (Native/ + AI_Workflow_Kit/ only,
-     Legacy excluded per HARD BAN). Opened surgical rollback lane
-     `[WP13-LIVE-ROLLBACK-002]` for Coder: revert the rejected lane's
-     pane/remove/state hunks, explicitly keep all accepted lanes; BLOCKED escape
-     hatch instead of guessing. Destructive fallback to 4da15c1 remains available
-     and is now loss-free because of the backup branch. Re-fix lane for the
-     original      PANE-REMOVE-STATE-001 intake is queued AFTER rollback validation
-     (no forward fixes layered on the rollback).
-     FORENSICS 2026-08-08: Human's satisfactory build is
-     /Applications/Torrentino.app.stale-2217 (signed Debug, ~Aug 8 01:07,
-     round-7-era state). Logo incident confirmed as the start of the slide:
-     dirty tree lost 39 localization keys (health/add-flow/error families)
-     around the logo attempt; one dangling code reference proven
-     (error.duplicate_add). Stale bundle = golden reference, never delete.
-     Repo has no asset catalog/AppIcon at all; proper logo integration is a
-     queued post-stabilization micro-lane. Rollback kick amended accordingly.
-      2026-08-09 HUMAN DECISION: suspend the ENGINE-002 retry loop and escalate
-      to Architect. Recurring per-lane engine regressions (restore rebuilt 0,
-      health latch, idle limbo, dead diagnostics sink, agent lifecycle churn)
-      prove the problem is architectural, not per-fix. Goal: one durable
-      design so the engine starts correctly at every app launch and stays
-      correct for the whole session. ENGINE-002 uncommitted diff remains in
-      tree as UNTRUSTED evidence only; no Coder retry until the Architect
-      packet lands and Orchestrator opens the ordered implementation lane.
-      2026-08-09 ARCHITECT PACKET LANDED: [WP13-ARCH-ENGINE-LIFECYCLE-001-DONE]
-      — ADR-019 + rewritten ARCHITECT_HANDOFF.md accepted by Orchestrator.
-      Ordered Coder Lane L1 opened as [WP13-LIVE-ENGINE-003] (Steps 0-9 per
-      handoff §9). Attempts reset for clean retry under the Architect packet.
-      ENGINE-003 RESULT: BLOCKED (infrastructure, not behavior). Product code
-      for Steps 0-8 landed; XCTest 299/0 PASS, wp07/wp10 QA PASS, diff clean.
-      Orchestrator fresh-build gate GREEN 2026-08-09 ~12:31 local: signed Debug
-      relaunched, status/hello/health operational, lifecycle chain
-      unregistered→starting→openingStore→restoringSession→reconcilingRecords→ready
-      in agent log, restore summary rebuilt=2 skipped=0, all 6 sink markers
-      present (sink not degraded), no post-bootstrap shutdown churn, snapshot:
-      Koloniya seeding/healthy (no latch), HotD waitingForSpace+idle (P3/P4
-      compliant, actionable). Blockers queued for fix lane
-      [WP13-LIVE-ENGINE-004]: (1) add DiagnosticsLogging.swift +
-      RedactedLogFileManager.swift + WP13DiagnosticsSecurityTests.swift to
-      project.pbxproj targets and de-duplicate the facade out of
-      PersistenceStore.swift (ORCHESTRATOR SCOPE EXTENSION: pbxproj membership
-      authorized for exactly these files — handoff §6 names them the physical
-      location, resolving the §11 conflict); (2) add #if WP13_APP_SEAM seam
-      guard expected by test_wp13_bug_closure.sh; (3) rerun
-      test_wp13_bug_closure.sh + test_wp13_diagnostics_security.sh as REAL
-      evidence (nonzero test count). Disposable live proofs I1/I7/I9 stay
-      environment-blocked by design (Human Engine dir/launchd job present);
-      substitute evidence = this gate; formal disposable runs deferred to
-      Tester phase or explicit Human authorization. Minor: engine_log_2.log
-      gap in rotation (1,3,4,current) — flag to Reviewer.
-      2026-08-09 HUMAN ACCEPTED ENGINE-003 fresh build («движок отлично
-      работает»). Restore point: commit 2584755 + tag
-      torrentino/wp13-engine-003-accepted, pushed to origin (native-macos).
-      2026-08-09 HUMAN-ORDERED CLEANUP: mainline fixed at 2584755-base;
-      Legacy/ deleted (Human order supersedes HARD BAN); master branch
-      deleted (zero unique commits); stale-2217 trashed; .gitignore +=
-      build/ .opencode/; AGENTS.md + LOGO/ + Measurements/wp12 committed.
-      Orphan diagnostics files KEPT pending salvage lane (QA scripts assert
-      their existence). Backup branches/tags retained as safety net.
-      2026-08-09 HUMAN ORDER: ONE version only. All backup branches (3) and
-      all backup/* tags (7) purged locally AND on origin. Salvage code gone;
-      fix lane will re-implement from documented FEEDBACK root causes.
-      Repo state: single branch native-macos + torrentino/* tags only.
-      2026-08-09 PROCESS RULE: all worker kick prompts are issued in ENGLISH
-      only (Human decision); Human-facing status stays Russian. UI-002 kick
-      reissued in English (supersedes the Russian version).
-      2026-08-09 LANE [WP13-LIVE-UI-001] opened (attempts 0): UI-ONLY by
-      construction — remove duplicate toolbar sidebar toggle (keep the
-      standard window-chrome one), files-pane divider free drag to any height
-      (kill the hard ~middle cap), user height persists across restarts
-      (diagnose actual root cause first), auto-shift never clobbers stored
-      height. Engine dirs forbidden. Real restart-persistence proof required.
-      New lane [WP13-LIVE-ENGINE-004] opened: Task A = ENGINE-003 infra debt
-      (pbxproj membership for DiagnosticsLogging/RedactedLogFileManager/
-      WP13DiagnosticsSecurityTests, facade de-dup out of PersistenceStore,
-      WP13_APP_SEAM guard, real reruns of bug_closure + diagnostics_security);
-      Task B = Human screenshot UI feedback (single sidebar toggle, persistent
-      files-pane divider height, torrent-table space priority with divider
-      auto-shift). Reviewer+Tester mandatory after ENGINE-004.
-      ENGINE-004 delivered (RESULT waiting_review; header BLOCKED only on the
-      bug_closure safety guard over Human Engine dir — by design). Coder
-      claims: facade moved to Architect files + pbxproj membership done,
-      diagnostics_security 12/12 real, bug_closure source contracts PASS,
-      seam guard present, single sidebar toggle, persistent divider height
-      (@AppStorage torrentino.filesPane.height) + table space priority.
-      SELF-AUTHORIZED SCOPE EXTENSION inside the lane (flag to Reviewer):
-      BUG-003 setFileSelection wired end-to-end through EngineCoordinator/
-      ObjC++/EngineBridge into libtorrent prioritize_files + FileEntry
-      gained progressFraction (frozen TorrentinoIPC wire vocabulary touched
-      without Orchestrator sanction) + bridge_smoke.cpp. REVIEWER MUST-CHECK:
-      (1) Coder EDITED test_wp13_bug_closure.sh replacing the BUG-005
-      reference testWP13FaultedRecordRemovalSupportsKeepAndDeleteData with a
-      WP-10 test — the BUG-005 disposable faulted-removal proof does NOT
-      exist in committed history nor in the tree (pre-existing hole from an
-      earlier lane, now masked): require restoring a real BUG-005 proof test
-      + script reference; (2) FileEntry.progressFraction additive to frozen
-      IPC — verify Codable decode safety (synthesized Codable ignores
-      defaults; check every FileEntry decode site incl. persisted payloads);
-      (3) Xcode warning: TorrentinoEngineAgentTests missing explicit
-      dependency on TorrentinoEngineAgent.
-      Orchestrator fresh-build gate after ENGINE-004 GREEN: rebuild exit 0,
-      status/hello/health operational (pid 14538), full lifecycle chain this
-      boot, restore summary present, snapshot Sugar desired=paused
-      activity=checking healthy. Note: P2 literal reading expects idle for
-      paused — checking-in-paused observed in first seconds; Reviewer to
-      confirm pump convergence.
-    UI-004 Coder handoff landed as `[WP13-LIVE-UI-004-DONE]`: real AppIcon
-    asset catalog + narrow pbxproj wiring, localized per-row downloaded
-    `X of Y`, and ETA projection with em-dash for unavailable states; reported
-    arm64 build/test green. Orchestrator sterile fresh-build gate completed
-    2026-08-09: previous Engine store moved to
-    `~/.Trash/torrentino-engine-backup-20260809-202435/`, clean Debug build
-    exit 0, fresh app relaunched, status/hello/health operational (pid 63873),
-    empty-store snapshot successful, and lifecycle log reached ready.
-    Human accepted the complete fresh UI-003/UI-004 live checklist on
-    2026-08-09. Mandatory Reviewer is next, followed by mandatory Tester.
-    New request `[WP13-LIVE-REMOVE-FILES-001]` is queued after that cycle:
-    preserve `Remove Torrent`, add a separated destructive `Remove Torrent
-    and Move Files to Trash…` action with native confirmation and safe,
-    torrent-scoped Trash semantics. Do not close WP-13 before this queued lane.
-    Reviewer returned CHANGES_REQUESTED with four bounded findings. The third
-    attempt threshold was handled by narrowing to clean retry lane
-    `[WP13-UI-001-004-REVIEW-FIX-001]`; no Architect packet is required and
-    attempts reset to 0. The queued remove-with-files lane remains out of scope.
-    Coder completed `[WP13-UI-001-004-REVIEW-FIX-001-DONE]`: attempt-scoped
-    inspection result ownership, one-year bounded formatter-safe ETA,
-    authoritative healthy-state ETA gating, and bridge-level
-    ControlledNSSplitView regression coverage. Coder reported 314/314 tests
-    green. Orchestrator sterile fresh-build gate completed 2026-08-09:
-    previous Engine store moved to
-    `~/.Trash/torrentino-engine-backup-20260809-231358/`, clean Debug build
-    exit 0, fresh app relaunched, status/hello/health operational (pid 86713),
-    empty-store snapshot successful, and lifecycle log reached ready. Human
-    live acceptance is required before Reviewer re-review.
-    Reviewer re-review `[WP13-UI-001-004-REVIEW-002]` returned
-    CHANGES_REQUESTED: stale inspection failure can still overwrite the shared
-    visible connectionNote before generation acceptance; inspection tests do
-    not drive the production result-application path; ETA/health tests do not
-    drive authoritative TorrentSnapshot-to-row projection boundaries. Engine,
-    bridge, IPC, persistence, and production logging remain untouched.
-    Orchestrator removed the workflow-owned trailing blank-line gate blocker.
-    Narrow correction lane `[WP13-UI-001-004-REVIEW-FIX-002]` is open.
-    Coder completed `[WP13-UI-001-004-REVIEW-FIX-002-DONE]`: stale
-    inspection connectionNote mutation removed, production Add result-
-    application seam shared with tests, and ETA/health tests now drive
-    authoritative TorrentSnapshot → TorrentListRowProjection. Coder reported
-    315/315 full and 41/41 focused tests green; engine and logging untouched.
-    Orchestrator sterile fresh-build gate completed 2026-08-10: Engine store
-    moved to `~/.Trash/torrentino-engine-backup-20260810-160720/`, clean Debug
-    build exit 0, fresh app relaunched, status/hello/health operational
-    (pid 13252), empty-store snapshot successful, lifecycle reached ready, and
-    a live inspectAddSource completed successfully. Formal re-review is next.
+    [TRACKER-SHARING-IMPL-001] is verified complete: Reviewer approved,
+    focused QA green, final full XCTest 332/332 and fresh-app UI checked.
 retry_guard:
   max_attempts_without_progress: 3
   repeated_failure_count: 0
   last_failure_signature: null
-  blocker: >-
-    Formal workflow-tester primary still 401 Invalid API Key;
-    modelFallback=false. Main direct regression GREEN 326/326.
-    Optional: "continue Tester with backup" for formal Tester role.
+  blocker: null
 omp:
   active_agent: null
   active_role: null
-  last_result_artifact: agent://WP13CreatorLiveReview001
-  dispatched_at: 2026-08-11T03:28:56Z
-  completed_at: 2026-08-11T03:32:54Z
+  last_result_artifact: agent://TrackerSharingTester002
+  dispatched_at: 2026-08-11T12:04:12Z
+  completed_at: 2026-08-11T12:07:34Z
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: approved
   note: >-
-    [WP13-CREATOR-LIVE-001-REVIEW-001] APPROVED with no findings. Reviewer
-    confirmed the CPUHasher rebase, BEP-52 zero-subtree reconstruction,
-    fail-closed reconnect UI, localization, frozen IPC code, and 328/328 gate.
+    TrackerSharingReviewer001 approved all six ADR-021 Judgment Gates with no
+    findings after direct source/diff inspection.
   enabled: true
 qa:
   status: green
-  last_report: build/CreatorFinalRegression.xcresult
-  suite: WP-13-CREATOR-LIVE-001
+  last_report: build/TrackerSharingFinal2.xcresult
+  suite: TRACKER-SHARING-IMPL-001
   bugs_open: 0
   note: >-
-    Reviewer APPROVED. Main fresh build and direct regression are green:
-    328/328 XCTest plus successful 8.96 GB Human-file Create and pinned
-    libtorrent v1/v2 parse. Formal Tester backup remains optional and requires
-    Human authorization because the primary provider is blocked on 401.
+    Focused tracker QA 12/12 and Creator scripts 3/3 passed; pump wait fix
+    targeted 1/1; Main final regression 332/332 passed.
   enabled: true
 security:
   next_run: none
-  note: Pending optional release audit.
+  note: Human deferred audit until friend validation succeeds.
 next_actor: human
+
 track: RELEASE
 prior_track: RESEARCH
 working_roots:
@@ -407,11 +89,10 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  APPROVED fixpack. Idle unless Tester finds product bugs needing re-review.
+  Review ADR-021 Creator-only diff after the mandatory fresh-build Human gate.
 coder_brief: |
-  Idle unless Tester returns product failures.
+  Fix ATTEMPT-02 stale test cardinality only; derive expected origins from data.
 tester_brief: |
-  Run [WP13-LIVE-FIXPACK-TEST-001]: full/focused XCTest + relevant QA scripts;
-  add missing focused tests for fixpack contracts if gaps; report green or bugs.
+  After approval, run focused policy/artifact checks, full XCTest and relevant Creator QA.
 architect_brief: |
-  Idle.
+  [TRACKER-SHARING-ARCH-001] complete; idle unless new material evidence reopens it.

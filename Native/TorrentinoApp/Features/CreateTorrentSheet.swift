@@ -18,10 +18,13 @@ struct CreateTorrentSheet: View {
     @State private var outputPath: String = ""
     @State private var format: TorrentFormat = .hybrid
     @State private var trackerInput: String = ""
-    /// Tracker tiers (BEP-12): each entry is a tier of fallback trackers; the
-    /// first non-empty tier is also written to "announce".
-    @State private var trackerTiers: [[String]] = []
+    /// User-entered tracker tiers. Tier order, URL order, boundaries, and
+    /// repeated valid URLs are preserved exactly.
+    @State private var manualTrackerTiers: [[String]] = []
     @State private var isPrivate: Bool = false
+    /// Fresh sheets default to recommended public tiers for non-private output.
+    /// The preference is sheet-local and is never persisted.
+    @State private var includeRecommendedPublicTrackers: Bool = true
     @State private var pieceSizeIndex: Int = 0 // 0 = Automatic
     @State private var comment: String = ""
     @State private var source: String = ""
@@ -135,6 +138,35 @@ struct CreateTorrentSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(String(localized: "creator.trackers"))
                             .font(.headline)
+
+                        // This disclosure is intentionally always visible next
+                        // to the control and the exact effective topology.
+                        Text(String(localized: "creator.public_trackers_disclosure"))
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .foregroundColor(.secondary)
+
+                        Toggle(
+                            String(localized: "creator.public_trackers_toggle"),
+                            isOn: $includeRecommendedPublicTrackers
+                        )
+                        .disabled(isPrivate)
+                        .onChange(of: includeRecommendedPublicTrackers) { _ in
+                            triggerInspection()
+                        }
+
+                        if isPrivate {
+                            Text(String(localized: "creator.public_trackers_private_disabled"))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if let trackerCompositionErrorMessage {
+                            Text(trackerCompositionErrorMessage)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+
                         HStack {
                             TextField(String(localized: "creator.tracker_placeholder"), text: $trackerInput)
                                 .textFieldStyle(.roundedBorder)
@@ -144,15 +176,15 @@ struct CreateTorrentSheet: View {
                             .disabled(trackerInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
 
-                        if !trackerTiers.isEmpty {
+                        if !manualTrackerTiers.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
-                                ForEach(trackerTiers.indices, id: \.self) { tierIndex in
+                                ForEach(manualTrackerTiers.indices, id: \.self) { tierIndex in
                                     VStack(alignment: .leading, spacing: 4) {
                                         HStack {
-                                             Text(String.localizedStringWithFormat(
-                                                 NSLocalizedString("creator.tier", comment: "Creator tracker tier label"),
-                                                 Int64(tierIndex + 1)
-                                             ))
+                                            Text(String.localizedStringWithFormat(
+                                                NSLocalizedString("creator.tier", comment: "Creator tracker tier label"),
+                                                Int64(tierIndex + 1)
+                                            ))
                                                 .font(.caption)
                                                 .bold()
                                             Spacer()
@@ -169,7 +201,7 @@ struct CreateTorrentSheet: View {
                                                 Image(systemName: "arrow.down")
                                             }
                                             .buttonStyle(.plain)
-                                            .disabled(tierIndex == trackerTiers.count - 1)
+                                            .disabled(tierIndex == manualTrackerTiers.count - 1)
                                             Button {
                                                 removeTier(tierIndex)
                                             } label: {
@@ -177,9 +209,9 @@ struct CreateTorrentSheet: View {
                                             }
                                             .buttonStyle(.plain)
                                         }
-                                        ForEach(trackerTiers[tierIndex].indices, id: \.self) { urlIndex in
+                                        ForEach(manualTrackerTiers[tierIndex].indices, id: \.self) { urlIndex in
                                             HStack {
-                                                Text(trackerTiers[tierIndex][urlIndex])
+                                                Text(manualTrackerTiers[tierIndex][urlIndex])
                                                     .font(.caption)
                                                     .monospaced()
                                                 Spacer()
@@ -191,22 +223,66 @@ struct CreateTorrentSheet: View {
                                                 .buttonStyle(.plain)
                                             }
                                         }
-                                        if tierIndex < trackerTiers.count - 1 {
+                                        if tierIndex < manualTrackerTiers.count - 1 {
                                             Divider()
                                         }
                                     }
                                 }
                                 Button(String(localized: "creator.new_tier")) {
-                                    trackerTiers.append([])
+                                    manualTrackerTiers.append([])
                                 }
                                 .font(.caption)
                             }
                             .padding(6)
-                                .border(Color.gray.opacity(0.3))
-                                .onChange(of: trackerTiers) { _ in
-                                    triggerInspection()
+                            .border(Color.gray.opacity(0.3))
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(String(localized: "creator.effective_trackers"))
+                                .font(.subheadline)
+                                .bold()
+
+                            switch trackerCompositionResult {
+                            case .success(let topology):
+                                if topology.tiers.isEmpty {
+                                    Text(String(localized: "creator.no_effective_trackers"))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    ForEach(topology.tiers.indices, id: \.self) { tierIndex in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text(String.localizedStringWithFormat(
+                                                    NSLocalizedString("creator.tier", comment: "Creator tracker tier label"),
+                                                    Int64(tierIndex + 1)
+                                                ))
+                                                    .font(.caption)
+                                                    .bold()
+                                                Text(trackerOriginText(topology.tiers[tierIndex].origin))
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                                Spacer()
+                                            }
+                                            ForEach(topology.tiers[tierIndex].urls.indices, id: \.self) { urlIndex in
+                                                Text(topology.tiers[tierIndex].urls[urlIndex])
+                                                    .font(.caption)
+                                                    .monospaced()
+                                            }
+                                            if tierIndex < topology.tiers.count - 1 {
+                                                Divider()
+                                            }
+                                        }
+                                    }
                                 }
+                            case .failure:
+                                EmptyView()
                             }
+                        }
+                        .padding(6)
+                        .border(Color.gray.opacity(0.3))
+                        .onChange(of: manualTrackerTiers) { _ in
+                            triggerInspection()
+                        }
                     }
 
                     Divider()
@@ -455,14 +531,14 @@ struct CreateTorrentSheet: View {
             errorMessage = String(localized: "creator.invalid_tracker")
             return
         }
-        if trackerTiers.isEmpty {
-            trackerTiers.append([])
+        if manualTrackerTiers.isEmpty {
+            manualTrackerTiers.append([])
         }
-        var lastTier = trackerTiers.removeLast()
+        var lastTier = manualTrackerTiers.removeLast()
         for url in candidates {
             lastTier.append(url)
         }
-        trackerTiers.append(lastTier)
+        manualTrackerTiers.append(lastTier)
         trackerInput = ""
     }
 
@@ -473,20 +549,20 @@ struct CreateTorrentSheet: View {
     }
 
     private func removeTracker(tierIndex: Int, urlIndex: Int) {
-        trackerTiers[tierIndex].remove(at: urlIndex)
-        if trackerTiers[tierIndex].isEmpty {
-            trackerTiers.remove(at: tierIndex)
+        manualTrackerTiers[tierIndex].remove(at: urlIndex)
+        if manualTrackerTiers[tierIndex].isEmpty {
+            manualTrackerTiers.remove(at: tierIndex)
         }
     }
 
     private func removeTier(_ index: Int) {
-        trackerTiers.remove(at: index)
+        manualTrackerTiers.remove(at: index)
     }
 
     private func moveTier(_ index: Int, by delta: Int) {
         let target = index + delta
-        guard target >= 0, target < trackerTiers.count else { return }
-        trackerTiers.swapAt(index, target)
+        guard target >= 0, target < manualTrackerTiers.count else { return }
+        manualTrackerTiers.swapAt(index, target)
     }
 
     private func triggerInspection() {
@@ -500,9 +576,13 @@ struct CreateTorrentSheet: View {
             inspecting = false
             return
         }
+        guard let opts = currentCreateOptions() else {
+            inspecting = false
+            errorMessage = trackerCompositionErrorMessage
+            return
+        }
         inspecting = true
         errorMessage = nil
-        let opts = currentCreateOptions()
         Task {
             do {
                 let res = try await viewModel.inspectCreateSource(sourcePath: sourcePath, options: opts)
@@ -537,8 +617,11 @@ struct CreateTorrentSheet: View {
             errorMessage = String(localized: "creator.reinspect_first")
             return
         }
+        guard let options = currentCreateOptions() else {
+            errorMessage = trackerCompositionErrorMessage
+            return
+        }
         let token = inspection.token
-        let options = currentCreateOptions()
         committing = true
         errorMessage = nil
         Task {
@@ -556,13 +639,17 @@ struct CreateTorrentSheet: View {
         !sourcePath.isEmpty && !committing && !viewModel.creatorOperationActive
             && viewModel.creatorTerminalOutcome == nil && !inspecting
             && inspection != nil && inspectionRevision == formRevision
+            && currentCreateOptions() != nil
     }
 
-    private func currentCreateOptions() -> CreateOptions {
-        CreateOptions(
+    private func currentCreateOptions() -> CreateOptions? {
+        guard case .success(let topology) = trackerCompositionResult else {
+            return nil
+        }
+        return CreateOptions(
             outputPath: outputPath,
             format: format,
-            trackers: trackerTiers,
+            trackers: topology.trackerTiers,
             isPrivate: isPrivate,
             pieceSizeKiB: pieceSizesKiB[pieceSizeIndex],
             comment: comment,
@@ -570,6 +657,52 @@ struct CreateTorrentSheet: View {
             seedWhileDownloading: startSeeding,
             includeHiddenFiles: includeHiddenFiles
         )
+    }
+    private var trackerCompositionResult: Result<
+        CreatorTrackerSharingPolicy.EffectiveTopology,
+        CreatorTrackerSharingPolicy.CompositionError
+    > {
+        do {
+            return .success(
+                try CreatorTrackerSharingPolicy.effectiveTopology(
+                    manualTiers: manualTrackerTiers,
+                    isPrivate: isPrivate,
+                    includeRecommendedPublicTrackers: includeRecommendedPublicTrackers
+                )
+            )
+        } catch let error as CreatorTrackerSharingPolicy.CompositionError {
+            return .failure(error)
+        } catch {
+            return .failure(.invalidRecommendedCatalog)
+        }
+    }
+
+    private var trackerCompositionErrorMessage: String? {
+        switch trackerCompositionResult {
+        case .success:
+            return nil
+        case .failure(.invalidRecommendedCatalog):
+            return String(localized: "creator.public_trackers_invalid_catalog")
+        case .failure(.capacityExceeded(_, let maximum)):
+            return String.localizedStringWithFormat(
+                NSLocalizedString(
+                    "creator.public_trackers_capacity_exceeded",
+                    comment: "Creator tracker capacity error"
+                ),
+                Int64(maximum)
+            )
+        }
+    }
+
+    private func trackerOriginText(
+        _ origin: CreatorTrackerSharingPolicy.TierOrigin
+    ) -> String {
+        switch origin {
+        case .manual:
+            return String(localized: "creator.tracker_origin_manual")
+        case .recommendedPublic:
+            return String(localized: "creator.tracker_origin_recommended")
+        }
     }
 
     private var progressStageText: String {

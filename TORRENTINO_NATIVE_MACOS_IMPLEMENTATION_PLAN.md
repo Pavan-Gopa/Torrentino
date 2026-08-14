@@ -129,6 +129,13 @@ Torrentino — нативный, локальный, минималистичн�
 Он умеет создавать metainfo, указывать announce tracker tiers и становиться
 первоначальным seeder. Собственный сетевой tracker server в 1.0 не входит.
 
+Для неприватных `.torrent`, создаваемых в Creator, Torrentino по умолчанию
+включает release-curated tiers сторонних публичных announce trackers с видимым
+opt-out до inspect/create. Это стандартный BitTorrent best-effort: tracker
+выполняет только rendezvous, не хранит и не relay-ит payload; Torrentino не
+управляет этим сервисом и не гарантирует соединение или доставку. Private
+Creator никогда не получает эти public defaults.
+
 ### 2.2. Порядок приоритетов
 
 1. **Сохранность данных.**
@@ -161,6 +168,8 @@ Torrentino — нативный, локальный, минималистичн�
 - Pure Swift BitTorrent engine.
 - App Store distribution и App Sandbox.
 - Встроенный публичный tracker server.
+- Torrentino-operated managed seed/relay/WebSeed/availability service и
+  гарантия доставки произвольному получателю.
 - Torrent search/index или каталог контента.
 - RSS, remote Web UI/API, streaming player.
 - Плагины и расширяемая экосистема.
@@ -1868,6 +1877,13 @@ Toolbar, menu и context menu вызывают одни и те же domain comm
   - v1.
   - v2.
 - Tracker tiers с add/remove/reorder/paste.
+- Recommended Public Trackers — default on только для non-private Creator, с
+  видимым opt-out до inspect/create.
+- Effective Tracker Tiers — точные ordered tiers, которые будут записаны, с
+  видимым происхождением manual/recommended.
+- Permanent inline disclosure: сторонние адреса записываются в `.torrent`;
+  trackers выполняют только rendezvous, не хранят/relay-ят payload и не
+  гарантируют соединение или доставку.
 - Private flag.
 - Piece Size: Automatic default, manual в Advanced.
 - Comment/Source.
@@ -1928,6 +1944,16 @@ Progress:
 - Готовый torrent независимо parse/recheck-ится.
 - Start Seeding использует исходные данные без копирования.
 - Private требует tracker и выключает DHT/PEX/LSD для этой задачи.
+- Manual tracker tiers остаются точными и приоритетными; для non-private
+  output recommended tiers добавляются как fallback без deduplication,
+  sorting, trimming, flattening или reconstruction.
+- Private output никогда не получает recommended public tiers и по-прежнему
+  требует непустую manual topology.
+- Effective `[[String]]` вычисляется до inspection; UI, inspect, commit,
+  generated `announce`/`announce-list` и final parser output должны совпадать.
+- Reachability recommended trackers не является create-time gate или
+  availability promise; catalog обновляется только reviewed app release.
+- Эта policy не меняет IPC/schema/persistence/restore/admission/engine.
 
 ### 15.5. Edge cases
 
@@ -2499,6 +2525,8 @@ WP-13 повторно аудирует их, а не впервые добав�
 - Creator sheet.
 - Source scan/exclusions.
 - Tracker tiers/private flag.
+- Non-private recommended public tracker default/opt-out, visible effective
+  tiers, permanent best-effort disclosure и release-catalog policy.
 - Auto/manual piece size.
 - CPU hashing/progress/cancel.
 - `inspectCreateSource` + `CreatorPlanToken` + `commitCreate`.
@@ -2514,6 +2542,12 @@ WP-13 повторно аудирует их, а не впервые добав�
 - cancel не оставляет valid-looking partial output;
 - все edge cases покрыты;
 - creator usable даже если Metal никогда не будет принят.
+- fresh non-private default и opt-out/manual preservation работают;
+- private не получает recommendation и продолжает fail closed без manual tracker;
+- visible effective tiers точно совпадают с inspect, commit и parsed
+  `announce-list`; Domain и pinned libtorrent parse проходят;
+- EN/RU disclosure постоянно видим; managed service, guarantee,
+  IPC/persistence/engine changes отсутствуют.
 
 ### WP-12 — Metal research
 

@@ -43,11 +43,149 @@ final class TorrentinoAppTests: TestProfileCase {
             "torrents.col.eta",
             "torrents.row.downloaded_of_total",
             "torrents.row.eta_unavailable",
+            "creator.public_trackers_toggle",
+            "creator.public_trackers_disclosure",
+            "creator.effective_trackers",
+            "creator.tracker_origin_manual",
+            "creator.tracker_origin_recommended",
+            "creator.no_effective_trackers",
+            "creator.public_trackers_private_disabled",
+            "creator.public_trackers_capacity_exceeded",
+            "creator.public_trackers_invalid_catalog",
         ] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing catalog key \(key)")
             let locs = try XCTUnwrap(entry["localizations"] as? [String: Any])
-            XCTAssertNotNil(locs["en"], "\(key) missing en")
-            XCTAssertNotNil(locs["ru"], "\(key) missing ru")
+            for language in ["en", "ru"] {
+                let localization = try XCTUnwrap(
+                    locs[language] as? [String: Any],
+                    "\(key) missing \(language)"
+                )
+                let stringUnit = try XCTUnwrap(localization["stringUnit"] as? [String: Any])
+                let value = try XCTUnwrap(stringUnit["value"] as? String)
+                XCTAssertFalse(value.isEmpty, "\(key) has empty \(language) value")
+            }
+        }
+    }
+
+    func testCreatorTrackerCatalogIsStaticNonEmptyAndBounded() throws {
+        try CreatorTrackerSharingPolicy.validateRecommendedCatalog()
+
+        let catalog = CreatorTrackerSharingPolicy.recommendedPublicTrackerTiers
+        XCTAssertEqual(
+            catalog,
+            [
+                ["udp://tracker.opentrackr.org:1337/announce"],
+                ["udp://open.stealth.si:80/announce"],
+                ["udp://tracker.torrent.eu.org:451"],
+            ],
+            "ADR-021 catalog must remain the three release-reviewed tiers in order"
+        )
+        XCTAssertFalse(catalog.isEmpty)
+        XCTAssertTrue(catalog.allSatisfy { !$0.isEmpty })
+
+        let urls = catalog.flatMap { $0 }
+        XCTAssertFalse(urls.isEmpty)
+        XCTAssertLessThanOrEqual(urls.count, TransferLimits.maxTrackers)
+        for url in urls {
+            XCTAssertTrue(TrackerURLValidator.isSupported(url), "unsupported catalog URL: \(url)")
+            let components = try XCTUnwrap(URLComponents(string: url))
+            XCTAssertNil(components.user, "catalog URL must not contain credentials")
+            XCTAssertNil(components.password, "catalog URL must not contain credentials")
+            XCTAssertNil(components.query, "catalog URL must not contain a passkey or query")
+            XCTAssertFalse(url.contains("@"), "catalog URL must not contain embedded credentials")
+            if let host = components.host?.lowercased() {
+                XCTAssertFalse(host == "localhost" || host.hasSuffix(".local"))
+                XCTAssertFalse(host == "127.0.0.1" || host == "0.0.0.0" || host == "::1")
+            } else {
+                XCTFail("catalog URL must contain a host: \(url)")
+            }
+        }
+    }
+
+    func testCreatorTrackerPolicyMatrixPreservesExactManualTopology() throws {
+        let manual = [
+            [
+                "udp://manual-a.example:80/announce",
+                "udp://manual-a.example:80/announce",
+            ],
+            ["https://manual-b.example/announce"],
+        ]
+        let recommended = CreatorTrackerSharingPolicy.recommendedPublicTrackerTiers
+
+        let freshPublicDefault = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: [],
+            isPrivate: false,
+            includeRecommendedPublicTrackers: true
+        )
+        XCTAssertEqual(freshPublicDefault.trackerTiers, recommended)
+        XCTAssertTrue(freshPublicDefault.origins.allSatisfy { $0 == .recommendedPublic })
+
+        let publicDefault = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manual,
+            isPrivate: false,
+            includeRecommendedPublicTrackers: true
+        )
+        XCTAssertEqual(publicDefault.trackerTiers, manual + recommended)
+        XCTAssertEqual(
+            publicDefault.origins,
+            Array(repeating: .manual, count: manual.count)
+                + Array(repeating: .recommendedPublic, count: recommended.count)
+        )
+
+        let publicOptOut = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manual,
+            isPrivate: false,
+            includeRecommendedPublicTrackers: false
+        )
+        XCTAssertEqual(publicOptOut.trackerTiers, manual)
+        XCTAssertEqual(publicOptOut.origins, [.manual, .manual])
+
+        let privateWithPreference = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manual,
+            isPrivate: true,
+            includeRecommendedPublicTrackers: true
+        )
+        let privateWithoutPreference = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manual,
+            isPrivate: true,
+            includeRecommendedPublicTrackers: false
+        )
+        XCTAssertEqual(privateWithPreference.trackerTiers, manual)
+        XCTAssertEqual(privateWithoutPreference.trackerTiers, manual)
+        XCTAssertEqual(privateWithPreference, privateWithoutPreference)
+
+        let privateEmpty = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: [],
+            isPrivate: true,
+            includeRecommendedPublicTrackers: true
+        )
+        XCTAssertEqual(privateEmpty.trackerTiers, [])
+        XCTAssertTrue(privateEmpty.origins.isEmpty)
+    }
+
+    func testCreatorTrackerPolicyFailsExplicitlyAtCapacity() throws {
+        let max = TransferLimits.maxTrackers
+        let manualAtLimit = [[String]](repeating: ["udp://manual.example:80/announce"], count: max)
+
+        let manualOnly = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manualAtLimit,
+            isPrivate: false,
+            includeRecommendedPublicTrackers: false
+        )
+        XCTAssertEqual(manualOnly.trackerTiers, manualAtLimit)
+
+        XCTAssertThrowsError(
+            try CreatorTrackerSharingPolicy.effectiveTopology(
+                manualTiers: manualAtLimit,
+                isPrivate: false,
+                includeRecommendedPublicTrackers: true
+            )
+        ) { error in
+            guard case let CreatorTrackerSharingPolicy.CompositionError.capacityExceeded(actual, maximum) = error else {
+                return XCTFail("expected explicit capacity failure, got \(error)")
+            }
+            XCTAssertEqual(actual, max + CreatorTrackerSharingPolicy.recommendedPublicTrackerTiers.flatMap { $0 }.count)
+            XCTAssertEqual(maximum, max)
         }
     }
 

@@ -154,6 +154,9 @@
 		4A0000000000000000000918 /* CreatorPlanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000908 /* CreatorPlanStore.swift */; };
 		4A0000000000000000000931 /* TorrentCreatorDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000921 /* TorrentCreatorDomainTests.swift */; };
 		4A0000000000000000000932 /* TorrentCreatorAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000922 /* TorrentCreatorAgentTests.swift */; };
+		4A0000000000000000000919 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
+		4A0000000000000000000933 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
+		4A0000000000000000000934 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -233,6 +236,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 4A0000000000000000000311;
 			remoteInfo = TorrentinoIPC;
+		};
+		4A0000000000000000000636 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A0000000000000000000302;
+			remoteInfo = TorrentinoEngineAgent;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -364,6 +374,7 @@
 		4A0000000000000000000903 /* SourceScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceScanner.swift; sourceTree = "<group>"; };
 		4A0000000000000000000905 /* MetainfoGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetainfoGenerator.swift; sourceTree = "<group>"; };
 		4A0000000000000000000904 /* BencodeEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BencodeEncoder.swift; sourceTree = "<group>"; };
+		4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorTrackerSharingPolicy.swift; sourceTree = "<group>"; };
 		4A0000000000000000000906 /* HashingTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingTypes.swift; sourceTree = "<group>"; };
 		4A0000000000000000000907 /* CPUHasher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPUHasher.swift; sourceTree = "<group>"; };
 		4A0000000000000000000908 /* CreatorPlanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorPlanStore.swift; sourceTree = "<group>"; };
@@ -535,6 +546,7 @@
 				4A0000000000000000000107 /* ContentView.swift */,
 				4A0000000000000000000111 /* TorrentListViewModel.swift */,
 				4A0000000000000000000112 /* TorrentListView.swift */,
+				4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */,
 				4A0000000000000000000113 /* AddTorrentSheet.swift */,
 				4A0000000000000000000114 /* FixtureLibrary.swift */,
 				4A0000000000000000000813 /* InspectorView.swift */,
@@ -916,6 +928,7 @@
 			dependencies = (
 				4A0000000000000000000631 /* PBXTargetDependency */,
 				4A0000000000000000000633 /* PBXTargetDependency */,
+				4A0000000000000000000635 /* PBXTargetDependency */,
 			);
 			name = TorrentinoEngineAgentTests;
 			productName = TorrentinoEngineAgentTests;
@@ -1020,6 +1033,7 @@
 				4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */,
 				4A000000000000000000050E /* ServiceRegistration.swift in Sources */,
 				4A0000000000000000000911 /* CreateTorrentSheet.swift in Sources */,
+				4A0000000000000000000919 /* CreatorTrackerSharingPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1132,6 +1146,7 @@
 			files = (
 				4A0000000000000000000563 /* TestProfile.swift in Sources */,
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
+				4A0000000000000000000933 /* CreatorTrackerSharingPolicy.swift in Sources */,
 				4A0000000000000000000804 /* KeychainStore.swift in Sources */,
 				4A0000000000000000000805 /* NotificationManager.swift in Sources */,
 				4A0000000000000000000806 /* FixtureLibrary.swift in Sources */,
@@ -1147,6 +1162,7 @@
 				4A00000000000000000005B1 /* PersistenceFixture.swift in Sources */,
 				4A00000000000000000005B2 /* TorrentinoEngineAgentTests.swift in Sources */,
 				4A0000000000000000000932 /* TorrentCreatorAgentTests.swift in Sources */,
+				4A0000000000000000000934 /* CreatorTrackerSharingPolicy.swift in Sources */,
 				4A00000000000000000005C1 /* PersistenceStore.swift in Sources */,
 				4A00000000000000000005C2 /* AtomicGeneration.swift in Sources */,
 				4A00000000000000000005C3 /* OperationJournal.swift in Sources */,
@@ -1235,6 +1251,11 @@
 			isa = PBXTargetDependency;
 			target = 4A0000000000000000000311 /* TorrentinoIPC */;
 			targetProxy = 4A000000000000000000062A /* PBXContainerItemProxy */;
+		};
+		4A0000000000000000000635 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A0000000000000000000302 /* TorrentinoEngineAgent */;
+			targetProxy = 4A0000000000000000000636 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 

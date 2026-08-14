@@ -1327,6 +1327,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(firstTorrent?.peers.connected, 2)
 
         let firstEvents = await deliveries.events(timeoutNanoseconds: 500_000_000)
+        let firstEventBaseline = firstEvents.count
         let firstSnapshot = firstEvents
             .compactMap { event -> TorrentSnapshot? in
                 guard case .torrentDelta(let payload) = event else { return nil }
@@ -1352,7 +1353,7 @@ final class TransferSmokeTests: TestProfileCase {
         )])
         await coordinator.pumpOnce()
 
-        let secondEvents = await deliveries.events(atLeast: 2)
+        let secondEvents = await deliveries.events(atLeast: firstEventBaseline + 1)
         let secondSnapshot = secondEvents
             .compactMap { event -> TorrentSnapshot? in
                 guard case .torrentDelta(let payload) = event else { return nil }

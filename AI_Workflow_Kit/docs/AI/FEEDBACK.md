@@ -3444,3 +3444,405 @@ N/A — no changes requested.
 - Result: no findings, no required changes. Return control to Human; formal
   Tester backup remains optional and requires Human authorization because the
   primary Tester provider returns 401.
+
+### [TRACKERLESS-CREATOR-DIAG-001] Human-file swarm diagnosis + architecture intake
+- Compared the exact Human-created
+  `Drugaja.Zemlja.2011.x264.BDRip.(1080p).mkv.torrent` with the working
+  `[NNMClub.to]_Soulm8te...mkv.torrent`.
+- The Creator output is structurally valid hybrid metainfo and pinned
+  libtorrent accepts its v1/v2 identities, but it has no `announce`,
+  `announce-list`, web seed or DHT bootstrap nodes. Its persisted tracker
+  topology is exactly `{"version":1,"tiers":[]}`. The comparison torrent has
+  five announce endpoints and an existing public swarm.
+- Live engine evidence: the created payload is durably admitted as
+  `desired=running activity=seeding health=healthy`, complete
+  `8956155983/8956155983`, but `peers=0`.
+- Local networking evidence: the agent listens on TCP/UDP 6881 on loopback,
+  LAN and tailnet interfaces; macOS Application Firewall permits the signed
+  agent. The gateway answered neither UPnP IGD discovery nor NAT-PMP, and the
+  route after `192.168.1.1` traverses provider-private `172.31.*` hops. This is
+  consistent with double NAT/CGNAT and no automatic public port mapping.
+- Product truth: `Start Seeding After Creation` did start a seed; it does not
+  create a tracker server or guarantee rendezvous/connectivity. Plan §2.1
+  explicitly defines Torrentino as a client, excludes an embedded public
+  tracker server from 1.0, and ADR-017 deliberately allows empty topology for
+  public trackerless torrents.
+- Human directive supersedes the previous product expectation: Torrentino
+  must create a shareable artifact inside the app that works for an arbitrary
+  recipient without manual external alternatives. This is a cross-cutting
+  architecture change, not a local Creator parser fix: a guarantee through two
+  CGNAT boundaries requires public rendezvous and potentially relay/public
+  seed infrastructure.
+- Next: deep `workflow-architect` grilling
+  `[TRACKER-SHARING-ARCH-001]`. Architect must reconcile the directive with
+  plan exclusions, define the actual connectivity guarantee and infrastructure
+  ownership, and return material Human questions or an Architecture Package.
+
+### [TRACKER-SHARING-ARCH-001-CHECKPOINT-01] Deep grilling — guarantee frontier
+- Architect established three non-negotiable facts: curated third-party
+  trackers cannot underwrite a product guarantee without ownership/SLA; a
+  tracker embedded on the Human Mac is unreachable through the observed
+  double-NAT/CGNAT; DHT/tracker rendezvous alone cannot guarantee a connection
+  when both endpoints are unconnectable.
+- A standard `.torrent` can remain compatible, and the existing ADR-017
+  `[[String]]` topology already carries announce tiers. The new capability
+  requires at minimum a public announce component; an absolute arbitrary-network
+  guarantee additionally requires a Torrentino-operated managed public seed or
+  a new non-standard relay.
+- Plan §2.1/§2.3 and ADR-020 currently exclude this public service/new feature.
+  Human approval must explicitly lift that boundary and accept infrastructure,
+  privacy, abuse/legal, storage and bandwidth consequences.
+- Current question frontier begins with guarantee scope. Architecture remains
+  blocked until Human chooses qualified direct BitTorrent connectivity versus
+  absolute availability backed by managed payload infrastructure.
+
+### [TRACKER-SHARING-ARCH-001-ITERATION-02] Main verification — correction required
+- Fresh Architect correctly preserved the root Human decision: choose between a
+  standard BitTorrent best-effort contract and a Torrentino-operated availability
+  service, with a staged hybrid as a third product strategy.
+- Main verified the governing conflict against real sources: plan §2.1 and §2.4
+  exclude an owned public tracker/service; ADR-020 freezes feature work; ADR-017
+  already preserves ordered `[[String]]` tracker topology; Creator currently
+  defaults to `trackerTiers = []`.
+- The checkpoint is not yet safe to relay as written. Its `~80-90%` / `~10-20%`
+  availability estimates have no cited measurement or authoritative source;
+  third-party public trackers do not create “zero responsibility”; and managed
+  seed/relay infrastructure cannot honestly promise `100%` delivery to every
+  arbitrary network/client. Option A also does not satisfy the Human's literal
+  arbitrary-recipient guarantee.
+- Correction required in a fresh Architect iteration: remove unsupported
+  percentages and absolutes, state the observable contract of each option,
+  distinguish third-party tracker rendezvous from Torrentino-owned tracker and
+  managed payload availability, preserve standard `.torrent` compatibility,
+  and ask one neutral guarantee-scope question with only defensible tradeoffs.
+  No product or workflow-plan edits are authorized before Human answers.
+### [TRACKER-SHARING-ARCH-001-CHECKPOINT-02] Verified guarantee-scope frontier
+- Main accepted Architect iteration 03 after source verification. The sole
+  available Human decision is the observable availability contract for Creator
+  output; infrastructure, privacy/abuse, tracker curation, plan amendments and
+  ADR-020 scope remain blocked on that root choice.
+- **A — standard BitTorrent best-effort:** Creator supplies curated third-party
+  public announce tiers. Trackers provide rendezvous only, never payload relay.
+  The `.torrent` remains standard, but two unreachable peers may still fail to
+  connect; this does not satisfy a literal arbitrary-recipient guarantee.
+- **B — Torrentino-operated availability infrastructure:** a managed public
+  seed/relay/WebSeed can serve payload when direct P2P fails. This lifts the
+  client-only/public-service boundary and creates hosting, bandwidth, privacy,
+  abuse/legal and operational obligations. Its contract must still state
+  bounded assumptions; no Internet service guarantees every network/client.
+- **C — staged A then B:** ship the explicit best-effort limitation first and
+  retain B as the required destination only if the literal stronger requirement
+  remains. The intermediate state is not represented as guaranteed sharing.
+- Governing conflict remains explicit: plan §2.1/§2.4 exclude an owned public
+  tracker/service, ADR-020 freezes feature work, while ADR-017 and the existing
+  Creator source already support ordered `[[String]]` announce tiers and the
+  current default is `[]`.
+- Next exact frontier: Human chooses A, B or C (or supplies a custom contract).
+  No Architecture Package, ADR, plan change or implementation is authorized
+  until this answer and later Confirmation Gate.
+
+### [TRACKER-SHARING-ARCH-001-HUMAN-DECISION-01] Guarantee scope
+- Exact Human answer: **“A — BitTorrent best-effort.”**
+- Accepted product contract for this branch: Creator may improve standard
+  `.torrent` peer discovery with third-party public announce tiers; trackers
+  remain rendezvous only and never payload relay/storage. Torrentino does not
+  claim delivery between two unreachable peers and does not claim the literal
+  arbitrary-recipient guarantee.
+- Rejected for this branch: Torrentino-operated managed seed/relay/WebSeed
+  infrastructure (B) and staged A→B commitment (C). They may be reopened only
+  by a new Human decision.
+- Deep grilling continues. Newly available frontier: tracker-list curation,
+  Creator default/opt-out behavior, and the exact scoped ADR-020 lift. No plan,
+  ADR or implementation change is confirmed yet.
+
+### [TRACKER-SHARING-ARCH-001-ITERATION-04] Workflow failure
+- Fresh Architect process exited 1 after read-only source acquisition and
+  returned no structured questions or Interrupted-Session Checkpoint.
+- Main verified no Native/product paths changed. This is not a model/provider
+  failure and does not increment implementation attempts.
+- Retry memory: preserve exact Human choice **“A — BitTorrent best-effort”** and
+  CHECKPOINT-02; ask only the now-available bounded default/disclosure/freeze
+  decisions; return structured questions plus checkpoint without narration.
+
+### [TRACKER-SHARING-ARCH-001-ITERATION-05] Model/provider failure
+- OMP accepted fresh `workflow-architect` run `TrackerSharingArch005`, then the
+  provider returned `429 RESOURCE_EXHAUSTED` before any structured result.
+- Exact bounded evidence: Cloud Code Assist reported `Individual quota reached`
+  for model `claude-opus-4-6-thinking`, with reset timestamp
+  `2026-08-11T10:41:23Z`.
+- No source or workflow result was produced. Human choice **“A — BitTorrent
+  best-effort”** and CHECKPOINT-02 remain authoritative. Product attempts and
+  repeated product-failure counters are unchanged.
+- Workflow is paused. Backup is not automatic. Only an explicit Human
+  instruction to continue Architect with backup authorizes
+  `workflow-architect-backup`.
+
+### [TRACKER-SHARING-ARCH-001-BACKUP-AUTHORIZATION-01] Human authorization
+- Exact Human instruction after the recorded Architect quota failure:
+  **“gpt 5.6 sol xhigh”**.
+- Main verified `workflow_models.sh status`: `workflow_architect_backup` is
+  configured as `openai-codex/gpt-5.6-sol:xhigh`.
+- This explicitly authorizes one task-specific `workflow-architect-backup`
+  retry for the current checkpoint. `human_backup_authorization: true`; the
+  primary model-failure record remains until Main verifies the backup result.
+
+### [TRACKER-SHARING-ARCH-001-CHECKPOINT-03] Verified bounded product frontier
+- Human decision D1 remains exact: **“A — BitTorrent best-effort.”** Managed
+  seed/relay/WebSeed and an A→B commitment remain rejected.
+- Main verified the backup Architect against real plan/ADR/source: Creator
+  currently defaults `trackerTiers` to `[]`, exposes manual ordered tiers,
+  passes them unchanged into inspect/commit, has no inline best-effort
+  disclosure, and Domain validation already enforces supported URL schemes,
+  bounded tracker count, non-empty inner tiers and private/non-empty topology.
+- Q2 — non-private default: (1) public recommendations on by default with
+  visible opt-out (recommended), (2) opt-in, or (3) remembered first-use choice.
+  Private torrents never receive the public default automatically.
+- Q3 — disclosure: (1) permanent inline third-party/rendezvous-only/no-guarantee
+  text plus visible actual tiers (recommended), (2) one-time full confirmation
+  plus persistent short indicator, or (3) blocking confirmation on every create.
+- Q4 — ADR-020 lift: (1) narrow immediate exception only for this Creator
+  default/opt-out/disclosure, localization and contract tests (recommended),
+  (2) architecture-only now with implementation deferred until the stabilization
+  campaign closes, or (3) broad Creator-backlog unfreeze.
+- Concrete tracker URLs, curation/update mechanics, reachability checks and tier
+  construction remain engineering work unless they later create a material
+  privacy/product-policy decision.
+- Primary Architect quota failure is cleared only because the Human-authorized
+  `workflow-architect-backup` returned a verified read-only checkpoint. The next
+  gate is exact Human answers to Q2–Q4, then consistency/coverage and explicit
+  Confirmation Gate.
+
+### [TRACKER-SHARING-ARCH-001-HUMAN-DECISIONS-02] Bounded product choices
+- Q2 exact Human answer: **“Default on + opt-out.”** For non-private Creator,
+  recommended public tracker tiers are enabled by default and visibly
+  disableable before inspect/create. Opt-out removes only automatic tiers;
+  manual tiers remain. Private torrents never receive the public default.
+- Q3 exact Human answer: **“Permanent inline text.”** Creator permanently
+  discloses beside the control that actual third-party tracker addresses are
+  written into the `.torrent`, trackers are rendezvous only, payload is not
+  stored/relayed by them, and connection/delivery are not guaranteed. Actual
+  selected tiers remain visible; no modal is required for the core limitation.
+- Q4 exact Human answer: **“Narrow immediate exception.”** After Grilling and
+  explicit Confirmation Gate, ADR-020 is lifted only for public-tracker
+  default/opt-out/disclosure, minimally necessary Creator UI/localization and
+  contract tests/docs. Existing ordered `[[String]]` is reused. Engine
+  lifecycle, restore/persistence, health/rates, admission, managed services and
+  all unrelated product backlog remain frozen.
+- All current decision-tree product choices are answered. Next deep-grilling
+  iteration must run consistency/coverage and return the agreed-understanding
+  Confirmation Gate; it must not persist an Architecture Package yet.
+
+### [TRACKER-SHARING-ARCH-001-BACKUP-AUTHORIZATION-02] Confirmation iteration
+- Exact Human instruction: **“Continue Architect with backup.”**
+- Main authorizes one fresh `workflow-architect-backup` run on configured
+  `openai-codex/gpt-5.6-sol:xhigh`, only for consistency/coverage and the
+  agreed-understanding Confirmation Gate.
+- `human_backup_authorization: true`. No Architecture Package persistence or
+  product implementation is authorized by this model-selection decision.
+
+### [TRACKER-SHARING-ARCH-001-CONFIRMATION-GATE-01] Agreed understanding
+- Consistency/coverage found no remaining material product/privacy decision and
+  no conflict with plan §2/§15, ADR-017 or the conditionally narrow ADR-020 lift.
+- Goal: improve peer discovery for Creator output under ordinary BitTorrent
+  best-effort using only third-party public announce tiers.
+- Promise boundary: trackers are rendezvous only; no payload storage/relay,
+  managed Torrentino service, connection guarantee or delivery guarantee.
+- Non-private default: recommendations on, visible before inspect/create, with
+  visible opt-out that removes only automatic tiers. Manual tiers and their
+  ordered `[[String]]` topology remain intact.
+- Private: no public default; manual non-empty topology remains required and
+  fails closed when absent.
+- Disclosure: permanent inline third-party/rendezvous-only/no-guarantee text
+  and visible effective tiers; no mandatory modal.
+- Compatibility: standard `.torrent` `announce`/`announce-list` and existing
+  `[[String]]`; no schema, persistence or format migration.
+- Authorized scope after confirmation: only Creator default/opt-out/disclosure,
+  minimal UI/localization and contract tests/docs. Engine lifecycle,
+  persistence/restore, health/rates, admission, managed infrastructure and
+  unrelated backlog remain frozen.
+- Observable done: UI/inspect/commit/parsed output agree on effective tiers;
+  opt-out preserves manual tiers; private gets no public default; disclosure is
+  visible; tracker unavailability is never represented as promised delivery.
+- Rollback: Creator-only return to manual default `[]`; no data migration or
+  rewrite of existing `.torrent` files.
+- Exact Confirmation Gate: **“Подтверждаете ли вы это согласованное понимание
+  `[TRACKER-SHARING-ARCH-001]` без изменений, чтобы следующая свежая итерация
+  Architect вернула финальный Architecture Package?”**
+
+### [TRACKER-SHARING-ARCH-001-CONFIRMED] Human Confirmation Gate
+- Exact Human answer: **“Confirm unchanged.”**
+- Confirmation Gate passed with the complete agreed understanding in
+  `[TRACKER-SHARING-ARCH-001-CONFIRMATION-GATE-01]`.
+- A fresh Architect may now return the final read-only Architecture Package.
+  Main alone will verify and persist accepted plan/ADR/step changes afterward;
+  no product implementation is authorized by confirmation alone.
+
+### [TRACKER-SHARING-ARCH-001-BACKUP-AUTHORIZATION-03] Final package
+- Exact Human instruction: **“Continue Architect with backup.”**
+- Main authorizes one fresh `workflow-architect-backup` run on configured
+  `openai-codex/gpt-5.6-sol:xhigh`, only to produce the final read-only
+  Architecture Package from the confirmed checkpoint.
+- `human_backup_authorization: true`. The worker may not edit repository files,
+  persist ADR/plan changes or route implementation.
+
+### [TRACKER-SHARING-ARCH-001-DONE] Architecture Package accepted by Main
+- Human-authorized backup Architect returned `design_ready` with PENDING 0.
+  Main verified the package against the real Creator UI, ordered
+  `CreateOptions.trackers`, Domain validation/generator/parser, final exact-tier
+  assertion and pinned-libtorrent verifier. No Native/product diff was present.
+- Main persisted accepted ADR-021 and the confirmed plan §2/§15/WP-11 plus
+  mirrored WP-11 gate amendments. WP-13 diagnostics/security scope was not
+  changed.
+- Implementation lane `[TRACKER-SHARING-IMPL-001]` is bounded to
+  `CreateTorrentSheet.swift`, a pure App-layer
+  `CreatorTrackerSharingPolicy.swift`, `Localizable.xcstrings`, focused App and
+  Creator agent tests, and only necessary `project.pbxproj` membership.
+- Frozen: ViewModel, EngineClient, all IPC/Domain/Agent/Bridge production paths,
+  persistence/restore, lifecycle, health/rates/admission, settings, managed
+  infrastructure and unrelated Creator backlog.
+- Objective contract: manual-first exact topology; public recommendations on by
+  default with visible opt-out; private manual-only fail-closed; permanent
+  inline best-effort disclosure; inspect/commit/parsed bytes exact; standard
+  Domain and pinned-libtorrent parse; no runtime tracker-availability gate.
+- Next actor: fresh Coder. Mandatory fresh-build Human gate, Reviewer and Tester
+  follow before the lane can close.
+
+### [TRACKER-SHARING-IMPL-001-ATTEMPT-01] Main Objective Gate failure
+- Coder implementation is preserved; changed product/test files stayed inside
+  the authorized ADR-021 boundary.
+- Clean full XCTest from new DerivedData failed before tests executed:
+  `TorrentinoEngineAgentTests` imports `TorrentinoEngineAgent`, but the test
+  target has no explicit dependency on the agent target. `xcodebuild` exit 65;
+  evidence: `build/TrackerSharingRegression.xcresult` and captured compiler
+  error at `TorrentCreatorAgentTests.swift:10`.
+- This is a real clean-build dependency defect previously masked by reused
+  DerivedData. Main authorizes an exact `project.pbxproj` scope extension:
+  add the missing test-target dependency using existing project patterns; no
+  Agent source change.
+- Catalog review also found incomplete release evidence. Operator pages verify
+  `udp://tracker.opentrackr.org:1337/announce`,
+  `udp://open.stealth.si:80/announce`, and
+  `udp://tracker.torrent.eu.org:451` (the operator-published form has no
+  `/announce`). No current operator/public-use basis was verified for
+  `udp://exodus.desync.com:6969/announce`; remove it. Record the three operator
+  source pages and review date in maintainable policy comments without implying
+  uptime/SLA.
+- Fresh retry may touch only `CreatorTrackerSharingPolicy.swift` and
+  `project.pbxproj` (plus a focused assertion only if endpoint form requires
+  it). Main will rerun the full clean XCTest gate; worker runs no validation.
+
+### [TRACKER-SHARING-IMPL-001-ATTEMPT-02] Main Objective Gate failure
+- Retry scope verified: only `project.pbxproj` and the policy catalog changed.
+  The clean build now resolves the Agent module and executes all test bundles.
+- `xcodebuild test` from fresh `build/TrackerSharingDerivedData2` executed the
+  full suite. Exactly one test failed:
+  `testCreatorTrackerPolicyMatrixPreservesExactManualTopology`.
+- Failure is a stale test expectation at `TorrentinoAppTests.swift:120-123`:
+  production returned two manual origins plus three recommended origins,
+  matching the verified three-tier catalog, while the assertion hard-codes four
+  recommended origins from the rejected catalog shape.
+- Evidence: `build/TrackerSharingRegression2.xcresult`. All other executed tests
+  passed; this is material progress and not a repeat of ATTEMPT-01.
+- Fresh retry may touch only
+  `Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift`. Replace the
+  cardinality literal with an expected origin list derived from `manual.count`
+  and `recommended.count`; preserve the exact order contract and all production
+  code. Main reruns clean full XCTest; worker runs no validation.
+
+### [TRACKER-SHARING-IMPL-001-ATTEMPT-03] Main verified Coder handoff
+- Scope verified. ATTEMPT-03 changed only the authorized test assertion and
+  preserved full ordered-origin comparison using `manual.count` followed by
+  `recommended.count`.
+- Clean full XCTest from new `build/TrackerSharingDerivedData3` passed:
+  332/332 tests, 0 failures, 0 skips. Result:
+  `build/TrackerSharingRegression3.xcresult`.
+- Main source review confirmed exact three operator-published static endpoints,
+  manual-first composition, private exclusion, bounded capacity failure,
+  `CreateOptions.trackers` as the one inspect/commit input, and explicit Agent
+  test-target dependency.
+- Fresh app launched from
+  `build/TrackerSharingDerivedData3/Build/Products/Debug/Torrentino.app`.
+  Direct UI smoke verified:
+  (1) fresh non-private default shows checked recommendation toggle, permanent
+  best-effort disclosure and three effective recommended tiers;
+  (2) opt-out shows no recommended tiers;
+  (3) private keeps the recommendation control disabled, shows the private-only
+  explanation, writes no recommended tiers and preserves the existing red
+  fail-closed empty-tracker error.
+- Coder Objective Gates are satisfied. Implementation is `waiting_review`;
+  independent Reviewer judgment remains mandatory.
+
+### [TRACKER-SHARING-IMPL-001-REVIEW-001] Reviewer approved
+- Fresh independent Reviewer returned `approved` after direct source/diff
+  inspection; Main cross-checked the cited policy, UI, localization,
+  `CreateOptions`, form-revision and artifact-test paths.
+- All Reviewer Judgment Gates passed: honest best-effort public default,
+  permanent EN/RU disclosure, obvious sheet-local opt-out, exact manual-first
+  topology, unambiguous private exclusion/fail-closed behavior, one effective
+  topology across UI/inspect/commit/artifact, and maintainable bounded catalog
+  scope with no managed service/probe/persistence/IPC/engine change.
+- Reviewer confirmed tests defend observable policy and generated bencoded
+  artifact behavior; ATTEMPT-03 retains full ordered-origin equality rather than
+  weakening to counts.
+- No findings. Next actor: Tester for focused policy/artifact QA; Main clean
+  332/332 XCTest remains the full-suite evidence.
+
+### [TRACKER-SHARING-IMPL-001-HUMAN-UI-001] Create failure explained
+- Human screenshot showed the correct three recommended tiers, followed by a
+  terminal `Failed 92%` state and generic invalid-options copy.
+- Main correlated the live timestamp with OSLog. Authoritative Agent evidence:
+  `creator commit failed code=invalidPayload ... Output file already exists,
+  overwrite not permitted: Drugaja.Zemlja.2011.x264(1080p).mkv.torrent`.
+- This is the existing no-overwrite safety contract, not a tracker topology,
+  catalog, inspection-staleness or delivery failure. The selected output path
+  already existed. No product edit or gate reversal is justified in the
+  ADR-021 lane.
+- Tester must use a unique temporary output path for artifact QA and confirm the
+  three-tier artifact round-trip. The fresh app remains open for inspection.
+
+### [TRACKER-SHARING-IMPL-001-QA-001] Focused QA green; full-suite harness race
+- Fresh Tester ran 12 focused XCTest executions (10 unique), all green, plus
+  3/3 existing Creator QA scripts. Generated artifact and private/localization
+  cases used isolated temporary paths. No product bug found.
+- Tester added one non-weakening App test assertion that pins the exact three
+  reviewed ADR-021 tiers/order; Main inspected and accepted the assertion.
+- Main post-Tester full suite then failed only
+  `TransferSmokeTests.testPumpPublishesRateAndCounterChangesInTorrentDelta`:
+  expected second-pump values 900/45/200/6 but observed first-pump
+  100/20/100/2. A targeted rerun reproduced all four stale-value assertions.
+- Source diagnosis: after capturing `firstEvents`, the test waits on
+  `events(atLeast: 2)`. The collector can already contain two or more events,
+  so this returns before the second pump's delta is delivered. Earlier clean
+  332/332 and current failure timing confirm a pre-existing nondeterministic
+  test wait; tracker product code and Tester assertion do not touch this path.
+- Fresh Tester may edit only
+  `Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift` to wait for
+  at least one event beyond the captured first-event baseline, retaining all
+  four exact second-value assertions. Main reruns targeted and full suites.
+
+### [TRACKER-SHARING-IMPL-001-QA-002] Final QA green
+- Fresh Tester changed only the reproduced pump test. It now records
+  `firstEvents.count` and waits for `firstEventBaseline + 1` after the second
+  pump; all four exact second-value assertions remain unchanged. Targeted
+  reproduction passed 1/1.
+- Main inspected both Tester diffs: the ADR-021 exact catalog pin strengthens
+  the public contract; the baseline-relative wait removes a false early return
+  without adding sleeps, retries, skips or weaker assertions. The total test
+  diff is narrow and does not require a second Reviewer pass.
+- Final full XCTest passed 332/332, 0 failures, 0 skips. Evidence:
+  `build/TrackerSharingFinal2.xcresult`.
+- Final lane verdict: GREEN. Reviewer approved; focused tracker QA and 3/3
+  Creator scripts passed; full regression is green; fresh app remains open.
+
+### [TRACKER-SHARING-FRIEND-VALIDATION-BUILD-001] Human launch request
+- Exact Human instruction: security review is deferred until a friend can
+  successfully load the newly created torrent; prepare and launch a new build
+  now.
+- Main made no product changes. The prior failure was the verified no-overwrite
+  contract on an already-existing `.torrent` output path.
+- Clean Debug build succeeded at
+  `build/FriendValidationDerivedData/Build/Products/Debug/Torrentino.app`.
+- Main launched that exact binary, reopened its standard window, brought it
+  frontmost, and observed the app plus `TorrentinoEngineAgent` running. The
+  friend-validation build remains open.
+

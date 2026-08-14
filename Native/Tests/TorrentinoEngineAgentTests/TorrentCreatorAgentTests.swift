@@ -571,6 +571,57 @@ final class TorrentCreatorAgentTests: XCTestCase {
         XCTAssertEqual(parsed.trackerTiers[1], ["udp://t-a.example:80/announce", "udp://t-c.example:80/announce"])
     }
 
+    func testWP11RecommendedTopologyRoundTripsThroughCreatorArtifact() async throws {
+        let payloadDir = tempDirURL.appendingPathComponent("RecommendedTopologyPayload")
+        try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
+        try Data(repeating: 0x35, count: 4096).write(to: payloadDir.appendingPathComponent("data.bin"))
+
+        let manualTiers = [
+            [
+                "udp://manual.example:80/announce",
+                "udp://manual.example:80/announce",
+            ],
+            ["https://manual.example/announce"],
+        ]
+        let effective = try CreatorTrackerSharingPolicy.effectiveTopology(
+            manualTiers: manualTiers,
+            isPrivate: false,
+            includeRecommendedPublicTrackers: true
+        )
+        let targetTorrent = tempDirURL.appendingPathComponent("recommended-topology.torrent")
+        let options = CreateOptions(
+            outputPath: targetTorrent.path,
+            format: .hybrid,
+            trackers: effective.trackerTiers,
+            isPrivate: false,
+            seedWhileDownloading: false
+        )
+        let store = CreatorPlanStore()
+
+        let inspection = try await store.inspectCreateSource(
+            sourcePath: payloadDir.path,
+            options: options
+        )
+        _ = try await store.commitCreateVerified(
+            token: inspection.token,
+            idempotencyKey: IdempotencyKey(),
+            assertedOptions: options,
+            independentVerifier: { data in
+                let parsed = try MetainfoParser.parse(data)
+                return IndependentMetainfoIdentity(v1: parsed.infoHashV1, v2: parsed.infoHashV2)
+            },
+            onProgress: { _, _ in }
+        )
+
+        let parsed = try MetainfoParser.parse(Data(contentsOf: targetTorrent))
+        XCTAssertEqual(parsed.trackerTiers, effective.trackerTiers)
+        XCTAssertEqual(parsed.trackerTiers.first, manualTiers.first)
+        XCTAssertEqual(
+            Array(parsed.trackerTiers.dropFirst(manualTiers.count)),
+            CreatorTrackerSharingPolicy.recommendedPublicTrackerTiers
+        )
+    }
+
     func testWP11CreatorAssertedOptionsFailClosed() async throws {
         let payloadDir = tempDirURL.appendingPathComponent("AssertedPayload")
         try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)

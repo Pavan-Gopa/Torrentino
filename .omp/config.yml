@@ -1,6 +1,5 @@
 modelRoleStorage: project
-
-modelRoles:
+modelRoles: 
   workflow_orchestrator: xai-oauth/grok-4.5:high
   workflow_coder: openai-codex/gpt-5.6-luna:max
   workflow_reviewer: google-antigravity/gemini-3.6-flash:high
@@ -13,17 +12,13 @@ modelRoles:
   workflow_tester_backup: google-antigravity/claude-sonnet-4-6:high
   workflow_architect_backup: openai-codex/gpt-5.6-sol:xhigh
   workflow_security_backup: openai-codex/gpt-5.6-sol:max
-  default: xai-oauth/grok-4.5:high
-
-retry:
+  default: openai-codex/gpt-5.6-sol:high
+retry: 
   enabled: true
-  # Persistent model/provider failure pauses the workflow. Human authorizes backup.
   modelFallback: false
-
-async:
+async: 
   enabled: true
-
-task:
+task: 
   batch: true
   enableLsp: true
   maxConcurrency: 1
@@ -31,9 +26,8 @@ task:
   maxRuntimeMs: 1800000
   softRequestBudget: 120
   showResolvedModelBadge: true
-
-skills:
+skills: 
   enabled: true
   enableSkillCommands: true
-  customDirectories:
-    - .
+  customDirectories: 
+    - "."

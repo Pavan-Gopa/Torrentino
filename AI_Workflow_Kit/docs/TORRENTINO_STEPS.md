@@ -239,6 +239,11 @@
 - [ ] Cancel не оставляет valid-looking partial output
 - [ ] Все edge cases покрыты
 - [ ] Creator usable без Metal
+- [x] Fresh non-private Creator enables reviewed third-party tiers; visible opt-out removes only recommended tiers
+- [x] Manual topology remains exact; private receives no recommendation and still fails closed when empty
+- [x] Visible effective tiers equal inspect, commit and parsed `announce-list`; Domain and pinned libtorrent parse pass
+- [x] Permanent EN/RU best-effort disclosure is visible; no managed service, guarantee, IPC, persistence or engine change
+
 
 ---
 

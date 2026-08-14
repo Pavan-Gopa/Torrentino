@@ -473,3 +473,68 @@ immediately attributable.
   actionable failure artifacts, concurrency/stress depth, and safe isolation are.
 - Feature work, including `WP13-LIVE-REMOVE-FILES-001`, stays deferred until the
   stability campaign is green and Human explicitly resumes product development.
+
+---
+
+## ADR-021 — Creator public tracker recommendations are standard BitTorrent best effort
+
+**Date:** 2026-08-11
+**Status:** Accepted (Human-confirmed deep Grilling)
+
+**Context:** Creator already preserves exact ordered manual tracker tiers and
+writes standard `announce`/`announce-list`, but a fresh public torrent defaults
+to empty topology. Third-party public trackers can provide rendezvous without
+making Torrentino a hosted availability service. Their addresses persist in
+newly distributed `.torrent` files, while their uptime and policies remain
+outside Torrentino's control. ADR-017 owns tracker topology and lifecycle;
+ADR-020 freezes feature work unless Human authorizes a narrow exception.
+
+Human selected **“A — BitTorrent best-effort,” “Default on + opt-out,”
+“Permanent inline text,”** and **“Narrow immediate exception,”** then passed
+the Confirmation Gate with **“Confirm unchanged.”**
+
+**Decision:**
+- A fresh non-private Creator sheet enables a source-controlled,
+  release-curated set of third-party public tracker tiers by default.
+- A visible pre-create opt-out removes only recommended tiers. Manual tier
+  order, URL order, boundaries and repeated valid URLs remain exact.
+- Private torrents never receive recommended public tiers and retain the
+  fail-closed non-empty manual topology requirement.
+- Creator permanently shows the exact effective tiers and inline disclosure:
+  the addresses are written into the `.torrent`; trackers provide rendezvous
+  only; they do not store or relay payload; connection and delivery are not
+  guaranteed.
+- Effective topology is manual tiers followed by recommended fallback tiers.
+  One immutable value is used by inspect, commit and completed-artifact parse.
+- The catalog is static product code updated through reviewed releases.
+  Creator performs no runtime reachability probe, remote catalog fetch,
+  dynamic filtering, telemetry or availability claim.
+- Existing standard `announce`/`announce-list`, `CreateOptions.trackers:
+  [[String]]`, ADR-017 lifecycle and pinned libtorrent verification are reused
+  without IPC, schema, persistence, restore, admission or engine changes.
+- This is the only Human-authorized ADR-020 exception. Engine lifecycle,
+  persistence/restore, health/rates, admission, managed infrastructure and
+  unrelated product backlog remain frozen.
+
+**Alternatives rejected:**
+- Manual-only/opt-in or remembered first-use preference.
+- Torrentino-operated tracker, seed, relay, WebSeed or payload hosting.
+- A staged commitment from best-effort to managed availability.
+- Runtime reachability filtering, topology normalization, or automatic tiers
+  before manual tiers.
+
+**Consequences:**
+- Public Creator output gets more rendezvous options while remaining a
+  standard `.torrent`; users retain visible control.
+- Third-party endpoints may become unavailable or change policy, and existing
+  artifacts retain their embedded addresses. No SLA or delivery probability is
+  inferred.
+- Invalid or over-limit topology fails before create; no tier is silently
+  truncated, deduplicated or reordered.
+- Rollback is Creator-only: remove the catalog/default and return fresh sheets
+  to manual `[]`. Existing artifacts are not rewritten; no data or engine
+  migration is required.
+
+**Relationship:** ADR-017 remains authoritative for ordered `[[String]]` and
+its lifecycle. ADR-020 remains active everywhere outside this exact
+Creator policy/UI/localization/tests/docs exception.

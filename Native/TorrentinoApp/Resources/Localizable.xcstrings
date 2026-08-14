@@ -171,6 +171,159 @@
         }
       }
     },
+    "creator.public_trackers_toggle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Include recommended public trackers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить рекомендуемые публичные трекеры"
+          }
+        }
+      }
+    },
+    "creator.public_trackers_disclosure": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The tracker addresses shown below will be written into the .torrent. These third-party trackers only help peers find one another; they do not store or relay your files. A connection or delivery is not guaranteed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показанные ниже адреса трекеров будут записаны в .torrent. Эти сторонние трекеры только помогают пирам находить друг друга; они не хранят и не пересылают ваши файлы. Соединение или доставка не гарантируются."
+          }
+        }
+      }
+    },
+    "creator.effective_trackers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trackers written to the .torrent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Трекеры, записываемые в .torrent"
+          }
+        }
+      }
+    },
+    "creator.tracker_origin_manual": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manual"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавлен вручную"
+          }
+        }
+      }
+    },
+    "creator.tracker_origin_recommended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended public"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуемый публичный"
+          }
+        }
+      }
+    },
+    "creator.no_effective_trackers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No tracker tiers will be written"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Трекеры не будут записаны"
+          }
+        }
+      }
+    },
+    "creator.public_trackers_private_disabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Private torrents use manual tracker tiers only; recommended public trackers are not added."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватные торренты используют только добавленные вручную уровни; рекомендуемые публичные трекеры не добавляются."
+          }
+        }
+      }
+    },
+    "creator.public_trackers_capacity_exceeded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There are too many tracker URLs to write (limit: %lld). Disable recommended trackers or remove manual trackers; nothing was silently removed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много URL трекеров для записи (лимит: %lld). Отключите рекомендуемые трекеры или удалите добавленные вручную; ничего не было удалено молча."
+          }
+        }
+      }
+    },
+    "creator.public_trackers_invalid_catalog": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recommended public tracker catalog is invalid. Inspect cannot continue."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Каталог рекомендуемых публичных трекеров недействителен. Проверку продолжить нельзя."
+          }
+        }
+      }
+    },
     "creator.tracker_placeholder": {
       "extractionState": "manual",
       "localizations": {
