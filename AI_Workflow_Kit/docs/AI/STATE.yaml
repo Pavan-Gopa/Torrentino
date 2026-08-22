@@ -8,14 +8,12 @@ onboarding:
 current_step: WP-19
 current_work_item_id: null
 step_description: >-
-  WP-18 Finder Services CLOSED (approved, tests 50/50). Next lane WP-19
-  in-app updates per Human decisions 2026-08-22: hosting GitHub Releases,
-  mechanism Sparkle 2 (pinned via versions.lock discipline), UX manual
-  "Check for Updates" only (no background polling).
+  WP-20 add-sheet memory CLOSED (reviewer approved, 56/56 app tests).
+  Active lane: WP-19 in-app updates — Sparkle 2 (pinned), GitHub Releases
+  hosting, manual-only "Check for Updates" UX per Human decisions.
 target_files:
 - Native/TorrentinoApp/
 - Native/ThirdParty/versions.lock
-- AI_Workflow_Kit/docs/AI/COVERAGE.md
 completed_steps:
 - WP-00
 - WP-01
@@ -32,6 +30,7 @@ completed_steps:
 - WP-12
 - WP-13
 - WP-18
+- WP-20
 implementation:
   status: done
   attempts: 0
@@ -89,7 +88,7 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: a0106bc
+  last_commit: c2adfa6
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md

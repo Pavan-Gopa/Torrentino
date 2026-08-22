@@ -1,3 +1,19 @@
+### [WP20-ADD-SHEET-MEMORY-DONE] approved — память destination и start-paused (2026-08-22)
+- Lane [WP20.D1..D3]+[WP20.J1], Human request: add-лист запоминает последнюю
+  папку назначения и положение Start-paused между запусками.
+- Coder WP20AddMemoryCoder001: AddSheetPreferences (UserDefaults standard,
+  injectable suite для тестов); seed в .onAppear (destination только если
+  путь существует и это директория — stale/unmounted guard; первый запуск
+  сохраняет прежний дефолт true/nil); запись ТОЛЬКО при успехе через
+  finishSuccessfulAdd во всех трёх ветках (файл/magnet/URL); magnet/URL не
+  затирают запомненную папку.
+- Main verification: независимый прогон build + TorrentinoAppTests 56/56
+  на чистом DerivedData; размещение seed/finish сверено построчно.
+- Reviewer WP20AddMemoryReviewer001: APPROVED, 0 blockers, 4 info-residuals:
+  опциональная очистка stale ключа; onAppear идемпотентен; тесты изолированы
+  (UUID-suite + removePersistentDomain teardown), cancel/error пути покрыты
+  архитектурно; pbxproj dual-compilation паттерн соответствует существующему.
+- Движок/IPC не тронуты (проверено ревьюером: diff по IPC/Agent/Domain пуст).
 ### [WP18-FINDER-SERVICES-DONE] approved — «Create with Torrentino» в контекстном меню Finder (2026-08-22)
 - Lane [WP18.D1..D3]+[WP18.J1], Human-authorized feature.
 - Coder WP18ServiceCoder001 (2 прохода): NSServices в Info.plist;
