@@ -898,3 +898,61 @@ bash Native/TorrentinoEngineBridge/scripts/build_harness.sh --lt-version 2.1.1 -
 ```
 
 **Artifacts retained:** `build/WP13FinalSentinelDerivedData/`, `artifacts/tests/WP13FinalSentinel.xcresult` + `WP13FinalSentinel.xcodebuild.log`, `WP13FinalSentinel_redactor.log`, `WP13FinalSentinel_qa_guard_real.log`, `WP13FinalSentinel_qa_guard_zero.log`, `WP13FinalSentinel_wp01_fallback.log`, `WP13FinalSentinel_wp12_0{1,2,3,4}.log`, `WP13FinalSentinel_version_guard_2013/210.log`, `WP13FinalSentinel_git_status.log`, `Native/TorrentinoEngineBridge/runs/tests-2.0.14-release-20260822T091932Z/scenarios.log`, `Measurements/wp12/bench-20260822-145115.csv`.
+
+---
+
+## [WP14-PERF-CAMPAIGN-001] Performance qualification — 2026-08-22
+
+**Verdict:** `findings_open` / partial. In-reach Release measurements completed; live/Instruments/long-duration gates remain explicit gaps.
+
+| Measurement | Value | Target | Result |
+|---|---:|---:|---|
+| 2.1.1 headless hybrid median | 1253.11 MiB/s | reference | PASS (baseline) |
+| 2.1.1 headless v2 median | 2322.13 MiB/s | reference | PASS (baseline) |
+| 100-record restore / snapshot p95 | 24.876292 / 4.043125 ms | snapshot ≤5 s | PASS |
+| 100 idle / 10 active footprint | 12.547516 / 12.641266 MiB | ≤350 / ≤750 MiB | PASS (in-process synthetic) |
+| 2 GiB creator cancel reaction | 0.380000 ms | ≤1 s | PASS |
+| 500-row projection p95 | 10.730916 ms | no stall >250 ms | PASS (projection path) |
+| mutation / health p95 under overload | 0.724125 / 0.001334 ms | ≤200 ms | PASS |
+| event queue after 100k burst | 1 event | ≤256 | PASS |
+| slow-consumer overflow recovery marker | 0 delivered | must recover authoritative state | **FAIL** |
+| FD baseline/during/after | 120/120/120 | non-monotonic; return | PASS (campaign window) |
+| threads baseline/during/after | 5/6/5 | non-monotonic; return | PASS (campaign window) |
+| quiescent footprint | 38.500664 MiB | ≤350 and ≤baseline+64 | PASS |
+
+**Finding WP14-PERF-001 (High):** `TransferEventBus` replaces the one queued slow-consumer batch wholesale. After overflow creates `.snapshotRequired(.droppedDelta)`, a later health tail replaces that marker before delivery; the queue stays bounded but the connected consumer is not told to refetch. Deterministic failure: `WP14PerformanceMeasurements.swift:491`.
+
+**Primary evidence:** `Measurements/wp14/report.md`, `headless-20260822-153133.csv`, `environment-20260822-153133.txt`, `inprocess-latest.csv`, `projection-latest.csv`, `xctest-20260822-154136.{log,xcresult}`.
+
+**Open Human-gated gaps:** sterile live launch/XPC/UI+engine metrics; Time Profiler; Allocations; Energy/thermal; real large recheck/creator completion; tracker/peer alert drain and stalled disk; 2h/12h+ slope/soak; watchdog slow-I/O and relaunch/reconnect SLO.
+
+---
+
+## [WP14-PERF-001-FIX-001] Final regression
+
+**Verdict:** `findings_open` (fresh independent QA, 2026-08-22).
+
+| Gate | Fresh result |
+|---|---|
+| Full XCTest, fresh `build/WP14PerfFinalDerivedData` | **386 passed / 1 failed / 387 total** on two fresh runs; `WP13DiagnosticsSecurityTests/testObservabilityCommandMatrixWritesEveryRequiredClass` failed both times: `isolation breach: sentinel leaked into the user log directory`. Focused retry passed 1/1, but does not close the full-regression gate. Bundle: `artifacts/tests/WP14PerfFinalRetry.xcresult`. |
+| WP14 marker regressions | All three executed and passed: `testWP14OverflowMarkerSurvivesTrailingReplacement`, `testWP14RepeatedReplacementsKeepExactlyOneOverflowMarker`, `testWP14OverflowMarkerClearsAfterSuccessfulDelivery`. |
+| WP14 in-process campaign | **1/1 passed**; regenerated `Measurements/wp14/inprocess-latest.csv` reports `slow_consumer_overflow_resync_marker,1.000000,boolean,1,pass`. |
+| Redactor negative | Exit **0**, **32/32** vectors, no negative-result lines. |
+| QA guard | Real suite exit **0** (`executed=32 failed=0`); zero-collect exit **1** (`executed=0 failed=0`, fail-closed). |
+| Native scope | **9** status lines, not the assigned known cumulative count of 36; observed set is four modified and five untracked WP14 paths. Flagged for Main reconciliation. |
+
+Exact re-runnable commands:
+```bash
+TORRENTINO_LOG_DIRECTORY=/tmp/torrentino-logs-WP14PerfFinalRetry-lKclVA xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/WP14PerfFinalDerivedData -resultBundlePath artifacts/tests/WP14PerfFinalRetry.xcresult
+xcrun xcresulttool get test-results summary --path artifacts/tests/WP14PerfFinalRetry.xcresult
+xcrun xcresulttool get test-results tests --path artifacts/tests/WP14PerfFinalRetry.xcresult
+TORRENTINO_LOG_DIRECTORY=/tmp/torrentino-logs-WP14PerfFinalRetry-lKclVA xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'platform=macOS,arch=arm64' -derivedDataPath build/WP14PerfFinalDerivedData -resultBundlePath artifacts/tests/WP14PerfFinalCampaign.xcresult -only-testing:TorrentinoEngineAgentTests/WP14PerformanceMeasurements
+bash Native/TorrentinoEngineBridge/scripts/qa/test_security_redactor_negative.sh
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh
+WP13_TEST_FILTERS='TorrentinoEngineAgentTests/WP13NoSuchSuiteZeroCollectProbe' bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh
+git status --short -- Native
+```
+
+Evidence logs: `artifacts/tests/WP14PerfFinalRetry.xcodebuild.log`, `WP14PerfFinalRetry_tests.json`, `WP14PerfFinalCampaign.log`, `WP14PerfFinal_redactor.log`, `WP14PerfFinal_qa_guard_real.log`, `WP14PerfFinal_qa_guard_zero.log`, `WP14PerfFinal_git_status.log`.
+
+Failure-message artifact: `artifacts/tests/WP14PerfFinalRetry_tests.json:1948` (`WP13DiagnosticsSecurityTests.swift:82`); this is the **never-in-default-sink** sentinel assertion, not the override-established or shared-sink round-trip assertions. `TORRENTINO_LOG_DIRECTORY` was set for xcodebuild to `/tmp/torrentino-logs-WP14PerfFinalRetry-lKclVA`; captured by `printenv` in `artifacts/tests/WP14PerfFinal_environment.log`.

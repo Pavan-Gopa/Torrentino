@@ -235,3 +235,27 @@ script below is **new this run** and becomes the regression base for WP-02+.
 
 All 11 scripts + `run_qa_suite.sh` + `qa_common.sh`. The runner auto-discovers
 `test_wp01_*.sh` (and future `test_wpNN_*.sh` can be added alongside).
+
+---
+
+## WP-14 Performance Qualification Coverage — 2026-08-22
+
+**Lane:** `[WP14-PERF-CAMPAIGN-001]` — Release, isolated, evidence-only.
+
+| Intended behavior / gate | Measurement evidence | Status |
+|---|---|---|
+| Headless 2.1.1 reference, hybrid/v2 | `test_wp14_01_headless_baselines.sh`, `Measurements/wp14/headless-20260822-153133.csv` | PASS |
+| Fallback 2.0.14 comparison | same 28-row CSV | PASS |
+| 100 records / authoritative snapshot | `WP14PerformanceMeasurements` restore + 50-rep p95 | PASS |
+| 100 idle / 10 active footprint | `TASK_VM_INFO.phys_footprint` | PASS (in-process synthetic) |
+| Large creator / cancellation | 2 GiB sparse production scan + CPUHasher cancel | PARTIAL PASS |
+| Large recheck | 50 dispatch acknowledgements | PARTIAL PASS; real completion GAP |
+| 500-row UI projection | `WP14ProjectionMeasurements`, 200 reps | PASS |
+| FD/thread/quiescence return | baseline/during/after samples | PASS (campaign window) |
+| 100k queue bounded | max 256; observed depth 1 | PASS |
+| Slow consumer preserves resync | overflow + tail replacement | **FAIL — WP14-PERF-001** |
+| Mutation/health not blocked | p95 0.724125 / 0.001334 ms | PASS (in-process) |
+| Disconnect resync | unknown-revision authoritative fetch | PASS (in-process seam) |
+| Live launch/XPC/watchdog/energy/Instruments/soak | Human/live process required | GAP |
+
+New dedicated tests/scripts: `WP14ProjectionMeasurements.swift`, `WP14PerformanceMeasurements.swift`, `test_wp14_01_headless_baselines.sh`, and `test_wp14_02_inprocess_metrics.sh`.

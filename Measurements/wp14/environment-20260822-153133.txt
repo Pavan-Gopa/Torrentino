@@ -1,0 +1,15 @@
+run_id=20260822-153133
+utc=2026-08-22T10:01:33Z
+macos=26.5.2 (25F84)
+arch=arm64
+kernel=25.5.0
+chip=Apple M4
+logical_cpu=10
+memory_gib=32
+configuration=Release
+corpus_bytes=268435456
+piece_kib=1024
+formats=hybrid,v2
+reps=7
+primary=torrentino-harness WP-01;libtorrent 2.1.1.0 (num 20101);tls: openssl;abi: 2;
+fallback=torrentino-harness WP-01;libtorrent 2.0.14.0 (num 20014);tls: openssl;abi: 1;

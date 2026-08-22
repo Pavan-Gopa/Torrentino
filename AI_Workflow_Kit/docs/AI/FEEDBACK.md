@@ -1,3 +1,161 @@
+### [WP14-LOGISOLATION-FIX-001-REVIEW-001-DONE] approved — five gates pass (2026-08-22)
+- Fresh `WP14LogIsoReviewer001` (5m52s): RESOLUTION SEMANTICS (mkdtemp
+  fail-closed, never user default; no handle thrash), ORDER-PROOF (late
+  setenv redirects even after init-time production resolution; no code path
+  writes test markers into user dir when env set), REGRESSION SWEEP
+  (7-rule pipeline + parity intact; rotation intact; 389/0 ×2
+  sqlite-verified), TEST HONESTY (real FS conditions; pre-fix failure bundle
+  archived showing exactly the breach), SCOPE (two files).
+- Non-blocking residuals recorded: WP14-LOG-001 minor (stderr/OSLog fault
+  additive on isolation path — routed to next logging surface touch),
+  WP14-LOG-002 info (orphan Agent/RedactedLogFileManager.swift mirror —
+  documented drift risk), WP14-LOG-003 info (multi-lane tree — Main commits
+  lanes separately).
+
+### [WP14-LOGISOLATION-FIX-001-DONE] qa_green — lane closed (2026-08-22)
+- Two consecutive fresh full-suite runs **389/389/0** (reviewer
+  sqlite-verified both bundles); sentinel test green in both orders;
+  user log dir contains zero post-fix sentinels; pre-fix breach bundle
+  archived as evidence.
+- **WP-14 consolidation:** in-reach campaign complete (15/16→defect fixed→
+  re-verified 389/389); overflow-marker HIGH and log-isolation MEDIUM-HIGH
+  defects fixed and approved. Remaining §11.3 live gaps (launch/XPC p95,
+  Instruments suite, watchdog/launchd SLO, energy/thermal, long soak) are
+  Human-gated: sterile-identity live runs or a Human-side Instruments
+  session; natural execution window = WP-15 signed-build soak environment.
+  Presented to Human for the go/defer decision.
+### [WP14-PERF-001-FIX-001-FINAL-TEST] findings_open — sentinel caught real isolation defect (2026-08-22)
+- Final tester (8m42s): full regression ×2 = **386/387**, failing
+  `testObservabilityCommandMatrixWritesEveryRequiredClass` at :82 «isolation
+  breach: sentinel leaked into the user log directory»; focused retry 1/1
+  PASS; WP14 marker/campaign tests green (resync marker 1/1); REPORT.md
+  appended.
+- Main root-cause chain (all evidence-verified):
+  1. xcodebuild does NOT forward arbitrary shell env to test runners →
+     launcher-provided `TORRENTINO_LOG_DIRECTORY` never reaches runners.
+  2. WP13 setUpClass setenv fires too late in full-suite ordering (another
+     suite initializes shared/ProcessInfo snapshot first) → class order-
+     fragility; focused runs pass because setenv precedes first access.
+  3. `RedactedLogFileManager.init` SILENTLY falls back to the default user
+     log directory when resolution/creation fails (`try? createDirectory`,
+     no fail-closed) → test markers leaked into
+     `~/Library/Logs/com.torrentino.app.engine-agent/engine_log_current.log`
+     (:19365, format verified as test-written).
+- The sentinel did exactly its job; the isolation mechanism beneath it is
+  order-fragile + silent-fallback. Scope discrepancy resolved: tester's
+  9-line status is the correct post-commit delta; Main's "36" baseline was
+  pre-commit stale (assignment error, tester correct).
+
+### [WP14-LOGISOLATION-FIX-001-OPEN] Order-proof log isolation + fail-closed resolution (2026-08-22)
+- Fix lane scope (fresh Coder):
+  1. Fail-closed/loud directory resolution in RedactedLogFileManager init —
+     when an explicit/env directory is requested but unusable, surface error
+     (or isolate to a fresh temp dir WITH a warning log), never silently the
+     user's default engine log.
+  2. Order-proof override: late setenv must take effect (per-write/per-init
+     env re-resolution while unbound, or guaranteed-early bootstrap) — choose
+     minimal robust implementation; document chosen semantics.
+  3. Tests: late-setenv-after-first-access scenario; unusable-override →
+     non-default resolution; existing sentinel + focused/full distinction
+     becomes moot (both orders green).
+  4. Acceptance: TWO consecutive full-suite greens incl. the sentinel test;
+     negative script + guards unchanged-green; scoped diff.
+- BUG_REPORT gains WP14-PERF-002 (medium-high, test-infra/product boundary).
+### [WP14-PERF-001-FIX-001-REVIEW-001] approved — zero findings (2026-08-22)
+- Fresh `WP14PerfFixReviewer001` (11m36s): CONCURRENCY (actor-isolated,
+  no await between marker read/write; duplication guard; index-0 leading
+  matches snapshotRequired→recoverFromFullSnapshot semantics), SEMANTICS
+  (order preserved; bound ≤ maxPendingEvents+1; API unchanged; comment
+  accurate), TEST HONESTY (GatedBatchCollector deterministic stall; shape
+  matches campaign failure; no weakened assertions; 387 uniq / 0 dups),
+  REGRESSION SWEEP (all prior suites green; diff isolated to two files) —
+  all pass.
+- Reviewer independently re-ran the failing campaign measurement:
+  slow_consumer_overflow_resync_marker now **1/1 delivered** (was 0).
+
+### [WP14-PERF-001-FIX-001-ATTEMPT-01-DONE] waiting_review — Main verified (2026-08-22)
+- Coder001 (19m48s): merge-on-replace preserves exactly one sticky
+  `snapshotRequired(.droppedDelta)` marker leading the surviving batch;
+  delivery consumes it; bound respected (≤ maxPendingEvents + carried
+  marker); honest comment replaces the false claim. Scope = exactly two files
+  (+165/−3). Official run **387 passed / 0 failed** (count reconciled: 384
+  pre-existing + 3 new, zero duplicates via sort|uniq); targeted 3/3;
+  previously failing campaign test green in-suite.
+- Three GatedBatchCollector regressions: exact overload shape (exactly one
+  marker leading, tail behind), repeated replacements never duplicate/drop,
+  delivery consumes without loop.
+- Routing: fresh `WP14PerfFixReviewer001` focused delta review
+  (concurrency/semantics/test-honesty/regression). Tester re-run of the
+  overload campaign test follows approval.
+### [WP14-PERF-CAMPAIGN-001-DONE] findings_open — 15/16 pass, 1 HIGH defect routed (2026-08-22)
+- Fresh `WP14PerfCampaignTester001` (31m5s). In-reach measurements: **15 PASS /
+  1 FAIL**; 9 honest gaps documented (sterile live campaign, Instruments,
+  real tracker/disk lanes, long soak — Human-gated or out of in-process reach;
+  hardware honestly reported M4/32GB vs plan baseline M1/8GB, no fabrication).
+- Passing highlights vs SLO §11.3 proxies: restore/snapshot p95 24.9/4.0 ms
+  (≤5 s), footprint 12.5 MiB idle / 38.5 MiB quiescent (≤350 MiB), recheck
+  dispatch p95 0.47 ms (≤200 ms), creator scan 0.23 s / cancel 0.38 s (≤1 s),
+  500-row projection p95 10.7 ms (≤250 ms), mutation ack 0.72 ms and health
+  0.001 ms under telemetry load (≤200 ms), FD/threads flat, queue depth
+  bounded at maxPendingEvents=256.
+- **WP14-PERF-001 HIGH** (Main verified in source,
+  TransferEventBus.swift:102-105): slow-sink overflow test — 100k-event burst
+  + trailing health event delivered ZERO snapshotRequired(.droppedDelta)
+  recovery markers; flushNow() replaces queuedDeliveries wholesale so a tail
+  batch erases the overflow marker (comment falsely claims the marker is
+  already in the batch). Violates WP-14 gate "authoritative state not lost".
+  → BUG_REPORT.md; fix lane [WP14-PERF-001-FIX-001].
+- Campaign artifacts: Measurements/wp14/ (report.md, CSVs, environment,
+  xcresult), two new measurement scripts + two measurement XCTest files,
+  REPORT/COVERAGE updated.
+
+### [WP14-PERF-001-FIX-001-OPEN] Event-bus overflow marker preservation (2026-08-22)
+- Fix direction (Main): queued state per sink must preserve the recovery
+  marker across replacements — sticky snapshotRequired(.droppedDelta) until
+  successfully delivered, or union-merge on replace; minimal change, no
+  delivery-order semantics change otherwise. Regression = the failing
+  overload scenario (slow sink + tail event) must deliver exactly one
+  resync signal.
+### [WP14-HARNESS-211-FIX-001-DONE] waiting_review closed by Main objective verification (2026-08-22)
+- Coder001 (13m23s): root cause verified in installed headers — lt::string_view
+  alias is boost:: in 2.0.14, std:: in 2.1.1; fix = 2 lines net-zero
+  (lt::string_view version-agnostic alias + libtorrent/string_view.hpp
+  include). Proactive sweep found no other incompatible call sites.
+- Gates re-run by coder AND spot-verified by Main: build 2.1.1 --clean OK
+  (-Werror, zero warnings), smoke session_lifecycle PASS on 2.1.1,
+  changed-path behavioral proof (verify-torrent v2 multi-file + bench-hash
+  through with_creator branch), regression 2.0.14 build+run-all 11/11.
+- Ruling: mechanical compile-compat fix inside approved boundary → closed by
+  objective verification (diff = exactly hash_bench.cpp; runs logs archived);
+  no separate review round.
+
+### [WP14-PERF-CAMPAIGN-001-OPEN] Measurement campaign per plan §WP-14 (2026-08-22)
+- Scope (plan lines 2597-2629 + SLO §11.3 lines 1372-1416): CPU/allocations/
+  energy, fd/thread/XPC counts, 100 records / 10 active, large creator/recheck,
+  UI 500-row projection, headless libtorrent reference comparison, alert/XPC
+  overload harness (burst 100k updates, slow consumer, disconnect/resync,
+  stalled disk I/O, telemetry-full health).
+- Execution constraints: Human LaunchAgent and production state are FORBIDDEN
+  — measurements run in-process (XCTest metrics on test-scoped synthetic
+  workloads, event-bus/command-lane bursts, fd/thread introspection) plus
+  headless harness benchmarks; xctrace CLI optional if available. External
+  network only for local deterministic fixtures.
+- Deliverables: Measurements/wp14/ artifacts, REPORT.md section, structured
+  verdict complete | partial | findings_open with honest gaps (e.g., live
+  launchd watchdog semantics are out of in-process reach — document).
+### [WP14-HARNESS-211-FIX-001-OPEN] First WP-14 prep lane opened (2026-08-22)
+- Standing Human instruction in effect: continue remaining steps after a
+  clean security outcome.
+- Lane scope: fix `harness/src/hash_bench.cpp` compile against libtorrent
+  2.1.1 headers (boost::string_view → dict_find conversion error surfaced by
+  the authorized pin bump) so `build_harness.sh --lt-version 2.1.1` succeeds
+  and the headless reference needed by plan §WP-14 comparison builds on the
+  default pin. Harness-only; measurement semantics unchanged.
+- Objective Gates: build_harness --lt-version 2.1.1 succeeds; harness runs a
+  smoke scenario on 2.1.1; --lt-version 2.0.14 still builds and passes
+  (no regression); scoped diff within harness/src + build_harness.sh;
+  no app-target impact (full XCTest not required for this lane — targeted
+  evidence only).
 ### [WP13-SEC-HARDEN-001-DONE] qa_green — lane closed, step → WP-14 (2026-08-22)
 - Final independent `WP13SecHardenFinalTester001` (6m8s): **qa_green**.
   Official `artifacts/tests/WP13FinalSentinel.xcresult` = **382 passed / 0

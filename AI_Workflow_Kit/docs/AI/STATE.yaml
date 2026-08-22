@@ -8,20 +8,21 @@ onboarding:
 current_step: WP-14
 current_work_item_id: null
 step_description: >-
-  Step transitioned to WP-14 performance qualification after
-  [WP13-SEC-HARDEN-001] closed qa_green (five coder passes, three review
-  rounds; final independent regression 382/382). First lane prep fixes
-  harness/src/hash_bench.cpp against libtorrent 2.1.1 headers
-  (boost::string_view → dict_find conversion) so the headless reference
-  builds on the default pin; then the measurement campaign per plan §WP-14
-  (SLO §11): CPU/allocations/energy, fd/thread/XPC counts, 100 records /
-  10 active, large creator/recheck, UI 500 rows, alert/XPC overload harness,
-  headless comparison. CVE verdict stays closed clean.
+  WP-14 performance qualification: in-reach campaign complete and defects
+  closed. Headless baselines on libtorrent 2.1.1/2.0.14 captured; in-process
+  SLO proxies green (restore/snapshot, footprint, recheck, creator,
+  projection, mutation/health under load, FD/threads flat, RSS budget);
+  HIGH overflow-marker defect fixed (sticky resync signal, three
+  regressions) and MEDIUM-HIGH log-isolation order fragility fixed
+  (fail-closed mkdtemp, late-setenv order-proof), both review-approved.
+  Remaining §11.3/live gaps (launch/XPC p95, Instruments, watchdog, energy,
+  long soak) require sterile-identity live runs or Human-side Instruments —
+  consolidated for the Human decision: authorize live campaign vs fold into
+  WP-15 signed-build environment.
 target_files:
 - Native/TorrentinoEngineBridge/harness/src/
-- Native/TorrentinoEngineBridge/scripts/
+- Native/TorrentinoEngineBridge/scripts/build_harness.sh
 - Measurements/
-- Native/Tests/TorrentinoEngineAgentTests/ (only if measurement seams require)
 completed_steps:
 - WP-00
 - WP-01
@@ -38,12 +39,13 @@ completed_steps:
 - WP-12
 - WP-13
 implementation:
-  status: open
+  status: done
   attempts: 0
   note: >-
-    WP-14 opening. Prior release-track lanes remain verified records;
-    WP13-SEC-HARDEN-001 closed qa_green (382/382 final sentinel regression,
-    harness runtime green on retargeted pins).
+    WP-14 in-reach scope complete: harness 2.1.1 compat, measurement
+    infrastructure, overflow-marker fix, fail-closed order-proof log
+    isolation — all review-approved. Live-campaign scope deferred to Human
+    decision (sterile identity / Instruments session).
 retry_guard:
   max_attempts_without_progress: 3
   repeated_failure_count: 0
@@ -52,26 +54,30 @@ retry_guard:
 omp:
   active_agent: null
   active_role: null
-  last_result_artifact: agent://WP13SecHardenFinalTester001
-  dispatched_at: 2026-08-22T09:17:20Z
-  completed_at: 2026-08-22T09:24:00Z
+  last_result_artifact: agent://WP14LogIsoReviewer001
+  dispatched_at: 2026-08-22T11:44:04Z
+  completed_at: 2026-08-22T11:52:00Z
 review:
-  status: pending
+  status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: null
+  verdict: approved
   note: >-
-    Awaiting first WP-14 judgment pass. Historical: three hardening review
-    rounds approved-in-progression; final sentinel edge fixed and objectively
-    verified.
+    WP14LogIsoReviewer001: five gates pass (resolution semantics/order-proof/
+    regression sweep/test honesty/scope); zero blocking findings, three
+    info-level residuals recorded. Historical: PerfFix review approved zero
+    findings; campaign found the defects.
   enabled: true
 qa:
-  status: pending
-  last_report: artifacts/tests/WP13FinalSentinel.xcresult
-  suite: WP13-SEC-HARDEN-001
+  status: green
+  last_report: Measurements/wp14/report.md
+  suite: WP14-PERF-CAMPAIGN-001
   bugs_open: 0
   note: >-
-    WP13-SEC-HARDEN-001 closed qa_green 382/382 including retargeted harness
-    runtime evidence; WP-14 measurement QA queued behind the harness fix.
+    Both campaign defects fixed and review-approved; final tree verified by
+    TWO consecutive full-suite runs 389/389/0 (reviewer sqlite-confirmed both
+    bundles); negative script 32/32; pre-fix failure bundle archived as
+    evidence. WP14-PERF-001/002 resolved. Live-scope SLO measurements are
+    documented Human-gated gaps, not failures.
 security:
   next_run: none
   note: >-

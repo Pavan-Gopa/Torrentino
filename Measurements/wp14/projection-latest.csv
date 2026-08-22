@@ -1,0 +1,4 @@
+metric,value,unit,target,result,basis
+ui_projection_500_p50,10.993042,ms,observational,pass,200 Release repetitions
+ui_projection_500_p95,19.694833,ms,<=250,pass,§11.3 no main-thread stall >250 ms
+ui_projection_rows,500,rows,500,pass,TorrentListProjection plus TorrentListRowProjection
