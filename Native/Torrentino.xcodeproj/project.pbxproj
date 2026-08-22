@@ -172,6 +172,14 @@
 		4A0000000000000000000919 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
 		4A0000000000000000000933 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
 		4A0000000000000000000934 /* CreatorTrackerSharingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */; };
+		4A00000000000000000014D4 /* UpdateFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014D1 /* UpdateFeed.swift */; };
+		4A00000000000000000014D5 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014D2 /* UpdateChecker.swift */; };
+		4A00000000000000000014D6 /* WP19UpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014D3 /* WP19UpdateTests.swift */; };
+		4A00000000000000000014D7 /* UpdateFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014D1 /* UpdateFeed.swift */; };
+		4A00000000000000000014D8 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014D2 /* UpdateChecker.swift */; };
+		4A00000000000000000014D9 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 4A00000000000000000014DB /* Sparkle */; };
+		4A00000000000000000014DA /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 4A00000000000000000014DB /* Sparkle */; };
+
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -405,6 +413,10 @@
 		4A0000000000000000000908 /* CreatorPlanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorPlanStore.swift; sourceTree = "<group>"; };
 		4A0000000000000000000921 /* TorrentCreatorDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentCreatorDomainTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000922 /* TorrentCreatorAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentCreatorAgentTests.swift; sourceTree = "<group>"; };
+		4A00000000000000000014D1 /* UpdateFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateFeed.swift; sourceTree = "<group>"; };
+		4A00000000000000000014D2 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
+		4A00000000000000000014D3 /* WP19UpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP19UpdateTests.swift; sourceTree = "<group>"; };
+
 
 /* Begin PBXFrameworksBuildPhase section */
 		4A0000000000000000000402 /* Frameworks */ = {
@@ -413,6 +425,7 @@
 			files = (
 				4A0000000000000000000551 /* TorrentinoDomain.framework in Frameworks */,
 				4A0000000000000000000552 /* TorrentinoIPC.framework in Frameworks */,
+				4A00000000000000000014D9 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -464,6 +477,7 @@
 			files = (
 				4A0000000000000000000557 /* TorrentinoDomain.framework in Frameworks */,
 				4A0000000000000000000558 /* TorrentinoIPC.framework in Frameworks */,
+				4A00000000000000000014DA /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -549,6 +563,8 @@
 				4A0000000000000000000102 /* AppDelegate.swift */,
 				4A0000000000000000000103 /* CLIDispatcher.swift */,
 				4A0000000000000000000812 /* NotificationManager.swift */,
+				4A00000000000000000014D1 /* UpdateFeed.swift */,
+				4A00000000000000000014D2 /* UpdateChecker.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -786,6 +802,7 @@
 				4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */,
 				4A00000000000000000014C1 /* WP18FinderServicesTests.swift */,
 				4A00000000000000000014C3 /* WP20AddSheetMemoryTests.swift */,
+				4A00000000000000000014D3 /* WP19UpdateTests.swift */,
 			);
 			path = TorrentinoAppTests;
 			sourceTree = "<group>";
@@ -835,6 +852,9 @@
 				4A0000000000000000000403 /* Embed LaunchAgent */,
 			);
 			buildRules = (
+			);
+			packageProductDependencies = (
+				4A00000000000000000014DB /* Sparkle */,
 			);
 			dependencies = (
 				4A0000000000000000000601 /* PBXTargetDependency */,
@@ -942,6 +962,9 @@
 			);
 			buildRules = (
 			);
+			packageProductDependencies = (
+				4A00000000000000000014DB /* Sparkle */,
+			);
 			dependencies = (
 				4A0000000000000000000627 /* PBXTargetDependency */,
 				4A0000000000000000000629 /* PBXTargetDependency */,
@@ -1017,6 +1040,9 @@
 			);
 			mainGroup = 4A0000000000000000000002;
 			productRefGroup = 4A0000000000000000000003 /* Products */;
+			packageReferences = (
+				4A00000000000000000014DC /* XCRemoteSwiftPackageReference */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1031,6 +1057,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4A00000000000000000014DC /* XCRemoteSwiftPackageReference */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4A00000000000000000014DB /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A00000000000000000014DC /* XCRemoteSwiftPackageReference */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4A0000000000000000000404 /* Resources */ = {
@@ -1071,6 +1116,8 @@
 				4A000000000000000000050E /* ServiceRegistration.swift in Sources */,
 				4A0000000000000000000911 /* CreateTorrentSheet.swift in Sources */,
 				4A0000000000000000000919 /* CreatorTrackerSharingPolicy.swift in Sources */,
+				4A00000000000000000014D4 /* UpdateFeed.swift in Sources */,
+				4A00000000000000000014D5 /* UpdateChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1199,6 +1246,9 @@
 				4A0000000000000000000805 /* NotificationManager.swift in Sources */,
 				4A0000000000000000000806 /* FixtureLibrary.swift in Sources */,
 				4A000000000000000000055B /* PeerValidation.swift in Sources */,
+				4A00000000000000000014D6 /* WP19UpdateTests.swift in Sources */,
+				4A00000000000000000014D7 /* UpdateFeed.swift in Sources */,
+				4A00000000000000000014D8 /* UpdateChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

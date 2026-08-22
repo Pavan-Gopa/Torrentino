@@ -6,11 +6,19 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 @main
 struct TorrentinoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    private let updateMenuAction: UpdateMenuAction
 
     init() {
+        self.updateMenuAction = UpdateMenuAction(checker: SparkleUpdateChecker())
+        CLIDispatcher.runIfRequestedAndExit()
+    }
+
+    init(updateChecker: any UpdateChecking) {
+        self.updateMenuAction = UpdateMenuAction(checker: updateChecker)
         CLIDispatcher.runIfRequestedAndExit()
     }
 
@@ -58,6 +66,13 @@ struct TorrentinoApp: App {
                     AppContext.transfers.showCreateSheet = true
                 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
+
+                Divider()
+
+                Button(String(localized: "app.check_updates")) {
+                    updateMenuAction.perform()
+                }
+                .keyboardShortcut("u", modifiers: .command)
             }
             CommandMenu(String(localized: "menu.edit")) {
                 Button(String(localized: "menu.edit.find")) {

@@ -9,6 +9,19 @@
 # A mismatch is a hard build failure (never "warn and continue"): a silently
 # swapped tarball is the cheapest supply-chain attack on a torrent client.
 
+
+# ---------------------------------------------------------------------------
+# Sparkle (manual in-app updates, WP-19) — MIT
+# The Xcode project pins the SPM repository to this exact tag. The release
+# archive checksum below is the published Sparkle-for-Swift-Package-Manager
+# artifact used to verify the binary dependency before release packaging.
+# ---------------------------------------------------------------------------
+SPARKLE_VERSION="2.9.6"
+SPARKLE_TAG="2.9.6"
+SPARKLE_SPM_REPOSITORY="https://github.com/sparkle-project/Sparkle.git"
+SPARKLE_ARCHIVE_URL="https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-for-Swift-Package-Manager.zip"
+SPARKLE_ARCHIVE="Sparkle-for-Swift-Package-Manager.zip"
+SPARKLE_SHA256="8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606"
 # ---------------------------------------------------------------------------
 # libtorrent (primary engine candidate) — BSD-3-Clause
 # ---------------------------------------------------------------------------

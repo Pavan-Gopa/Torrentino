@@ -24,6 +24,16 @@
 	<string>13.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Stichting Kadamba Foundation</string>
+
+	<!-- Sparkle is manual-only. UpdateFeed.swift supplies the HTTPS appcast URL
+	     through SPUUpdaterDelegate; do not add a second hardcoded SUFeedURL here. -->
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<!-- WP19.H1 HUMAN gate: replace the empty placeholder with the EdDSA public
+	     key generated for release by sign_update. Until then Sparkle must fail
+	     closed on signature verification; never remove this key or disable it. -->
+	<key>SUPublicEDKey</key>
+	<string></string>
 	<key>NSServices</key>
 	<array>
 		<dict>

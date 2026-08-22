@@ -1531,6 +1531,23 @@
         }
       }
     },
+    "app.check_updates": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for Updates…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить обновления…"
+          }
+        }
+      }
+    },
     "app.name": {
       "extractionState": "manual",
       "localizations": {
@@ -5437,6 +5454,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Созданный торрент не прошёл проверку. Неполный файл не сохранён. Попробуйте снова или выберите v1 для необычного источника."
+          }
+        }
+      }
+    },
+    "updates.unavailable.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updates are not configured"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновления не настроены"
+          }
+        }
+      }
+    },
+    "updates.unavailable.message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for Updates is unavailable until the GitHub Releases appcast and signing key are published."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка обновлений недоступна, пока appcast GitHub Releases и ключ подписи не опубликованы."
+          }
+        }
+      }
+    },
+    "updates.unavailable.ok": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ОК"
           }
         }
       }
