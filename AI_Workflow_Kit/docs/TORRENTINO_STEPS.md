@@ -266,11 +266,11 @@
 **Goal:** Завершить observability и повторно аудировать protections.
 
 **Gate:**
-- [ ] Diagnostic bundle не раскрывает приватные данные
-- [ ] No secrets
-- [ ] No Critical/High relevant CVE
-- [ ] Entitlements минимальны
-- [ ] Release build self-contained
+- [x] Diagnostic bundle не раскрывает приватные данные — release-integrity QA pass + structured password-free projection, escaped-secret-hardened redactor, behavioral parity test (FIX lane)
+- [x] No secrets — source/bundle scans clean (RELEASE-INTEGRITY-QA-001); runtime-at-rest hardening SEC-1 routed to WP13-SEC-HARDEN-001
+- [x] No Critical/High relevant CVE — WP13SecurityAuditor001: libtorrent 2.0.13/2.1.0, boost 1.91.0, openssl 3.5.7 verdict no_critical_high_relevant (SECURITY_FINDINGS.md 2026-08-22)
+- [x] Entitlements минимальны — signed entitlements empty dicts, Hardened Runtime, ADR-008 compliant
+- [x] Release build self-contained — arm64-only, minOS 13.0, zero Homebrew links, codesign strict valid
 
 ---
 
@@ -325,3 +325,92 @@
 **Gate:**
 - [ ] Никакого автоматического удаления legacy
 - [ ] Решение зафиксировано в DECISIONS.md
+
+---
+
+## WP-18 — Finder Services: «Create with Torrentino»
+
+**Track:** FEATURE (Human-authorized 2026-08-22)
+**Goal:** Правый клик по папке/файлу в Finder → Services → «Create with
+Torrentino» — приложение открывает Create Torrent sheet с подставленным
+источником; весь существующий inspect→commit конвейер без изменений.
+
+**Gate:**
+- [x] [WP18.D1] NSServices зарегистрирован в Info.plist
+      (NSMenuItem default «Create with Torrentino», NSMessage createTorrent,
+      NSSendFileTypes public.folder/public.item, контекст Finder)
+- [x] [WP18.D2] AppDelegate: servicesProvider принимает file URLs из pasteboard,
+      активирует главное окно и открывает CreateTorrentSheet с preset source;
+      множественный выбор → первый элемент; cold-launch покрыт очередью
+      pendingCreateSourcePath; auto-inspection по preset (delta-фикс)
+- [x] [WP18.D3] XCTest: NSServices запись валидна; handler извлекает первый
+      URL из синтетического pasteboard; WP18FinderServicesTests 2/2,
+      полный TorrentinoAppTests 50/50 (Main-верификация независимым прогоном)
+- [x] [WP18.J1] Reviewer approved (WP18ServiceReviewer001): 0 blockers,
+      4 info-residual (coalescing повторных вызовов при открытом листе —
+      задокументировано; hand-crafted UUIDs; stub-seam тест-таргета;
+      опциональные доп. тесты)
+
+---
+
+## WP-19 — In-app updates: Sparkle 2 + GitHub Releases
+
+**Track:** FEATURE (Human decisions 2026-08-22: GitHub Releases / Sparkle 2 / manual-only UX)
+**Goal:** Кнопка «Check for Updates…» в меню приложения: проверка appcast на
+GitHub Releases, EdDSA-верификация, диалог обновления. Без фонового поллинга.
+
+**Gate:**
+- [x] [WP19.D1] Sparkle 2 добавлен как запинненная зависимость
+      (versions.lock + проект), версия зафиксирована
+- [x] [WP19.D2] Меню «Check for Updates…» → SPUUpdater проверка вручную;
+      SUFeedURL в одном конфигурируемом месте; без авто-проверок при старте;
+      корректное поведение при отсутствии сети/404
+- [x] [WP19.D3] XCTest: меню-действие вызывает updater; feed URL из единственного
+      источника; suite зелёный
+- [x] [WP19.J1] Reviewer: поверхность безопасности апдейта (подписи EdDSA
+      обязательны, никакого downgrade-приёма, https-only), scope
+- [ ] [WP19.H1] HUMAN: сгенерировать EdDSA-ключ (sign_update), опубликовать
+      appcast + релиз; вписать боевой URL репозитория
+
+---
+
+## WP-20 — Add-sheet memory: last destination + start/paused choice
+
+**Track:** FIX (Human request 2026-08-22)
+**Goal:** AddTorrentSheet запоминает последнюю выбранную папку назначения
+и последнее положение переключателя Start paused между запусками;
+несуществующий путь не подсаживается (том мог быть отмонтирован).
+
+**Gate:**
+- [x] [WP20.D1] Персистентность UI-выбора: последний destination path и
+      start-paused хранятся в UserDefaults (app-side), сидируются при
+      открытии листа, сохраняются только при УСПЕШНОМ добавлении;
+      magnet/URL-ветки не затирают запомненную папку
+- [x] [WP20.D2] Stale-path защита: путь подсаживается только если существует
+      на диске; иначе тихий фолбэк на текущее поведение
+- [x] [WP20.D3] XCTest: правила сидирования/сохранения через изолированный
+      UserDefaults suite; suite зелёный
+- [x] [WP20.J1] Reviewer: scope, отсутствие записи в engine settings,
+      согласованность с ADR «UI не источник правды» (память UI-преференций)
+
+---
+
+## WP-21 — Remove torrent and delete downloaded files
+
+**Track:** FEATURE/FIX (Human request 2026-08-22)
+**Goal:** Контекстное меню предлагает два честно различимых действия:
+обычный Remove сохраняет данные; destructive «Remove and Delete Files…»
+после явного подтверждения удаляет задачу и перемещает её данные в Trash,
+используя существующий durable prepare→commit removal flow.
+
+**Gate:**
+- [x] [WP21.D1] Context menu: Remove (keep files) + destructive
+      Remove and Delete Files…; target IDs берутся из context-menu selection
+- [x] [WP21.D2] Confirmation объясняет необратимое действие для задачи,
+      Trash-поведение и shared-file protection; Cancel не отправляет команд
+- [x] [WP21.D3] ViewModel принимает explicit deleteFiles Bool и передаёт его
+      в PrepareRemovalRequest; существующий false-путь не меняется
+- [x] [WP21.D4] XCTest spy: false/true request wiring, confirm/cancel routing;
+      полный suite зелёный
+- [x] [WP21.J1] Reviewer: destructive UX, shared-file semantics, multi-select,
+      durable retry/pending-removal поведение не сломано

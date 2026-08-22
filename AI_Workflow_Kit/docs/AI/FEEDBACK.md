@@ -1,3 +1,17 @@
+### [WP21-REMOVE-DELETE-FILES-DONE] approved after confirmation lifecycle fix (2026-08-22)
+- Human request: context menu keeps normal Remove and adds destructive
+  «Remove and Delete Files…».
+- Coder WP21RemoveFilesCoder001: explicit context IDs; normal false path;
+  destructive confirmation true path; en+ru copy explains Trash and
+  shared-file protection; existing durable prepare→commit/retry semantics reused.
+- Main verification: diff inspected; independent TorrentinoAppTests 64/64.
+- Reviewer pass 1 changes_requested: SwiftUI teardown could clear IDs before
+  button action, making confirmed delete silently no-op; tests missed success.
+- Delta: confirmationDialog `presenting:` gets immutable request snapshot;
+  consume-once request IDs prevent duplicate dispatch; teardown-before-action,
+  confirm-once, cancel/dismiss zero-route tests added (WP21RemovalTests 4/4).
+- Final reviewer re-review: APPROVED; normal Remove keeps files, destructive
+  action cannot run without confirmation; Engine/IPC/Domain untouched.
 ### [WP19-H1-PARTIAL] GitHub feed + EdDSA key configured; signed release/appcast pending (2026-08-22)
 - Human supplied repo: `https://github.com/Pavan-Gopa/Torrentino`.
 - UpdateFeed wired to
