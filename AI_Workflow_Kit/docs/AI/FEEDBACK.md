@@ -1,3 +1,80 @@
+### [WP18-FINDER-SERVICES-DONE] approved — «Create with Torrentino» в контекстном меню Finder (2026-08-22)
+- Lane [WP18.D1..D3]+[WP18.J1], Human-authorized feature.
+- Coder WP18ServiceCoder001 (2 прохода): NSServices в Info.plist;
+  CreatorServiceRouter (@objc createTorrent:userData:error:, retained);
+  pendingCreateSourcePath → ContentView onAppear/onChange → CreateTorrentSheet
+  с preset + delta-фикс авто-инспекции (hasPresetSource + однократный
+  .onAppear); pbxproj: suite membership + 5 production sources для тест-таргета.
+- Main verification: независимый прогон build + полный TorrentinoAppTests
+  50/50 на чистом DerivedData; дифф сверен против гейтов; найден и исправлен
+  один UX-пробой (State(initialValue:) не триггерит onChange).
+- Reviewer WP18ServiceReviewer001: APPROVED, 0 blockers, 4 info-residuals:
+  (1) повторный вызов сервиса при открытом листе коалесцируется (второй путь
+  теряется) — задокументировано как MVP-поведение; (2) hand-crafted UUIDs;
+  (3) stub-seam EngineViewModel/AppContext/AppLogo в тест-таргете — синхронизировать
+  при дрейфе API; (4) опциональные доп. тесты (Bundle.main, empty-pasteboard error path).
+- Активация на машине Human: перезапустить свежий бандл, выполнить
+  `/System/Library/CoreServices/pbs -flush`, проверить правый клик → Services.
+### [HUMAN-DECISIONS-UPDATES-2026-08-22] WP-19 параметры зафиксированы
+- Hosting: GitHub Releases. Mechanism: Sparkle 2 (запиннить в versions.lock).
+  UX: только ручная кнопка «Check for Updates» (без фоновой поллинга).
+### [CREATOR-E2E-VALIDATION-2026-08-22] Torrent files proven valid + cross-client compatible + live-transferable (2026-08-22)
+- Trigger: Human report — torrent created in-app "did not download" on the
+  recipient's machine; question raised whether Creator output is usable at all.
+- Method: full E2E on a deterministic mixed corpus (4 files, nested dir,
+  2 760 447 bytes) through the REAL production path
+  (`CreatorPlanStore.inspectCreateSource` → `commitCreateVerified`, hybrid
+  format, ADR-021 tracker trio), artifact `/tmp/torrentino-e2e/E2E.torrent`,
+  v1 `a5157fc5ee4a961317794d6025e8cc7f20e2eba3`,
+  v2 `3001f5f6b1e43bbc09124a7b9fb4094689cf9bd436624e0cce2bc0c9484c4ce1`.
+- Four independent proofs, all PASS:
+  1. Pure-python bencode decoder + hashlib: 171/171 v1 piece SHA-1 digests
+     match source bytes (padding files substituted as BEP-47 zeros); both
+     info-hashes recomputed from raw info-dict spans and MATCH producer.
+  2. Pinned libtorrent 2.1.1 (harness `verify-torrent`): file parses; v2
+     merkle roots match (4/4); piece layers match; layer content matches.
+     `structure=MISMATCH` is a padding-layout difference vs libtorrent's
+     canonical `create_torrent` layout — BEP-47 padding is OPTIONAL and any
+     layout is spec-valid; libtorrent itself accepted ours end-to-end.
+  3. Live localhost swarm (two libtorrent 2.1.1 sessions, explicit peer):
+     fresh session downloaded the artifact's payload from a seeder session;
+     `total_done=2760447`; all 4 real files byte-identical. This also proves
+     v1 piece hashes are honored by libtorrent's own hash-check during
+     transfer (the leecher could not have finished otherwise).
+  4. Production commit path itself re-verifies via the pinned-libtorrent
+     `BridgeTransferEngine.verifyCreatorTorrent` before publishing.
+- Driver notes (experiment-only): standalone swiftc driver linked against
+  built Domain/IPC frameworks; commitCreateVerified requires `addTorrent`
+  callback when `seedWhileDownloading=true` (fail-closed seed admission —
+  correct production behavior, initial driver run without the callback
+  failed as designed).
+- Diagnosis of the Human's friend scenario: file validity is RULED OUT as
+  the cause. Most probable causes: (1) source app not running/seeding at
+  download time, (2) tracker/DHT reachability (NAT), (3) recipient client
+  lacking hybrid/v2 support (v1-only clients are fine with hybrid by
+  design). No product defect routed.
+- Repo hygiene: product tree untouched (HEAD 28d0fef); experiment artifacts
+  confined to /tmp; harness rebuild stayed inside .build/.
+### [HUMAN-REPORT-CREATOR-MISSING-2026-08-22] Triage: source intact, stale-bundle suspected, fresh window relaunched (2026-08-22)
+- Human report: Create-Torrent UI («бланк документа рядом с плюсиком»)
+  vanished from the interface.
+- Main verification: SOURCE INTACT — CreateTorrentSheet.swift present,
+  ContentView empty-state (:73-81) and TorrentListView toolbar (:46-52)
+  both carry the doc.badge.plus button, menu ⌘⌥N wired, en/ru strings
+  present; `git status` on TorrentinoApp clean; no commit ever touched the
+  feature negatively (history: 4b64fe9 expose, 5f75063 hang fix).
+- Runtime findings: no Torrentino process was running at check time;
+  dozens of build/*/Debug bundles coexist; LaunchServices carries stale
+  com.torrentino.app references incl. Library/WebKit (old Tauri prototype
+  data dirs); an Xcode-DerivedData Debug bundle was rebuilt TODAY 13:55 by
+  something outside this session and DOES contain creator localization.
+  Exact bundle the Human saw remains unconfirmed.
+- Action: fresh Debug app built from current HEAD into
+  `build/HumanRelaunchDerivedData/` (creator keys verified inside) and
+  LAUNCHED frontmost (PID 83995). Human asked to use THIS window; if the
+  button is still absent there → screenshot requested for a real UI-regression
+  lane. Housekeeping candidate: prune stale DerivedData bundles + reset
+  LaunchServices registration to a single canonical path.
 ### [WP14-LOGISOLATION-FIX-001-REVIEW-001-DONE] approved — five gates pass (2026-08-22)
 - Fresh `WP14LogIsoReviewer001` (5m52s): RESOLUTION SEMANTICS (mkdtemp
   fail-closed, never user default; no handle thrash), ORDER-PROOF (late

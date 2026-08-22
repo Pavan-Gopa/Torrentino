@@ -5,24 +5,17 @@ onboarding:
   model_pairs_confirmed: true
   completed_at: 2026-08-10T13:13:32Z
 
-current_step: WP-14
+current_step: WP-19
 current_work_item_id: null
 step_description: >-
-  WP-14 performance qualification: in-reach campaign complete and defects
-  closed. Headless baselines on libtorrent 2.1.1/2.0.14 captured; in-process
-  SLO proxies green (restore/snapshot, footprint, recheck, creator,
-  projection, mutation/health under load, FD/threads flat, RSS budget);
-  HIGH overflow-marker defect fixed (sticky resync signal, three
-  regressions) and MEDIUM-HIGH log-isolation order fragility fixed
-  (fail-closed mkdtemp, late-setenv order-proof), both review-approved.
-  Remaining §11.3/live gaps (launch/XPC p95, Instruments, watchdog, energy,
-  long soak) require sterile-identity live runs or Human-side Instruments —
-  consolidated for the Human decision: authorize live campaign vs fold into
-  WP-15 signed-build environment.
+  WP-18 Finder Services CLOSED (approved, tests 50/50). Next lane WP-19
+  in-app updates per Human decisions 2026-08-22: hosting GitHub Releases,
+  mechanism Sparkle 2 (pinned via versions.lock discipline), UX manual
+  "Check for Updates" only (no background polling).
 target_files:
-- Native/TorrentinoEngineBridge/harness/src/
-- Native/TorrentinoEngineBridge/scripts/build_harness.sh
-- Measurements/
+- Native/TorrentinoApp/
+- Native/ThirdParty/versions.lock
+- AI_Workflow_Kit/docs/AI/COVERAGE.md
 completed_steps:
 - WP-00
 - WP-01
@@ -38,6 +31,7 @@ completed_steps:
 - WP-11
 - WP-12
 - WP-13
+- WP-18
 implementation:
   status: done
   attempts: 0
@@ -95,7 +89,7 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: d308f90
+  last_commit: a0106bc
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md

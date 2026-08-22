@@ -11,7 +11,7 @@
 |-------|--------|
 | Step | WP-14 `[WP14-PERF-CAMPAIGN-001]` |
 | Date | 2026-08-22 |
-| bugs_open | 0 |
+| bugs_open | 1 (WP22-CREATOR-EPERM-001, LOW-MEDIUM UX) |
 
 ## Bugs
 
@@ -55,3 +55,23 @@
   RESOLVED: fail-closed mkdtemp isolation + live getenv re-resolution approved
   by WP14LogIsoReviewer001; two consecutive full-suite greens including
   sentinel; user log dir contains zero post-fix sentinels.
+
+### WP22-CREATOR-EPERM-001 (LOW-MEDIUM, UX defect — diagnosis complete, fix pending routing)
+
+- Surface: Creator commit failure reporting
+  (`CreatorPlanStore` storageFailure mapping → CreateTorrentSheet error text).
+- Symptom: creating a .torrent to `/Volumes/Extreme SSD/` (exFAT external)
+  fails at the write stage (UI stuck at 92 % "Writing Torrent") with generic
+  «The torrent could not be saved or verified». Source untouched (correct).
+- Root cause (verified 2026-08-22): macOS TCC denies file access to the
+  freshly relaunched ad-hoc Debug build on removable volumes. Evidence:
+  tccd log AUTHREQ at 19:06:19 with responsible_path=build/HumanRelaunchDerivedData
+  app; `ls`/`touch`/`mkdir` on the volume return EPERM from shell; agent log
+  `creator commit failed code=storeError storage_failure`; production-path
+  driver reproduces against the volume and PASSES on APFS (/tmp).
+- Assessment: fail-closed creation behavior is CORRECT; defect is the error
+  mapping — EPERM/EACCES/EROFS on the destination must surface an actionable
+  message («macOS запретил доступ к тому — выдать доступ в System Settings →
+  Privacy & Security»), not a generic save-failure line.
+- Fix lane proposal: narrow error-mapping kick in Domain fault construction
+  + Localizable keys; no behavior change to durability barriers.
