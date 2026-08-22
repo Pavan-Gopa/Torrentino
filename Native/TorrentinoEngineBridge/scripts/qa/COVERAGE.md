@@ -542,3 +542,48 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | I9 live bootstrap first-boot marker | P2 | Requires agent executable process (pbxproj frozen under ADR-020) |
 | Multi-hour soak | N/A | Wall-clock WP-14/15; smoke only here |
 | WP-02 live suite on this host | ENV | Re-run when Human agent stopped or on disposable machine |
+
+---
+
+## WP-14 Performance Qualification — 2026-08-22
+
+**Lane:** `[WP14-PERF-CAMPAIGN-001]`  
+**Mode:** Release, isolated TestProfile/mktemp, no live app/LaunchAgent  
+**Verdict:** **FINDINGS OPEN / PARTIAL**
+
+### New measurement coverage
+
+| Area | New evidence | Status |
+| --- | --- | --- |
+| Headless primary/fallback hybrid + v2 | ★ `test_wp14_01_headless_baselines.sh`; 28 measured rows | PASS |
+| 100-record restore/snapshot | ★ `WP14PerformanceMeasurements.testWP14InProcessPerformanceCampaign` | PASS |
+| 100 idle / 10 active footprint | same XCTest; `TASK_VM_INFO.phys_footprint` | PASS (in-process synthetic) |
+| Large creator | 2 GiB sparse `SourceScanner` + real `CPUHasher` cancellation | PASS for scan/cancel; full completion GAP |
+| Recheck | 50 in-process dispatch acknowledgements | PASS for dispatch; real large completion/cancel GAP |
+| 500-row table/row projection | ★ `WP14ProjectionMeasurements.testFiveHundredRowProjectionP50P95` | PASS |
+| FD/thread/quiescent footprint | baseline/during/after `proc_pidinfo` + `TASK_VM_INFO` | PASS (campaign window) |
+| Idle CPU | 30 × 100 ms process CPU samples | PASS (in-process surrogate) |
+| 100k mixed-event overload | bounded queue + slow consumer + mutation/health lanes | **FAIL — WP14-PERF-001** |
+| Disconnect/resync seam | sink unregister + unknown-revision authoritative snapshot | PASS (in-process seam) |
+
+### New files
+
+| File | Role |
+| --- | --- |
+| ★ `scripts/qa/test_wp14_01_headless_baselines.sh` | deterministic 2.1.1/2.0.14 headless baseline driver |
+| ★ `scripts/qa/test_wp14_02_inprocess_metrics.sh` | Release XCTest measurement driver |
+| ★ `Tests/TorrentinoAppTests/WP14ProjectionMeasurements.swift` | 500-row p50/p95 projection measurement |
+| ★ `Tests/TorrentinoEngineAgentTests/WP14PerformanceMeasurements.swift` | records/active/creator/recheck/overload/resource campaign |
+| `Measurements/wp14/report.md` | per-SLO report, finding, and honest gap ledger |
+
+### Open gaps
+
+| Gap | Severity | Notes |
+| --- | --- | --- |
+| WP14-PERF-001 overflow recovery marker replacement | P1 | bounded queue can replace `.snapshotRequired(.droppedDelta)` before slow consumer observes it |
+| Live launch/XPC/UI+engine metrics | Human gate | sterile app/LaunchAgent identity required |
+| Time Profiler/Allocations/Energy/main-thread signposts | Human gate | Instruments GUI required |
+| Real large creator/recheck completion | P2 | current in-process lane caps creator and stubs recheck engine |
+| Tracker/peer alert drain + stalled disk I/O | P2 | real libtorrent alert/disk lane not reached |
+| 2h slope / 12h soak comparison / WP-15 168h | wall clock | not claimed by this campaign |
+| Watchdog slow-I/O + relaunch/reconnect SLO | Human gate | live Human LaunchAgent explicitly forbidden |

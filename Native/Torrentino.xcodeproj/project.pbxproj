@@ -62,6 +62,7 @@
 		4A0000000000000000000564 /* TorrentinoDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000152 /* TorrentinoDomainTests.swift */; };
 		4A0000000000000000000565 /* TorrentinoIPCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000153 /* TorrentinoIPCTests.swift */; };
 		4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000154 /* TorrentinoAppTests.swift */; };
+		4A00000000000000000014A1 /* WP14ProjectionMeasurements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */; };
 		4A000000000000000000055B /* PeerValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010D /* PeerValidation.swift */; };
 		4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000162 /* EngineBridgeAdapter.mm */; };
 		4A0000000000000000000582 /* EngineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000163 /* EngineCoordinator.swift */; };
@@ -135,6 +136,7 @@
 		4A000000000000000000082B /* SystemConditionMonitor.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000815 /* SystemConditionMonitor.swift */; };
 		4A000000000000000000082C /* WP13DiagnosticsSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001C3 /* WP13DiagnosticsSecurityTests.swift */; };
 		4A000000000000000000082D /* WP13StabilizationCampaign002Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001C4 /* WP13StabilizationCampaign002Tests.swift */; };
+		4A00000000000000000014A2 /* WP14PerformanceMeasurements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014B2 /* WP14PerformanceMeasurements.swift */; };
 		4A000000000000000000082E /* AgentService.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010A /* AgentService.swift */; };
 		4A000000000000000000082F /* AgentRuntimeTestShim.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000001C6 /* AgentRuntimeTestShim.swift */; };
 		4A0000000000000000000830 /* CounterStore.swift in Tests */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010B /* CounterStore.swift */; };
@@ -322,6 +324,7 @@
 		4A0000000000000000000152 /* TorrentinoDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoDomainTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000153 /* TorrentinoIPCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoIPCTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000154 /* TorrentinoAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoAppTests.swift; sourceTree = "<group>"; };
+		4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP14ProjectionMeasurements.swift; sourceTree = "<group>"; };
 		4A0000000000000000000201 /* Torrentino.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Torrentino.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A0000000000000000000202 /* TorrentinoEngineAgent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.tool"; includeInIndex = 0; path = TorrentinoEngineAgent; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A0000000000000000000210 /* TorrentinoDomain.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TorrentinoDomain.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -355,6 +358,7 @@
 		4A00000000000000000001C2 /* WPSafeFileOperationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WPSafeFileOperationsTests.swift; sourceTree = "<group>"; };
 		4A00000000000000000001C3 /* WP13DiagnosticsSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP13DiagnosticsSecurityTests.swift; sourceTree = "<group>"; };
 		4A00000000000000000001C4 /* WP13StabilizationCampaign002Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP13StabilizationCampaign002Tests.swift; sourceTree = "<group>"; };
+		4A00000000000000000014B2 /* WP14PerformanceMeasurements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP14PerformanceMeasurements.swift; sourceTree = "<group>"; };
 		4A00000000000000000001C5 /* EngineAlertDTOLogMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineAlertDTOLogMapping.swift; sourceTree = "<group>"; };
 		4A00000000000000000001C6 /* AgentRuntimeTestShim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuntimeTestShim.swift; sourceTree = "<group>"; };
 		4A00000000000000000001B1 /* BencodeParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BencodeParser.swift; sourceTree = "<group>"; };
@@ -772,6 +776,7 @@
 			isa = PBXGroup;
 			children = (
 				4A0000000000000000000154 /* TorrentinoAppTests.swift */,
+				4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */,
 			);
 			path = TorrentinoAppTests;
 			sourceTree = "<group>";
@@ -785,6 +790,7 @@
 				4A00000000000000000001C2 /* WPSafeFileOperationsTests.swift */,
 				4A00000000000000000001C3 /* WP13DiagnosticsSecurityTests.swift */,
 				4A00000000000000000001C4 /* WP13StabilizationCampaign002Tests.swift */,
+				4A00000000000000000014B2 /* WP14PerformanceMeasurements.swift */,
 				4A0000000000000000000922 /* TorrentCreatorAgentTests.swift */,
 			);
 			path = TorrentinoEngineAgentTests;
@@ -1168,6 +1174,7 @@
 			files = (
 				4A0000000000000000000563 /* TestProfile.swift in Sources */,
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
+				4A00000000000000000014A1 /* WP14ProjectionMeasurements.swift in Sources */,
 				4A0000000000000000000933 /* CreatorTrackerSharingPolicy.swift in Sources */,
 				4A0000000000000000000804 /* KeychainStore.swift in Sources */,
 				4A0000000000000000000939 /* SettingsApplyFlow.swift in Sources */,
@@ -1214,6 +1221,7 @@
 				4A00000000000000000005F5 /* WPSafeFileOperationsTests.swift in Tests */,
 				4A000000000000000000082C /* WP13DiagnosticsSecurityTests.swift in Sources */,
 				4A000000000000000000082D /* WP13StabilizationCampaign002Tests.swift in Sources */,
+				4A00000000000000000014A2 /* WP14PerformanceMeasurements.swift in Sources */,
 				4A00000000000000000005F6 /* RemovalManifest.swift in Sources */,
 				4A00000000000000000005F7 /* TrashService.swift in Sources */,
 				4A00000000000000000005F8 /* MoveStorageRecovery.swift in Sources */,
