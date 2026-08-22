@@ -12,7 +12,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var viewModel: EngineViewModel
     @StateObject private var transfers: TorrentListViewModel
-
+    @State private var createSheetPresetSourcePath: String?
     init() {
         _transfers = StateObject(wrappedValue: AppContext.transfers)
     }
@@ -40,8 +40,28 @@ struct ContentView: View {
             AddTorrentSheet(viewModel: transfers)
         }
         .sheet(isPresented: $transfers.showCreateSheet) {
-            CreateTorrentSheet(viewModel: transfers)
+            CreateTorrentSheet(
+                viewModel: transfers,
+                presetSourcePath: createSheetPresetSourcePath
+            )
         }
+        .onAppear {
+            presentPendingCreateSheet()
+        }
+        .onChange(of: transfers.pendingCreateSourcePath) { _ in
+            presentPendingCreateSheet()
+        }
+        .onChange(of: transfers.showCreateSheet) { isPresented in
+            if !isPresented {
+                createSheetPresetSourcePath = nil
+            }
+        }
+    }
+
+    private func presentPendingCreateSheet() {
+        guard let sourcePath = transfers.consumePendingCreateSourcePath() else { return }
+        createSheetPresetSourcePath = sourcePath
+        transfers.showCreateSheet = true
     }
 
     private var emptyState: some View {

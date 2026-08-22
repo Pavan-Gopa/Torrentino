@@ -13,8 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hard cap for the agent shutdown ack (plan §8.4: <= 5s).
     static let terminationAckTimeout: TimeInterval = 5.0
     private var statusItem: NSStatusItem?
+    private let creatorServiceRouter = CreatorServiceRouter()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = creatorServiceRouter
         setupStatusItem()
         attachWindowDelegate()
         // Keep registration and the first XPC session in one ordered,
@@ -70,15 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            NSApp.unhide(nil)
-            if let window = NSApp.windows.first {
-                window.makeKeyAndOrderFront(nil)
-            }
-        }
+        CreatorServiceRouter.bringMainWindowForward()
     }
 
     @objc func quitAppFromTray() {
@@ -157,6 +151,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+}
+
+/// Routes Finder's "Create with Torrentino" service request into the existing
+/// create sheet flow. The pending path is retained by the view model until
+/// ContentView has appeared, which also covers a cold launch from Finder.
+@MainActor
+final class CreatorServiceRouter: NSObject {
+    @objc(createTorrent:userData:error:)
+    func createTorrent(
+        _ pasteboard: NSPasteboard,
+        userData: String?,
+        error: UnsafeMutablePointer<NSString?>
+    ) {
+        guard
+            let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [NSURL],
+            let sourceURL = urls.first(where: { $0.isFileURL }),
+            let sourcePath = sourceURL.path,
+            !sourcePath.isEmpty
+        else {
+            error.pointee = "Finder did not provide a file URL." as NSString
+            return
+        }
+
+        AppContext.transfers.pendingCreateSourcePath = sourcePath
+        Self.bringMainWindowForward()
+    }
+
+    static func bringMainWindowForward() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            NSApp.unhide(nil)
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
     }
 }
 extension AppDelegate: NSWindowDelegate {

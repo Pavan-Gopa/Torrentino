@@ -35,6 +35,7 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var connectionGeneration: UInt64 = 0
     @Published var showAddSheet = false
     @Published var showCreateSheet = false
+    @Published var pendingCreateSourcePath: String?
     @Published private(set) var creatorProgressFraction: Double = 0.0
     @Published private(set) var creatorProgressStage: String = ""
     @Published private(set) var creatorProgressBackend: String = ""
@@ -76,6 +77,14 @@ final class TorrentListViewModel: ObservableObject {
         guard acceptIncomingTorrentURL(url) else { return }
         pendingAddFileURL = url
         showAddSheet = true
+    }
+
+    /// Atomically takes the first Finder service request once ContentView is
+    /// ready to present the create sheet.
+    func consumePendingCreateSourcePath() -> String? {
+        let sourcePath = pendingCreateSourcePath
+        pendingCreateSourcePath = nil
+        return sourcePath
     }
 
     private var recentImportURLs: [URL: Date] = [:]

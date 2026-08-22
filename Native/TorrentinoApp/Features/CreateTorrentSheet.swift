@@ -42,13 +42,16 @@ struct CreateTorrentSheet: View {
     @State private var manifestEntries: [CreatorManifestEntry] = []
     @State private var loadingManifest: Bool = false
 
+    private let hasPresetSource: Bool
     private let pieceSizesKiB: [Int64?] = [
         nil, 16, 32, 64, 128, 256, 512,
         1024, 2048, 4096, 8192, 16384
     ]
 
-    init(viewModel: TorrentListViewModel) {
+    init(viewModel: TorrentListViewModel, presetSourcePath: String? = nil) {
         self.viewModel = viewModel
+        hasPresetSource = !(presetSourcePath?.isEmpty ?? true)
+        _sourcePath = State(initialValue: presetSourcePath ?? "")
     }
 
     var body: some View {
@@ -435,6 +438,11 @@ struct CreateTorrentSheet: View {
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
+        }
+        .onAppear {
+            if hasPresetSource && inspection == nil && !inspecting {
+                triggerInspection()
+            }
         }
         .frame(width: 540, height: 640)
         .sheet(isPresented: $showExclusionsSheet) {
