@@ -1,3 +1,4 @@
+schema_version: 2
 project_prefix: torrentino
 onboarding:
   status: complete
@@ -5,18 +6,19 @@ onboarding:
   completed_at: 2026-08-10T13:13:32Z
 
 current_step: WP-13
+current_work_item_id: WP13-SECURITY-AUDIT-001
 step_description: >-
-  WP-13 release work remains open. Current bounded lane
-  [TRACKER-SHARING-IMPL-001] implements ADR-021 as a narrow ADR-020 exception
-  on the existing Creator surface; WP-13 diagnostics/security scope is unchanged.
+  Active lane [WP13-SECURITY-AUDIT-001]: Human authorized the deferred
+  Security Engineer engagement («Зови секьюрити») with standing instruction
+  to continue remaining steps if it returns clean. Scope per plan §WP-13:
+  SBOM/licenses/CVE verdict on pinned dependencies, re-audit of XPC peer
+  verification, input-limit/parser/path handling, Keychain/redaction
+  (including the freshly landed diagnostics export), prior-finding sweep
+  (none exist — first engagement). Read-only role; deliverable is a dated
+  SECURITY_FINDINGS.md section plus optional test_*_sec_*.sh.
 target_files:
-- Native/TorrentinoApp/Features/CreateTorrentSheet.swift
-- Native/TorrentinoApp/Features/CreatorTrackerSharingPolicy.swift
-- Native/TorrentinoApp/Resources/Localizable.xcstrings
-- Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift
-- Native/Tests/TorrentinoEngineAgentTests/TorrentCreatorAgentTests.swift
-- Native/Torrentino.xcodeproj/project.pbxproj
-- Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift
+- Native/TorrentinoEngineBridge/scripts/qa/SECURITY_FINDINGS.md
+- Native/TorrentinoEngineBridge/scripts/qa/test_security_*.sh (optional)
 completed_steps:
 - WP-00
 - WP-01
@@ -36,40 +38,47 @@ implementation:
   status: done
   attempts: 3
   note: >-
-    [TRACKER-SHARING-IMPL-001] is verified complete: Reviewer approved,
-    focused QA green, final full XCTest 332/332 and fresh-app UI checked.
+    [WP13-DIAGNOSTIC-EXPORT-FIX-001] verified complete end-to-end (Coder003
+    micro-fix closing the sole REVIEW-002 finding). Prior lanes
+    TRACKER-SHARING-IMPL-001 and WP13-RELEASE-INTEGRITY-QA-001 remain
+    verified records.
 retry_guard:
   max_attempts_without_progress: 3
   repeated_failure_count: 0
   last_failure_signature: null
-  blocker: null
 omp:
-  active_agent: null
-  active_role: null
-  last_result_artifact: agent://TrackerSharingTester002
-  dispatched_at: 2026-08-11T12:04:12Z
-  completed_at: 2026-08-11T12:07:34Z
+  active_agent: WP13SecurityAuditor001
+  active_role: security
+  last_result_artifact: agent://WP13DiagExportFinalTester001
+  dispatched_at: 2026-08-22T03:23:50Z
+  completed_at: null
 review:
   status: approved
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
   verdict: approved
   note: >-
-    TrackerSharingReviewer001 approved all six ADR-021 Judgment Gates with no
-    findings after direct source/diff inspection.
+    Two judgment rounds: REVIEW-002 passed six of seven gates; the sole
+    minor (mirror plain-text rule) was fixed via the reviewer's verbatim
+    suggested_fix and objectively verified by Main with a byte-parity
+    regression. Historical: TrackerSharingReviewer001 ADR-021 approval.
   enabled: true
 qa:
   status: green
-  last_report: build/TrackerSharingFinal2.xcresult
-  suite: TRACKER-SHARING-IMPL-001
+  last_report: artifacts/tests/WP13FinalRegression.xcresult
+  suite: WP13-DIAGNOSTIC-EXPORT-FIX-001
   bugs_open: 0
   note: >-
-    Focused tracker QA 12/12 and Creator scripts 3/3 passed; pump wait fix
-    targeted 1/1; Main final regression 332/332 passed.
-  enabled: true
+    Final independent Tester regression 364/364/0 on fresh derived data;
+    focused WP13 suite 18/18 including lockstep parity and sink-isolation
+    sentinel; QA guard zero-collect exit 1 / real run exit 0; scope recheck
+    clean. B-1/B-2 resolved; BUG_REPORT.md cleared.
 security:
-  next_run: none
-  note: Human deferred audit until friend validation succeeds.
-next_actor: human
+  next_run: WP13-SECURITY-AUDIT-001
+  note: >-
+    Human authorization 2026-08-22: «Зови секьюрити.» Standing instruction:
+    «После проверки безопасности, если всё пройдёт гладко, продолжай
+    выполнять оставшиеся шаги.»
+next_actor: main
 
 track: RELEASE
 prior_track: RESEARCH
@@ -89,10 +98,15 @@ plan_files:
 - AI_Workflow_Kit/docs/DECISIONS.md
 - AI_Workflow_Kit/docs/PROJECT_CONTEXT.md
 reviewer_brief: |
-  Review ADR-021 Creator-only diff after the mandatory fresh-build Human gate.
+  Review [WP13-DIAGNOSTIC-EXPORT-FIX-001]: exportDiagnostics wire-up + orphaned
+  WP13 suite registration; verify scope, redaction correctness, concurrency,
+  and that new tests execute real behavior.
 coder_brief: |
-  Fix ATTEMPT-02 stale test cardinality only; derive expected origins from data.
+  Implement B-1 exportDiagnostics end-to-end per existing IPC contract and
+  B-2 pbxproj membership + fail-on-zero QA guard; full clean XCTest green
+  including both registered suites.
 tester_brief: |
-  After approval, run focused policy/artifact checks, full XCTest and relevant Creator QA.
+  After approval: prove script guard both directions, run focused new suites,
+  full XCTest regression, and inspect a real export bundle for privacy.
 architect_brief: |
-  [TRACKER-SHARING-ARCH-001] complete; idle unless new material evidence reopens it.
+  Idle; the active narrow fix lane carries no material design uncertainty.

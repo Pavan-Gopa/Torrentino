@@ -1,3 +1,304 @@
+### [WP13-SECURITY-AUDIT-001-DONE] findings_open (0 Critical/High) — CVE gate CLOSED (2026-08-22)
+- Fresh `WP13SecurityAuditor001` (24m5s), 13 surfaces audited, Graphify
+  staleness reported. Report: SECURITY_FINDINGS.md dated section +
+  `test_security_redactor_negative.sh`.
+- **CVE/SBOM/licenses verdict: `no_critical_high_relevant`** — libtorrent
+  rasterbar has no published advisories; OpenSSL 3.5.7 covers all High
+  (only Low CVE-2026-14456 QUIC-server above pin, QUIC unused); Boost clean;
+  licenses permissive. WP-13 CVE gate CLOSED.
+- Findings (Main re-verified SEC-1/SEC-5 in source; negative script rerun
+  reproduces SEC-3/SEC-4 verbatim):
+  - **SEC-1 MEDIUM**: proxy password persisted verbatim into session_state
+    `engine_settings` (+WAL sidecars) contradicting Keychain-first posture
+    (`persistSettings` :960-966). Fix direction: strip secret before persist,
+    Keychain re-supply at boot.
+  - **SEC-2 MEDIUM**: upstream libtorrent 2.0.14/2.1.1 (2026-08-10) fix
+    multiple memory-safety bugs in compiled-in paths (dht/encryption/UPnP/web
+    seeds ON) — controlled pin bump before GA soak.
+  - **SEC-3 LOW**: redactor misses private-tracker credential styles
+    (`key=`, `uid=`, path-embedded, yaml-colon) — GAP vectors proven.
+  - **SEC-4 LOW**: unterminated-quote JSON secret survives redaction,
+    falsifying the fail-safe comment (CLAIM-MISMATCH proven).
+  - **SEC-5 LOW**: XPC decode runs before payload-limit validation
+    (:580-587) — ordering hygiene.
+- Routing decision: WP-13 gates all met → step closes (commit + tag
+  `torrentino/WP-13-done`). All five findings route into
+  `[WP13-SEC-HARDEN-001]` (fresh Coder) BEFORE WP-14 perf baselines — SEC-2
+  changes the engine pin, so hardening must land first. Network fetch of
+  pinned upstream archives explicitly authorized for this lane with SHA-256
+  pin verification. Then Reviewer → Tester → WP-14.
+### [WP13-SECURITY-AUDIT-001-OPEN] Human authorized Security Engineer (2026-08-22)
+- Exact Human instructions: **«Зови секьюрити.»** and standing **«После
+  проверки безопасности, если всё пройдёт гладко, продолжай выполнять
+  оставшиеся шаги.»**
+- Lane `[WP13-SECURITY-AUDIT-001]` closes the last open WP-13 gate
+  (Critical/High CVE verdict) plus plan §WP-13 re-audits: SBOM/licenses/CVE
+  on pinned deps (libtorrent 2.0.13 / 2.1.0, boost 1.91.0, openssl 3.5.7 —
+  pins Main-reverified 4/4 this session), XPC peer verification,
+  input-limit/parser/path audit, Keychain/redaction audit including the new
+  diagnostics export surface. Prior findings: none (first engagement).
+- Role boundaries (ADR-015, KICK_SECURITY): read-only; writes only
+  SECURITY_FINDINGS.md dated section + optional `test_*_sec_*.sh`; local
+  fixtures only; no external attacks; Legacy hard ban; no commits; Graphify
+  first for trust boundaries.
+- On clean verdict: Main closes WP-13 (checkpoint) and continues to WP-14
+  per standing instruction. High/Critical findings route to Coder kicks
+  before WP-13 closure.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-DONE] qa_green — lane closed (2026-08-22)
+- Final independent `WP13DiagExportFinalTester001` (2m46s): **qa_green**.
+  Official `artifacts/tests/WP13FinalRegression.xcresult` = **364 passed /
+  0 failed / 0 skipped** on fresh `build/WP13FinalRegressionDerivedData`;
+  focused WP13DiagnosticsSecurityTests **18/18** with lockstep-parity and
+  sink-isolation sentinel confirmed executed by test list; stabilization
+  classes I3/I7/I8/I9 green; QA guard zero-collect exit 1 / real run exit 0
+  (executed=18 failed=0); scope recheck clean (11 M + 2 untracked, unchanged);
+  zero findings.
+- Main verified the official bundle summary and the appended REPORT.md
+  section before closing.
+- Lane outcome: B-1/B-2 resolved, BUG_REPORT.md cleared, WP-13 gates now
+  closed except the Critical/High CVE verdict — deferred with the Human-gated
+  security audit (`security.next_run: none`). next_actor: human.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-ATTEMPT-03-DONE] Micro-fix verified objectively (2026-08-22)
+- Fresh `WP13DiagExportCoder003` (15m11s) restored the compiled plain-text
+  rule into the Agent mirror byte-matching `PersistenceStore.swift:78`
+  (mirror :74, original ruleset position) and added
+  `testMirrorRedactorStaysInLockstepWithCompiledRedactor` — behavioral parity
+  over a hostile corpus (plain password=/token=, escaped-quote JSON, /Users
+  path, Bearer, order-sensitive combinations) with anti-vacuous layers
+  (exact 4-rule count catches the lost-rule mode; leak assertions on
+  compiled outputs).
+- Grounding discovery recorded: the Agent mirror has zero pbxproj references
+  across history — it is a source-of-truth spec replayed by the parity test
+  (#filePath rule extraction), not a compiled unit; the compiled
+  implementation remains `PersistenceStore.swift`.
+- Main objective verification (per REVIEW-002 ruling, no third judgment
+  round): rule present in both files; parity test at
+  WP13DiagnosticsSecurityTests.swift:332; official
+  `artifacts/tests/WP13DiagExportFix4Full.xcresult` = **364 passed / 0
+  failed** (fresh `build/WP13DiagExportFix4DerivedData`); QA guard both
+  directions green; git status Native unchanged (11 M + 2 untracked);
+  changed files limited to the two authorized paths.
+- Routing: final independent Tester full-regression run, then lane close.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-REVIEW-002] changes_requested narrowed to one minor (2026-08-22)
+- Fresh `WP13DiagExportReviewer002` (15m26s) adversarially re-checked the
+  delta: hostile escaped-secret pair 2/2 through BOTH redaction paths;
+  pre-existing/mid-write/degraded tests 3/3; sink sentinel + mapping 1/1;
+  symlink/tilde non-empty destination probes rejected correctly; failpoint
+  fires inside the entries loop (:845-852); IPC/Legacy untouched; scope exact
+  (12 paths); D1 canonical once; official Fix3 363/0/0 re-confirmed.
+- Gates: EXPORT HANDLER CORRECTNESS / CONTRACT CONFORMANCE / D1 FIX /
+  TEST HONESTY / SCOPE LEGITIMACY / MATERIAL COMPLEXITY **pass**;
+  FAILURE BEHAVIOR & SECURITY **fail** on exactly one item.
+- Sole finding (minor): Agent/RedactedLogFileManager.swift mirror lost the
+  compiled plain-text rule
+  `(proxyPassword|password|secret|passkey|token)=[^&\s"']+` during the
+  rework — lockstep claim false; `redact("password=…")` via the mirror would
+  leak. Suggested fix verbatim: restore the exact compiled rule/replacement,
+  optionally add a parity assertion.
+- Ruling: mechanical restoration of the reviewer-specified rule + a
+  behavioral parity regression (same hostile corpus through both redactors
+  must produce byte-identical output) routed to fresh `WP13DiagExportCoder003`.
+  Given the fix is the reviewer's own verbatim suggested_fix within an
+  already-reviewed boundary, Main will apply objective verification instead of
+  a third judgment round (precedent: TRACKER-SHARING QA-002 narrow diff);
+  Tester full regression follows.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-ATTEMPT-02-DONE] Rework waiting_review — Main verified (2026-08-22)
+- Fresh `WP13DiagExportCoder002` (37m57s) closed all six REVIEW-001 findings;
+  zero blockers. Official `xcresulttool` summary of
+  `artifacts/tests/WP13DiagnosticExportFix3.xcresult`
+  (`build/WP13DiagnosticExportFixDerivedData3`): **363 passed / 0 failed**
+  (358 + 5 new tests); QA guard green both directions; `git diff --check`
+  clean on lane paths; no commits.
+- Main spot-verified in source: hardened JSON value class identical in
+  compiled redactor (`PersistenceStore.swift`) and lockstep copy
+  (`RedactedLogFileManager.swift`), with fail-safe-direction comment;
+  structured `settingsExportText`/`proxyExportObject` projection;
+  degraded allowlist includes `.exportDiagnostics` (:631);
+  `FailpointID.diagnosticsExportMidWrite` (:41, production-noop);
+  BridgeTransferEngine retains only the mapping call site (canonical file in
+  product Sources phase).
+- Scope: attempt-01 set + exactly the two recorded addenda. Attempt counter
+  stays at 1 pending review outcome.
+- Routing: fresh `WP13DiagExportReviewer002` dispatched for delta re-review
+  (adversarial probes on escaped-secret + destination bypass; new-test honesty;
+  regression sweep). Tester follows approval.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-REVIEW-001] changes_requested — Main verified (2026-08-22)
+- Fresh `WP13DiagExportReviewer001` (24m36s) returned `changes_requested`
+  with repro evidence (swift probes for escaped-secret regex and atomic
+  overwrite rollback; xcresult DB query confirming 358 executed passes).
+- Gates: CONTRACT CONFORMANCE / D1 FIX / SCOPE LEGITIMACY **pass**;
+  EXPORT HANDLER CORRECTNESS / TEST HONESTY / FAILURE BEHAVIOR & SECURITY /
+  MATERIAL COMPLEXITY **fail**.
+- Findings routed verbatim into the fresh-Coder kick:
+  1. **J1 blocker** escaped-secret leak: compiled redactor
+     (`PersistenceStore.swift:68-75`) stops at escaped quote; require BOTH a
+     structured password-free export projection of engine_settings.json AND
+     hardened compiled pattern (`(?:[^"\\]|\\.)*` class) with quote/backslash/
+     newline regressions; Agent/RedactedLogFileManager copy kept in lockstep.
+  2. **J1 major** rollback overwrite data loss: enforce nonexistent-or-empty
+     destination (typed rejection), track cleanup failures, deterministic
+     mid-write rollback test via new `FailpointInjector.diagnosticsExportMidWrite`
+     (production-noop pattern); preserve-old-file assertion included.
+  3. **J1 major** degraded gate blocks exportDiagnostics contrary to plan
+     §9.7 (:1173-1174): allowlist `.exportDiagnostics`, keep mutations blocked,
+     envelope-level regression asserting redacted five-entry success while
+     degraded.
+  4. **J4 major** assertion weakening: restore deleted
+     `type=tracker_announce`/`type=storage`; assert applySettings AND fetchFiles
+     results instead of ignoring them.
+  5. **J4 minor** global log contamination: disposable TORRENTINO_LOG_DIRECTORY
+     established before first shared access with self-verifying isolation.
+  6. **J7 minor** mirror drift: make `Agent/EngineAlertDTOLogMapping.swift`
+     canonical by adding it to the agent product Sources build phase and
+     removing the duplicate extension from BridgeTransferEngine.swift
+     (StatusCache.swift precedent); AgentRuntimeTestShim stays.
+- Scope addenda authorized with this kick (recorded): PersistenceStore.swift
+  (redactor pattern only), FailpointInjector.swift (new production-noop case),
+  EngineBridgeDTOs.swift NOT needed under chosen canonical-file variant.
+- STATE: implementation.attempts 0→1. Next: fresh Coder
+  `WP13DiagExportCoder002`, then re-review of the delta, then Tester.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-ATTEMPT-01-DONE] Coder waiting_review — Main verified (2026-08-22)
+- Continuation applied D1-D3 exactly as ruled. Fresh-session evidence:
+  **358 passed / 0 failed / 0 skipped** — official `xcresulttool` summary of
+  `artifacts/tests/WP13DiagnosticExportFix2.xcresult`
+  (`build/WP13DiagnosticExportFixDerivedData2`). Baseline 332 + 26 newly
+  registered; both orphaned suites execute
+  (WP13DiagnosticsSecurityTests 12/12, WP13I3/I7/I8/I9 green).
+- Main re-verified: scope = exactly the authorized set + two recorded addenda;
+  D1 empty-safe fallback identical in production and mirror;
+  spec marker list now `transfer transition`, no in-process `checkpoint`;
+  live script aligned, `checkpoint` kept for genuine shutdown line;
+  `pumpOnce()` addition exercises the real shipped emitter without weakening
+  assertions; pbxproj membership 4/4 per suite.
+- QA guard: zero-collect exits 1; real run `[ok] … GREEN (executed=12,
+  failed=0)` exit 0. `git diff --check` clean. No commits.
+- Routing: fresh `workflow-reviewer` dispatched
+  (`WP13DiagExportReviewer001`) for Judgment Gates incl. ponytail check on
+  the mirror/shim pattern. Tester re-run follows approval.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-DECISIONS-01] Main rulings on three Coder blockers (2026-08-22)
+- Coder `WP13DiagExportCoder001` returned `blocked` after 50m28s: B-1/B-2
+  implemented; full clean suite **357 passed / 1 failed / 358 total**
+  (baseline 332 + 26 newly registered; export tests PASS; guard proven both
+  directions). Scope verified by Main: `git status -- Native` matches exactly
+  the 8 reported paths.
+- Main re-verified each blocker in source:
+  - Empty-error bug real: `BridgeTransferEngine.swift:338` and byte-identical
+    mirror `EngineAlertDTOLogMapping.swift:35` use `error ?? message`, so an
+    EMPTY error string wins over the message.
+  - Vocabulary conflict real: product emits `transfer transition`
+    (`BridgeTransferEngine.swift:226`, `TransferCoordinator.swift:1576`) and
+    registered green baseline `TransferSmokeTests.swift:1148/1154` asserts the
+    same; the never-executed draft spec (`WP13DiagnosticsSecurityTests.swift:375`)
+    and never-live-passed `test_wp13_observability.sh:86` demand
+    `state transition`.
+  - No in-process checkpoint emitter exists — and none may exist:
+    `ShutdownCoordinator` documents WAL checkpointing as exclusive to the
+    clean-shutdown pipeline («Must-not: checkpoint … outside this
+    coordinator»).
+- **Rulings:**
+  - **D1 AUTHORIZED** (scope addendum: `BridgeTransferEngine.swift`): one-line
+    empty-safe fallback in production, identical change in the mirror.
+  - **D2:** canonical observability vocabulary is the shipped
+    `transfer transition`; align the two draft artifacts (spec + qa script);
+    product vocabulary untouched (scope addendum: `test_wp13_observability.sh`).
+  - **D3 REJECTED** as an in-process marker: `checkpoint` is exclusively the
+    clean-shutdown WAL pipeline; emitting it in the command flow would be
+    dishonest logging. Spec drops it from the in-process matrix; the live
+    script keeps it (satisfied by the genuine shutdown line).
+- Continuation sent to the same coder session with re-run gates: fresh
+  DerivedData full XCTest with 0 failures (exact counts), guard exit 0 on the
+  real run, `git diff --check` clean, addendum paths included.
+### [WP13-DIAGNOSTIC-EXPORT-FIX-001-OPEN] Human authorized combined ADR-020 exception (2026-08-22)
+- Main ask-gate: authorize fixes for verified B-1/B-2 despite the ADR-020 freeze?
+- Exact Human answer: **«B-1 + B-2 вместе»**.
+- Lane `[WP13-DIAGNOSTIC-EXPORT-FIX-001]` (fresh Coder, `ponytail_mode: full`):
+  - **B-1:** implement the already-contracted `exportDiagnostics` end-to-end —
+    replace the `TransferCoordinator.swift:749-750` unsupported stub with a real
+    handler that assembles the redacted diagnostic bundle (reuse
+    `RedactedLogFileManager` redaction), returns the contracted
+    diagnostics result (archive URL + entry count), and passes the registered
+    tests. No UI surface, no protocol version bump, no CLI subcommand.
+  - **B-2:** add `WP13DiagnosticsSecurityTests.swift` and
+    `WP13StabilizationCampaign002Tests.swift` to the
+    `TorrentinoEngineAgentTests` target membership in `project.pbxproj`, and
+    make `test_wp13_diagnostics_security.sh` fail when it collects 0 tests.
+- Objective Gates: both suites compile AND execute AND pass; full clean XCTest
+  from fresh DerivedData green with exact count reported (>332 baseline);
+  script guard proven both directions (0-collected ⇒ nonzero exit; real run ⇒
+  pass); export bundle contains only redacted entries (tests assert no raw
+  `/Users/…`, no secret vectors); `git diff --check` clean; zero diffs outside
+  listed target files; Legacy untouched.
+- Non-goals: UI menu/surface for export, IPC redesign, Metal, unrelated
+  refactors, commits/pushes, production Application Support / Human LaunchAgent
+  touches.
+- ADR-020 exception recorded for these two findings only; freeze otherwise
+  unchanged.
+### [WP13-RELEASE-INTEGRITY-QA-001-DONE] findings_open — Main verified (2026-08-22)
+- Fresh Tester `WP13ReleaseIntegrityTester001` (13m3s) returned structured
+  verdict `findings_open`; Main verified every material claim against source,
+  git status, and official artifacts before persisting.
+- **Gates passing with archived evidence**
+  (`build/WP13ReleaseIntegrityDerivedData/evidence/`):
+  1. Release self-contained PASS — Release arm64 build SUCCEEDED; app+agent
+     arm64-only; minOS 13.0; 0 Homebrew dylibs; RPATH clean; codesign strict
+     valid; Hardened Runtime flags 0x10000 both binaries.
+  2. Entitlements minimal PASS — signed entitlements are empty `<dict/>` for
+     app, agent and bundle; matches `Native/Config/Entitlements/*` and ADR-008.
+  3. No secrets PASS — sources + built bundles clean; only redaction test
+     vectors contain fake credentials.
+  4. Diagnostic bundle privacy PASS — wp13 diagnostics script + isolated
+     export inspection `private_data_found=false` (redacted engine_settings,
+     logs, paths quoted in evidence).
+- **Regression:** official `xcresulttool` summary of
+  `build/WP13ReleaseIntegrityTestDerivedData/Logs/Test/Test-Torrentino-2026.08.22_01-32-20-+0530.xcresult`
+  = **332 passed / 0 failed / 0 skipped** (Tester's reported bundle filename was
+  off by one minute; counts exact).
+- **SBOM/pins:** `versions.lock` pins re-verified independently by Main —
+  `shasum -a 256` over `Native/ThirdParty/.build/cache/*` matches all four
+  locked hashes (boost 1.91.0, libtorrent 2.0.13, libtorrent 2.1.0,
+  openssl 3.5.7); lock file contains all four.
+- **Scope check:** `git status` shows zero `Native/` changes; worker wrote only
+  allowed `REPORT.md` (+ evidence under `build/`).
+- **Findings (BUG_REPORT.md B-1/B-2, environmental note F-003):**
+  - **B-1 (HIGH)** `TransferCoordinator.swift:749-750` rejects
+    `exportDiagnostics` with `unsupported`; command declared in
+    `TorrentinoIPC/Commands.swift:912`, no UI caller, no other handler →
+    plan §WP-13 "Diagnostic export" is unfulfilled end-to-end; privacy gate
+    currently proven at component level only. Main re-verified in source.
+  - **B-2 (MEDIUM)** `WP13DiagnosticsSecurityTests.swift` /
+    `WP13StabilizationCampaign002Tests.swift` exist on disk but have **zero**
+    `project.pbxproj` references (Main re-verified) → never compiled/run;
+    `test_wp13_diagnostics_security.sh` exits 0 while executing 0 tests
+    (false green); 332/332 excludes these suites.
+  - **F-003 (INFO)** `test_wp13_observability.sh` correctly BLOCKED by the
+    live-Human-engine guard; isolated matrix covered by TransferSmokeTests.
+- **Routing:** both fixes are product/pbxproj edits frozen under ADR-020 →
+  Human authorization required before Coder lane
+  `[WP13-DIAGNOSTIC-EXPORT-FIX-001]` (proposed: B-1 + B-2 together, then
+  Reviewer + focused/full Tester re-run).
+### [WP13-RELEASE-INTEGRITY-QA-001-OPEN] Lane opened after Human go-ahead (2026-08-22)
+- Exact Human instruction: **«Давай, запускай процесс.»**
+- Context: `[TRACKER-SHARING-IMPL-001]` remains verified GREEN; friend-validation
+  build was prepared/launched 2026-08-11; security audit stays deferred
+  (`security.next_run: none`). Main therefore continues the default pipeline with
+  the WP-13 scope not blocked by that deferral.
+- Lane `[WP13-RELEASE-INTEGRITY-QA-001]` (evidence-only, fresh Tester):
+  1. Release build self-contained: Release arm64 build; `lipo` arm64-only,
+     minOS 13.0, no Homebrew/runtime dylib links, sane rpaths, codesign +
+     Hardened Runtime for app and agent.
+  2. Entitlements minimal: dump signed entitlements vs `Native/Config/`, audit
+     against ADR-008/plan §18.
+  3. No secrets: scan tracked Native sources, built bundles, diagnostic export.
+  4. Diagnostic bundle privacy: run `test_wp13_diagnostics_security.sh`,
+     `test_wp13_observability.sh`, focused diagnostics/redaction XCTest, plus a
+     disposable-profile export inspection.
+  5. SBOM/pins: re-verify `versions.lock` SHA-256 pins; refresh third-party
+     component/license list. CVE verdict itself stays deferred.
+- Forbidden: product code edits, pbxproj, production Application Support /
+  Human engine dir / Human LaunchAgent, Legacy/, external network, commits.
+- Objective Gates: Release build SUCCEEDED; Mach-O/arch/minOS/link evidence
+  archived; entitlements diff report; secrets scan clean; wp13 QA scripts +
+  focused XCTest green; full XCTest regression green; versions.lock pins match.
 ### [WP13-LIVE-FIXPACK-TEST-001-MAIN-VERIFY-GREEN] (2026-08-11)
 - Formal Tester primary still blocked (**401 Invalid API Key**); no auto-backup.
 - Main direct regression after prime build:
