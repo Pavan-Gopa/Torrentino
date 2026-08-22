@@ -7,13 +7,16 @@ onboarding:
 
 current_step: WP-19
 current_work_item_id: null
+current_work_item: null
 step_description: >-
-  WP-20 add-sheet memory CLOSED (reviewer approved, 56/56 app tests).
-  Active lane: WP-19 in-app updates — Sparkle 2 (pinned), GitHub Releases
-  hosting, manual-only "Check for Updates" UX per Human decisions.
+  WP-19 in-app updates CLOSED (reviewer approved after behavioral-test
+  delta; 60/60 app tests). Remaining open item: [WP19.H1] HUMAN gate —
+  generate EdDSA key via sign_update, publish GitHub Releases appcast,
+  substitute real repo URL in UpdateFeed.swift. No active lane; next_actor
+  human for live verification of WP-18/19/20 features and H1.
 target_files:
-- Native/TorrentinoApp/
-- Native/ThirdParty/versions.lock
+- Native/TorrentinoApp/App/UpdateFeed.swift
+- Native/TorrentinoApp/Info.plist
 completed_steps:
 - WP-00
 - WP-01
@@ -30,6 +33,7 @@ completed_steps:
 - WP-12
 - WP-13
 - WP-18
+- WP-19
 - WP-20
 implementation:
   status: done
@@ -88,7 +92,7 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: c2adfa6
+  last_commit: 5756a70
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md

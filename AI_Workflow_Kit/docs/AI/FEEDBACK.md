@@ -1,3 +1,25 @@
+### [WP19-UPDATES-DONE] approved — Sparkle 2 manual updates, GitHub Releases (2026-08-22)
+- Lane [WP19.D1..D3]+[WP19.J1]; Human decisions: GitHub Releases / Sparkle 2 /
+  manual-only UX. Open sub-item [WP19.H1] HUMAN (EdDSA key + appcast publish).
+- Coder WP19UpdateCoder001 (+J1 delta): Sparkle 2.9.6 exact SPM pin
+  (exactVersion, no ranges) + versions.lock SHA256 8d5fb41d…7606 (coder
+  verified via swift package compute-checksum); UpdateFeed.swift — единственный
+  источник feed URL (HTTPS+github.com guard, OWNER-placeholder до H1);
+  SparkleUpdateChecker: lazy SPUStandardUpdaterController startingUpdater:false,
+  тройное отключение автоматики (plist + runtime + ручной старт), placeholder
+  путь без сети и без инициализации Sparkle; Info.plist SUEnableAutomaticChecks=false,
+  SUPublicEDKey пустой плейсхолдер с комментарием H1.
+- Security: EdDSA fail-closed подтверждён кодером по исходникам Sparkle 2.9.6
+  И независимо ревьюером по DerivedData sourcePackages; нет bypass/downgrade/DSA;
+  HTTPS-only; нет пути автоматической проверки.
+- Review WP19UpdateReviewer001: APPROVED. Required delta выполнен: behavioral
+  тест — реальный SPUUpdater (никогда не стартует, offline) +
+  applyManualOnlyConfiguration → чтение 3 флагов false с инстанса (регрессия
+  выкидывания присваиваний валит тест); INFO-харденинги: appcastURL failable
+  optional вместо preconditionFailure, isPlaceholder через contains("OWNER"),
+  невалидный URL → локальный alert.
+- Main verification: независимые прогоны 60/60 TorrentinoAppTests на чистых
+  DerivedData (до и после дельты).
 ### [WP20-ADD-SHEET-MEMORY-DONE] approved — память destination и start-paused (2026-08-22)
 - Lane [WP20.D1..D3]+[WP20.J1], Human request: add-лист запоминает последнюю
   папку назначения и положение Start-paused между запусками.
