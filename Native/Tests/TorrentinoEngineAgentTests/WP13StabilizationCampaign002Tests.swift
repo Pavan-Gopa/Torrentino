@@ -277,14 +277,16 @@ final class WP13I8SubscribeEventsTests: XCTestCase {
             secondExp.fulfill()
         }
         await fulfillment(of: [secondExp], timeout: 2)
-        XCTAssertEqual(await bus.sinkCount(), 2)
+        let sinkCountWithBothConnections = await bus.sinkCount()
+        XCTAssertEqual(sinkCountWithBothConnections, 2)
 
         svc.clearEventSink(connectionID: secondID)
         for _ in 0..<20 {
             if await bus.sinkCount() == 1 { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertEqual(await bus.sinkCount(), 1)
+        let sinkCountAfterInvalidation = await bus.sinkCount()
+        XCTAssertEqual(sinkCountAfterInvalidation, 1)
 
         await bus.publish(
             [.snapshotRequired(SnapshotRequiredEvent(reason: .droppedDelta, afterRevision: 0))],

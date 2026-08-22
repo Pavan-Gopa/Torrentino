@@ -83,7 +83,7 @@ log_content="$(<"${LOG_FILE}")"
 for marker in \
     "inspectAddSource" "commitAdd" "fetchFiles" "setFileSelection" \
     "pause" "resume" "reannounce" "prepareRemoval" "commitRemoval" \
-    "checkpoint" "state transition" "bridge alerts drained" \
+    "checkpoint" "transfer transition" "bridge alerts drained" \
     "libtorrent alert type=" "severity=" "message=" \
     "xpc connect" "peer verification accepted"; do
     assert_contains "${log_content}" "${marker}" "observability marker ${marker}"

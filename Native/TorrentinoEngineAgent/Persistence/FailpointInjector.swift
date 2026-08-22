@@ -36,6 +36,9 @@ enum FailpointID: String, Sendable, CaseIterable, CustomStringConvertible {
     case beforeTrashJournalUpdate
     /// 11. WP-10: before a removal token settle (outcome + final status).
     case beforeRemovalTokenSettle
+    /// 12. WP-13: after the first successful diagnostics export entry write
+    ///     (test-only rollback probe; production never arms it).
+    case diagnosticsExportMidWrite
 
     var description: String { rawValue }
 }

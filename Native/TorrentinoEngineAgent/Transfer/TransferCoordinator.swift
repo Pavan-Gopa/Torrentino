@@ -143,6 +143,7 @@ public actor TransferCoordinator {
     private static let pendingInspectionBytesLimit: Int64 = 64 * 1024 * 1024
     private static let idempotencyResultsLimit = 1024
     private static let pendingRemovalTokenLimit = 256
+    private static let diagnosticsExportLogLineLimit = 2_000
 
     // MARK: - Init
 
@@ -627,7 +628,7 @@ public actor TransferCoordinator {
             return nil
         case .degraded:
             switch command {
-            case .hello, .prepareForQuit, .restartEngineSafely:
+            case .hello, .prepareForQuit, .restartEngineSafely, .exportDiagnostics:
                 return nil
             default:
                 return degradedFault()
@@ -746,9 +747,176 @@ public actor TransferCoordinator {
             return await handleInspectCreateSource(request)
         case .commitCreate(let request):
             return await handleCommitCreate(request)
-        case .exportDiagnostics:
-            return .failure(unsupported(command.name))
+        case .exportDiagnostics(let request):
+            return await handleExportDiagnostics(request)
         }
+    }
+
+    // MARK: - Diagnostics export (WP-13)
+
+    /// Assembles the redacted diagnostics bundle (system info, health metrics,
+    /// password-free engine-settings projection, recent redacted logs,
+    /// persistence status) at a validated destination. Fail-closed: the
+    /// destination must be nonexistent or an existing EMPTY directory and is
+    /// rejected before the first byte is written, every entry passes through
+    /// the same redactor as the log sink before touching disk, and a failed
+    /// write removes every file this export already wrote (removal failures
+    /// are surfaced in the typed fault details) so a partial bundle is never
+    /// presented as success and a pre-existing destination file is never
+    /// overwritten.
+    private func handleExportDiagnostics(_ request: ExportDiagnosticsRequest) async -> EngineCommandResult {
+        let fileManager = FileManager.default
+        let destination: URL
+        if let requested = request.destinationURL, !requested.isEmpty {
+            var isDirectory: ObjCBool = false
+            let expanded = (requested as NSString).expandingTildeInPath
+            if fileManager.fileExists(atPath: expanded, isDirectory: &isDirectory), !isDirectory.boolValue {
+                return .failure(.internalError(details: "diagnostics destination is not a directory"))
+            }
+            if isDirectory.boolValue {
+                let existing: [String]
+                do {
+                    existing = try fileManager.contentsOfDirectory(atPath: expanded)
+                } catch {
+                    return .failure(.internalError(details: "diagnostics destination not readable"))
+                }
+                guard existing.isEmpty else {
+                    return .failure(.internalError(
+                        details: "diagnostics destination must be nonexistent or an empty directory"
+                    ))
+                }
+            }
+            destination = URL(fileURLWithPath: expanded, isDirectory: true)
+        } else {
+            destination = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("TorrentinoDiagnostics-\(UUID().uuidString)", isDirectory: true)
+        }
+        do {
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            return .failure(.internalError(details: "diagnostics destination not writable"))
+        }
+
+        let persistenceHealth = await persistence.healthSnapshot()
+        let recentLogs = await RedactedLogFileManager.shared
+            .fetchRecentLogLines(maxCount: Self.diagnosticsExportLogLineLimit)
+            .joined(separator: "\n")
+
+        let entries: [(name: String, text: String)] = [
+            ("system_info.json", Self.jsonText([
+                "agentVersion": agentVersion,
+                "instanceID": instanceID.uuidString,
+                "requestID": request.requestID.rawValue.uuidString,
+                "reason": request.reason,
+                "pid": ProcessInfo.processInfo.processIdentifier,
+                "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+                "exportedAt": ISO8601DateFormatter().string(from: Date()),
+            ])),
+            ("health_metrics.json", Self.jsonText([
+                "sessionPhase": sessionPhase.rawValue,
+                "degradedReason": degradedReason ?? "none",
+                "restoreRebuilt": restoreRebuiltCount,
+                "restoreSkipped": restoreSkippedCount,
+                "engineRevision": String(engineRevision),
+                "settingsRevision": String(settingsRevision),
+                "recordCount": records.count,
+                "safeRecovery": safeRecovery,
+                "network": systemConditions.network.rawValue,
+                "networkGeneration": String(systemConditions.networkGeneration),
+                "thermal": systemConditions.thermal.rawValue,
+                "memoryPressure": systemConditions.memoryPressure.rawValue,
+                "lowPower": systemConditions.lowPower,
+                "sleeping": systemConditions.sleeping,
+            ])),
+            ("engine_settings.json", Self.settingsExportText(activeSettings)),
+            ("recent_logs.txt", recentLogs),
+            ("persistence_status.json", Self.jsonText([
+                "state": persistenceHealth.state,
+                "cleanShutdown": persistenceHealth.cleanShutdown,
+                "degraded": persistenceHealth.degraded,
+                "quarantinedCount": persistenceHealth.quarantinedCount,
+                "reconciliation": persistenceHealth.reconciliation,
+            ])),
+        ]
+        var written: [URL] = []
+        do {
+            for entry in entries {
+                let url = destination.appendingPathComponent(entry.name)
+                try Data(RedactedLogFileManager.redact(entry.text).utf8).write(to: url, options: .atomic)
+                written.append(url)
+                // WP-13 test-only probe: after the first successful entry a
+                // test-armed failpoint interrupts mid-write so the rollback is
+                // observable. Production arms nothing; fire() is a no-op.
+                if written.count == 1 {
+                    try FailpointInjector.fire(.diagnosticsExportMidWrite)
+                }
+            }
+        } catch {
+            var rollbackFailures: [String] = []
+            for url in written {
+                do {
+                    try fileManager.removeItem(at: url)
+                } catch {
+                    rollbackFailures.append(url.lastPathComponent)
+                }
+            }
+            let details: String
+            if rollbackFailures.isEmpty {
+                details = "diagnostics export write failed"
+            } else {
+                details = "diagnostics export write failed; rollback incomplete for "
+                    + rollbackFailures.sorted().joined(separator: ",")
+            }
+            return .failure(.internalError(details: details))
+        }
+
+        log.notice("diagnostics exported entries=\(entries.count)")
+        return .success(.diagnosticsExport(DiagnosticsExportResult(
+            archiveURL: destination.path,
+            entryCount: entries.count
+        )))
+    }
+
+    /// Serializes a plist-safe dictionary to sorted JSON text; an invalid
+    /// object degrades to an empty entry instead of failing the export.
+    private static func jsonText(_ object: [String: Any]) -> String {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return "{}"
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Password-free structured projection of the active engine settings for
+    /// the diagnostics bundle. Every field is enumerated explicitly so a new
+    /// secret-bearing EngineSettings/ProxyConfiguration field cannot silently
+    /// enter exports; the proxy password has no representation here at all.
+    private static func settingsExportText(_ settings: EngineSettings) -> String {
+        jsonText([
+            "downloadDirectory": settings.downloadDirectory,
+            "maxDownloadBytesPerSec": settings.maxDownloadBytesPerSec,
+            "maxUploadBytesPerSec": settings.maxUploadBytesPerSec,
+            "listenPort": settings.listenPort,
+            "dhtEnabled": settings.dhtEnabled,
+            "lsdEnabled": settings.lsdEnabled,
+            "upnpEnabled": settings.upnpEnabled,
+            "natPmpEnabled": settings.natPmpEnabled,
+            "encryptionEnabled": settings.encryptionEnabled,
+            "proxy": proxyExportObject(settings.proxy),
+        ])
+    }
+
+    /// Proxy projection without the password; a nil username omits the key.
+    private static func proxyExportObject(_ proxy: ProxyConfiguration) -> [String: Any] {
+        var object: [String: Any] = [
+            "kind": proxy.kind.rawValue,
+            "host": proxy.host,
+            "port": proxy.port,
+        ]
+        if let username = proxy.username {
+            object["username"] = username
+        }
+        return object
     }
 
     // MARK: - Hello
@@ -1926,15 +2094,6 @@ public actor TransferCoordinator {
             delay = min(delay * 2, 30)
         }
         return delay
-    }
-
-    private func unsupported(_ commandName: String) -> EngineFault {
-        EngineFault(
-            code: .unsupportedOperation,
-            severity: .error,
-            recoveryActions: [],
-            redactedContext: "command=\(commandName)"
-        )
     }
 
     private func configuredSaveLocation() -> PersistedLocation {

@@ -216,6 +216,18 @@ public struct ProxyConfiguration: Codable, Sendable, Equatable {
     }
 }
 
+/// String and debug representations never carry the password: diagnostics,
+/// logs, and export bundles may stringify proxy settings (WP-13 threat model;
+/// see also the WP-09 secret-hygiene residual note).
+extension ProxyConfiguration: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "ProxyConfiguration(kind: \(kind.rawValue), host: \(host), port: \(port), "
+            + "username: \(username ?? "nil"), password: \(password == nil ? "nil" : "<redacted>"))"
+    }
+
+    public var debugDescription: String { description }
+}
+
 /// Agent lifecycle states (plan §8.1). A degraded state carries its reason in
 /// the event payload rather than in the enum raw value.
 public enum EngineLifecycleState: String, Codable, Sendable, Equatable, CaseIterable {

@@ -67,10 +67,16 @@ public actor RedactedLogFileManager {
 
     public static func redact(_ text: String) -> String {
         var redacted = text
+        // Newline-safety review: every plain-text marker pattern below uses a
+        // negated class that excludes \s, so a match can never cross a line
+        // break. The JSON value class tolerates escaped quotes/backslashes
+        // (WP-13 escaped-secret finding); on input with an unbalanced quote it
+        // may over-redact forward to the next quote — a fail-safe direction
+        // (diagnostics data loss, never a secret leak).
         let patterns: [(String, String, NSRegularExpression.Options)] = [
             ("(?:/Users|/Volumes|/private/var)/[^\\s\"']+", "~", []),
             ("(proxyPassword|password|secret|passkey|token)=[^&\\s\"']+", "$1=<redacted>", [.caseInsensitive]),
-            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"[^\\\"]*\\\"", "$1\"<redacted>\"", [.caseInsensitive]),
+            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"(?:[^\\\"\\\\]|\\\\.)*\\\"", "$1\"<redacted>\"", [.caseInsensitive]),
             ("Authorization:\\s*Bearer\\s+[^\\s\"']+", "Authorization: Bearer <redacted>", [.caseInsensitive]),
         ]
         for (pattern, replacement, options) in patterns {

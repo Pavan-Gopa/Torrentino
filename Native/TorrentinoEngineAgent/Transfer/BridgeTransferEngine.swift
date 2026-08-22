@@ -319,26 +319,3 @@ extension BridgeTransferEngine: CreatorIndependentVerifier {
         return Data(bytes)
     }
 }
-
-
-extension EngineAlertDTO {
-    static func alertDrainLogMessage(count: Int) -> String? {
-        count > 0 ? "bridge alerts drained count=\(count)" : nil
-    }
-
-    static func alertLogMessage(for alert: EngineAlertDTO) -> (severity: String, message: String) {
-        let type: String
-        switch alert.kind {
-        case "error": type = "torrent_error_alert"
-        case "unknown": type = "tracker_announce"
-        case "session": type = "storage"
-        default: type = alert.kind
-        }
-        let severity = alert.kind == "session" ? "warning" : "error"
-        let message = alert.error ?? alert.message ?? "alert"
-        return (
-            severity: severity,
-            message: "libtorrent alert type=\(type) severity=\(severity) message=\(message)"
-        )
-    }
-}

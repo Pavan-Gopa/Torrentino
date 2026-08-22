@@ -67,17 +67,32 @@ public actor RedactedLogFileManager {
             redacted = userHomeRegex.stringByReplacingMatches(in: redacted, options: [], range: range, withTemplate: "~")
         }
 
-        // 2. Redact password parameters (password=..., proxyPassword=...)
-        let pwdRegex = try? NSRegularExpression(pattern: "(password|proxyPassword|secret|passkey|token)=[^&\\s\"']+", options: [.caseInsensitive])
-        if let pwdRegex {
+        // 2. Redact plain-text query-style credential markers
+        // (proxyPassword=…, password=…, secret=…, passkey=…, token=…),
+        // keeping the field name. Lockstep with PersistenceStore.swift.
+        let plainSecretRegex = try? NSRegularExpression(
+            pattern: "(proxyPassword|password|secret|passkey|token)=[^&\\s\"']+",
+            options: [.caseInsensitive]
+        )
+        if let plainSecretRegex {
             let range = NSRange(location: 0, length: redacted.utf16.count)
-            redacted = pwdRegex.stringByReplacingMatches(in: redacted, options: [], range: range, withTemplate: "$1=<redacted>")
+            redacted = plainSecretRegex.stringByReplacingMatches(
+                in: redacted,
+                options: [],
+                range: range,
+                withTemplate: "$1=<redacted>"
+            )
         }
-
         // 2b. The same fields commonly arrive as JSON diagnostics rather than
-        // query parameters. Keep the field name while removing its value.
+        // query parameters. Keep the field name while removing its value. The
+        // value class tolerates escaped quotes/backslashes (WP-13
+        // escaped-secret finding; lockstep with PersistenceStore.swift).
+        // Newline-safety review: the plain-text patterns use negated classes
+        // excluding \s, so they never cross a line break; the JSON value class
+        // may over-redact forward to the next quote on unbalanced input — a
+        // fail-safe direction (never a secret leak).
         let jsonSecretRegex = try? NSRegularExpression(
-            pattern: "(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"[^\\\"]*\\\"",
+            pattern: "(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"(?:[^\\\"\\\\]|\\\\.)*\\\"",
             options: [.caseInsensitive]
         )
         if let jsonSecretRegex {
