@@ -11,7 +11,7 @@
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/version.hpp>
 
-#include <boost/utility/string_view.hpp>
+#include <libtorrent/string_view.hpp>
 
 #if LIBTORRENT_VERSION_NUM < 20100
 #include <libtorrent/file_storage.hpp>
@@ -211,7 +211,7 @@ LayerCheck check_piece_layers(const std::vector<char>& bytes)
 		const std::int64_t pieces = (entry.first + piece_length - 1) / piece_length;
 		const std::int64_t expected = pieces > 1 ? pieces : 0;
 		check.expected += expected;
-		const lt::bdecode_node layer = layers.dict_find(boost::string_view(reinterpret_cast<char const*>(entry.second.data()), 32));
+		const lt::bdecode_node layer = layers.dict_find(lt::string_view(reinterpret_cast<char const*>(entry.second.data()), 32));
 		if (expected == 0) {
 			if (layer.type() == lt::bdecode_node::string_t) {
 				check.ok = false;
