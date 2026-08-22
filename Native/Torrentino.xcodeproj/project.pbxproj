@@ -64,6 +64,7 @@
 		4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000154 /* TorrentinoAppTests.swift */; };
 		4A00000000000000000014A1 /* WP14ProjectionMeasurements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */; };
 		4A00000000000000000005CB /* WP18FinderServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014C1 /* WP18FinderServicesTests.swift */; };
+		4A00000000000000000005CE /* WP20AddSheetMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014C3 /* WP20AddSheetMemoryTests.swift */; };
 		4A000000000000000000055B /* PeerValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010D /* PeerValidation.swift */; };
 		4A0000000000000000000581 /* EngineBridgeAdapter.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000162 /* EngineBridgeAdapter.mm */; };
 		4A0000000000000000000582 /* EngineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000163 /* EngineCoordinator.swift */; };
@@ -149,6 +150,7 @@
 		4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000111 /* TorrentListViewModel.swift */; };
 		4A00000000000000000005F2 /* TorrentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000112 /* TorrentListView.swift */; };
 		4A00000000000000000005F3 /* AddTorrentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000113 /* AddTorrentSheet.swift */; };
+		4A00000000000000000005CC /* AddSheetPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A00000000000000000014C2 /* AddSheetPreferences.swift */; };
 		4A00000000000000000005F4 /* FixtureLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000114 /* FixtureLibrary.swift */; };
 		4A0000000000000000000801 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000811 /* KeychainStore.swift */; };
 		4A0000000000000000000802 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000812 /* NotificationManager.swift */; };
@@ -325,6 +327,7 @@
 		4A0000000000000000000152 /* TorrentinoDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoDomainTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000153 /* TorrentinoIPCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoIPCTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000154 /* TorrentinoAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentinoAppTests.swift; sourceTree = "<group>"; };
+		4A00000000000000000014C3 /* WP20AddSheetMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP20AddSheetMemoryTests.swift; sourceTree = "<group>"; };
 		4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP14ProjectionMeasurements.swift; sourceTree = "<group>"; };
 		4A00000000000000000014C1 /* WP18FinderServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WP18FinderServicesTests.swift; sourceTree = "<group>"; };
 		4A0000000000000000000201 /* Torrentino.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Torrentino.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -386,6 +389,7 @@
 		4A0000000000000000000111 /* TorrentListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListViewModel.swift; sourceTree = "<group>"; };
 		4A0000000000000000000112 /* TorrentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TorrentListView.swift; sourceTree = "<group>"; };
 		4A0000000000000000000113 /* AddTorrentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddTorrentSheet.swift; sourceTree = "<group>"; };
+		4A00000000000000000014C2 /* AddSheetPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSheetPreferences.swift; sourceTree = "<group>"; };
 		4A0000000000000000000114 /* FixtureLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureLibrary.swift; sourceTree = "<group>"; };
 		4A0000000000000000000811 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		4A0000000000000000000812 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
@@ -569,6 +573,7 @@
 				4A0000000000000000000112 /* TorrentListView.swift */,
 				4A0000000000000000000909 /* CreatorTrackerSharingPolicy.swift */,
 				4A0000000000000000000113 /* AddTorrentSheet.swift */,
+				4A00000000000000000014C2 /* AddSheetPreferences.swift */,
 				4A0000000000000000000114 /* FixtureLibrary.swift */,
 				4A0000000000000000000813 /* InspectorView.swift */,
 				4A0000000000000000000901 /* CreateTorrentSheet.swift */,
@@ -780,6 +785,7 @@
 				4A0000000000000000000154 /* TorrentinoAppTests.swift */,
 				4A00000000000000000014B1 /* WP14ProjectionMeasurements.swift */,
 				4A00000000000000000014C1 /* WP18FinderServicesTests.swift */,
+				4A00000000000000000014C3 /* WP20AddSheetMemoryTests.swift */,
 			);
 			path = TorrentinoAppTests;
 			sourceTree = "<group>";
@@ -1054,6 +1060,7 @@
 				4A00000000000000000005F1 /* TorrentListViewModel.swift in Sources */,
 				4A00000000000000000005F2 /* TorrentListView.swift in Sources */,
 				4A00000000000000000005F3 /* AddTorrentSheet.swift in Sources */,
+				4A00000000000000000005CC /* AddSheetPreferences.swift in Sources */,
 				4A00000000000000000005F4 /* FixtureLibrary.swift in Sources */,
 				4A000000000000000000050F /* SettingsView.swift in Sources */,
 				4A0000000000000000000801 /* KeychainStore.swift in Sources */,
@@ -1179,6 +1186,8 @@
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
 				4A00000000000000000014A1 /* WP14ProjectionMeasurements.swift in Sources */,
 				4A00000000000000000005CB /* WP18FinderServicesTests.swift in Sources */,
+				4A00000000000000000005CE /* WP20AddSheetMemoryTests.swift in Sources */,
+				4A00000000000000000005CC /* AddSheetPreferences.swift in Sources */,
 				4A0000000000000000000502 /* AppDelegate.swift in Sources */,
 				4A0000000000000000000504 /* EngineClient.swift in Sources */,
 				4A0000000000000000000505 /* EngineClientTypes.swift in Sources */,

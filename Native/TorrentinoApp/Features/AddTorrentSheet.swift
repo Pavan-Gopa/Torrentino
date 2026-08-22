@@ -37,6 +37,7 @@ struct AddTorrentSheet: View {
     @State private var inspectionPresentation = AddTorrentInspectionPresentation()
     @State private var committing = false
     @State private var inspectionState = LatestInspectionState<AddTorrentPreview>()
+    private let preferences = AddSheetPreferences()
 
     private var canCommit: Bool {
         guard !committing, !inspectionPresentation.inspecting else { return false }
@@ -184,6 +185,7 @@ struct AddTorrentSheet: View {
             }
         }
         .onAppear {
+            seedPreferences()
             consumePendingFile()
         }
         .onChange(of: viewModel.pendingAddFileURL) { newURL in
@@ -219,21 +221,21 @@ struct AddTorrentSheet: View {
                     startPaused: startPaused
                 )
                 if success {
-                    dismiss()
+                    finishSuccessfulAdd()
                 } else if let err = viewModel.lastAddError {
                     inspectionPresentation.errorMessage = err
                 }
             } else if trimmed.hasPrefix("magnet:") {
                 let success = await viewModel.addMagnet(trimmed, startPaused: startPaused)
                 if success {
-                    dismiss()
+                    finishSuccessfulAdd()
                 } else if let err = viewModel.lastAddError {
                     inspectionPresentation.errorMessage = err
                 }
             } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
                 let success = await viewModel.addTorrentFileURL(trimmed, startPaused: startPaused)
                 if success {
-                    dismiss()
+                    finishSuccessfulAdd()
                 } else if let err = viewModel.lastAddError {
                     inspectionPresentation.errorMessage = err
                 }
@@ -241,6 +243,20 @@ struct AddTorrentSheet: View {
                 inspectionPresentation.errorMessage = String(localized: "torrents.add.invalid_source")
             }
         }
+    }
+
+    private func seedPreferences() {
+        let seeded = preferences.seed()
+        startPaused = seeded.startPaused
+        destinationURL = seeded.destinationURL
+    }
+
+    private func finishSuccessfulAdd() {
+        preferences.recordSuccessfulAdd(
+            destinationURL: destinationURL,
+            startPaused: startPaused
+        )
+        dismiss()
     }
 
     private var destinationPath: String? {
