@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# QA WP-01 — fallback libtorrent 2.0.13 (feature 4).
+# QA WP-01 — fallback libtorrent 2.0.14 (feature 4).
 #
 # Verifies:
-#   * run_tests.sh --lt-version 2.0.13 exits 0 with all 11 scenarios PASS;
-#   * the 2.0.13 harness binary genuinely links libtorrent 2.0.13 (not 2.1.0).
+#   * run_tests.sh --lt-version 2.0.14 exits 0 with all 11 scenarios PASS;
+#   * the 2.0.14 harness binary genuinely links libtorrent 2.0.14 (not the default pin).
 #
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
 source "${LOCK_FILE}"
 
-FALLBACK="2.0.13"
+FALLBACK="2.0.14"
 case " ${LT_SUPPORTED_VERSIONS} " in
 	*" ${FALLBACK} "*) qa_ok "${FALLBACK} is a pinned fallback" ;;
 	*) qa_die "${FALLBACK} not pinned in versions.lock" ;;
@@ -21,7 +21,7 @@ BIN="${BRIDGE_DIR}/.build/harness-${FALLBACK}-release/torrentino-harness"
 
 # The binary must actually report the fallback engine version.
 ver_out="$("${BIN}" version 2>&1)"
-assert_contains "${ver_out}" "libtorrent 2.0.13" "harness reports libtorrent 2.0.13"
+assert_contains "${ver_out}" "libtorrent 2.0.14" "harness reports libtorrent 2.0.14"
 
 out="$(qa_mktemp)/fallback.log"
 qa_log "running scenario suite on libtorrent ${FALLBACK}"

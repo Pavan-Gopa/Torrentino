@@ -315,10 +315,18 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
                         "redacted output must remain valid JSON: \(redactedNewline)")
 
         // Literal newline character inside the value (plain-text log shape).
+        // SEC-3 line integrity: the balanced rule must not consume the
+        // following line; the per-line fallback redacts and re-closes only
+        // the truncated first line, so the post-break chunk stays byte-intact
+        // (documented residual: it is no longer attributable once matching
+        // stops at the line boundary).
         let literalNewline = "{\"token\":\"split\nNL2_LEAK\"}"
         let redactedLiteral = RedactedLogFileManager.redact(literalNewline)
-        XCTAssertFalse(redactedLiteral.contains("NL2_LEAK"), "literal-newline suffix survived: \(redactedLiteral)")
-        XCTAssertTrue(redactedLiteral.contains("\"token\":\"<redacted>\""))
+        XCTAssertEqual(
+            redactedLiteral,
+            "{\"token\":\"<redacted>\"\nNL2_LEAK\"}",
+            "first line redacts, following line survives byte-for-byte: \(redactedLiteral)"
+        )
     }
 
     /// Behavioral lockstep proof for the mirrored redactor source
@@ -387,6 +395,7 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
                 switch String(rawOption).trimmingCharacters(in: .whitespaces) {
                 case "": continue
                 case ".caseInsensitive": options.insert(.caseInsensitive)
+                case ".anchorsMatchLines": options.insert(.anchorsMatchLines)
                 default:
                     XCTFail("unrecognized mirror regex option \(rawOption); extend the lockstep probe decoder")
                     return
@@ -395,8 +404,8 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
             mirrorRules.append((pattern, options, template))
         }
 
-        guard mirrorRules.count == 4 else {
-            XCTFail("mirror redactor must declare exactly 4 rules (path, plain-text marker, JSON, auth header); found \(mirrorRules.count)")
+        guard mirrorRules.count == 7 else {
+            XCTFail("mirror redactor must declare exactly 7 rules (path, plain-text marker, yaml colon, tracker announce URL, JSON, unterminated-JSON fallback, auth header); found \(mirrorRules.count)")
             return
         }
 
@@ -412,7 +421,8 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
 
         // Every vector class the compiled redactor must survive, plus combined
         // lines whose outcome depends on the ruleset ORDER
-        // (path → plain-text marker → JSON → auth header).
+        // (path → plain marker → yaml colon → tracker URL → JSON →
+        // unterminated-JSON fallback → auth header).
         let hostileCorpus: [String] = [
             "password=SecretOne token=SecretTwo",
             #"{"proxy":{"password":"prefix\"QUOTE_LEAK","next":"safe"}}"#,
@@ -421,8 +431,35 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
             "passkey=PK_LEAK /Users/someone/path password=SecretOne token=SecretTwo",
             #"/Users/someone/path password=SecretOne {"token":"a\"b"} Authorization: Bearer bearer_leak"#,
             "/Users/token=hunter2",
+            // SEC-3: tracker credential styles.
+            "http://t.example/announce?key=TRACK_KEY_LEAK&uid=77",
+            "https://tracker.example.net/TRACKPATH12345/announce",
+            "proxy password: YAML_COLON_LEAK",
+            "http://t.example/A1B2C3D4E5F6G7/announce?uid=7&key=K2 tracker https://x.example/HYBRIDPASS12/announce?key=HYB_Q_LEAK",
+            // SEC-4: unterminated JSON value (no later quote on the line).
+            "{\"password\":\"UNBAL_LEAK tail",
+            // SEC-3 line integrity: balanced-JSON value split by a literal
+            // newline must redact per line and preserve the following one.
+            "{\"password\":\"BALNL_LEAK\nKEEP_LINE_TWO\":\"safe\"}",
+            // SEC-4 backslash coverage: escape pairs and a terminal trailing
+            // backslash inside an unterminated value.
+            #"{"password":"esc \" ESC_UNTERM_LEAK tail"#,
+            #"{"token":"TRAILBS_LEAK\"#,
+            // SEC-3 announce policy (REVIEW-002): intentionally broad —
+            // every opaque ≥9-char segment shape before /announce(.php)? is
+            // redacted by design, digits and leading character irrelevant.
+            "https://tracker.example.net/_SECRET12345/announce",
+            "https://tracker.example.net/-SECRET12345/announce",
+            "https://tracker.example.net/tracker-path2/announce https://y.example/_nodigit_key/announce.php",
+            "https://z.example/-DashLedKey9/announce plain https://w.example/AbCdEfGhIj/announce",
         ]
-        let forbiddenLeaks = ["SecretOne", "SecretTwo", "QUOTE_LEAK", "/Users/someone", "bearer_leak", "PK_LEAK"]
+        let forbiddenLeaks = [
+            "SecretOne", "SecretTwo", "QUOTE_LEAK", "/Users/someone", "bearer_leak", "PK_LEAK",
+            "TRACK_KEY_LEAK", "uid=77", "TRACKPATH12345", "YAML_COLON_LEAK",
+            "A1B2C3D4E5F6G7", "HYBRIDPASS12", "HYB_Q_LEAK", "UNBAL_LEAK",
+            "BALNL_LEAK", "ESC_UNTERM_LEAK", "TRAILBS_LEAK", "_SECRET12345", "-SECRET12345",
+            "tracker-path2", "_nodigit_key", "-DashLedKey9", "AbCdEfGhIj",
+        ]
 
         for input in hostileCorpus {
             let compiledOutput = RedactedLogFileManager.redact(input)
@@ -440,12 +477,941 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
                 )
             }
         }
-
         let plainMarkers = RedactedLogFileManager.redact(hostileCorpus[0])
         XCTAssertTrue(plainMarkers.contains("password=<redacted>"),
                       "plain-text marker rule regressed in the compiled redactor: \(plainMarkers)")
         XCTAssertTrue(plainMarkers.contains("token=<redacted>"),
                       "plain-text marker rule regressed in the compiled redactor: \(plainMarkers)")
+
+        // Word-boundary safety (SEC-3): credential-adjacent ordinary words
+        // must NOT trigger redaction, and announce URLs without an opaque
+        // first segment must survive structurally intact. A long ordinary
+        // first segment before /announce is redacted BY DESIGN (see
+        // testAnnouncePolicyRedactsEveryOpaqueSegmentShapeByDesign) — it is
+        // not a false-positive candidate anymore.
+        let falsePositives: [(input: String, mustSurvive: String)] = [
+            ("keyboard=QWERTY_OK monkey=brown guid=xyz", "keyboard=QWERTY_OK"),
+            ("guuid=not-a-credential tokenish=keepme", "tokenish=keepme"),
+            ("http://t.example/announce?info_hash=abc", "http://t.example/announce?info_hash=abc"),
+        ]
+        for (input, survivor) in falsePositives {
+            let compiledOutput = RedactedLogFileManager.redact(input)
+            let mirrorOutput = mirrorRedact(input)
+            XCTAssertEqual(Array(compiledOutput.utf8), Array(mirrorOutput.utf8),
+                           "mirror diverged on false-positive vector \(input)")
+            XCTAssertTrue(compiledOutput.contains(survivor),
+                          "redactor false positive destroyed \(survivor) in \(input): \(compiledOutput)")
+        }
+    }
+
+    // MARK: - WP-13 SEC hardening (SEC-1..SEC-5)
+
+    /// Compiled-redactor behavioral coverage for the SEC-3/SEC-4 credential
+    /// classes (tracker query params, path-embedded passkeys, yaml-ish colon
+    /// values, unterminated JSON values), including newline safety and
+    /// word-boundary false-positive guards. The adversarial shell probe lives
+    /// in scripts/qa/test_security_redactor_negative.sh; this keeps the same
+    /// contract enforced inside XCTest.
+    func testRedactorScrubsTrackerCredentialStylesAndUnterminatedJSONValues() {
+        // Tracker credential styles must be scrubbed…
+        let trackerKey = RedactedLogFileManager.redact("http://t.example/announce?key=DEADBEEF_KEY&uid=7")
+        XCTAssertFalse(trackerKey.contains("DEADBEEF_KEY"))
+        XCTAssertTrue(trackerKey.contains("key=<redacted>"))
+        XCTAssertTrue(trackerKey.contains("uid=<redacted>"), trackerKey)
+
+        let pathCredential = RedactedLogFileManager.redact("https://tracker.example.net/PATHKEY123456/announce")
+        XCTAssertEqual(pathCredential, "https://tracker.example.net/<redacted>/announce")
+
+        let yamlColon = RedactedLogFileManager.redact("proxy password: COLON_LEAK")
+        XCTAssertFalse(yamlColon.contains("COLON_LEAK"))
+        XCTAssertTrue(yamlColon.contains("password: <redacted>"), yamlColon)
+
+        // …while ordinary words and announce URLs stay intact…
+        let untouched = RedactedLogFileManager.redact("keyboard=QWERTY_OK monkey=brown guid=xyz http://t.example/announce?info_hash=abc")
+        XCTAssertTrue(untouched.contains("keyboard=QWERTY_OK"), untouched)
+        XCTAssertTrue(untouched.contains("monkey=brown"), untouched)
+        XCTAssertTrue(untouched.contains("guid=xyz"), untouched)
+        XCTAssertTrue(untouched.contains("info_hash=abc"), untouched)
+
+        // …and an unterminated JSON value redacts to end of line (SEC-4).
+        let unbalanced = RedactedLogFileManager.redact("{\"password\":\"unterminated UNBAL_LEAK tail")
+        XCTAssertFalse(unbalanced.contains("UNBAL_LEAK"), unbalanced)
+        XCTAssertEqual(unbalanced, "{\"password\":\"<redacted>\"", "fallback must re-close the string value")
+
+        // Newline-safety property holds for the fallback rule too: only the
+        // truncated line is consumed; following lines survive byte-intact.
+        let multiline = "{\n\"secret\":\"UNBAL2_LEAK tail\nstill-no-quotes-here"
+        let redactedMultiline = RedactedLogFileManager.redact(multiline)
+        XCTAssertFalse(redactedMultiline.contains("UNBAL2_LEAK"), redactedMultiline)
+        XCTAssertTrue(redactedMultiline.hasSuffix("\nstill-no-quotes-here"), redactedMultiline.debugDescription)
+    }
+
+    /// SEC-3 line-integrity + SEC-4 backslash on the compiled redactor. A
+    /// credential value split by a literal newline must never consume the
+    /// following line (byte-for-byte preservation), while backslash-bearing
+    /// unterminated values (escape pairs, terminal trailing backslash) must
+    /// still redact to end of line with the string re-closed. The mirror
+    /// implementation is held to the same vectors by
+    /// testMirrorRedactorStaysInLockstepWithCompiledRedactor; the announce
+    /// policy vectors live in
+    /// testAnnouncePolicyRedactsEveryOpaqueSegmentShapeByDesign.
+    func testRedactorPreservesLineIntegrityAndCoversBackslashBearingUnterminatedValues() {
+        // Balanced-JSON-shaped value containing a literal newline: the
+        // balanced rule cannot match across the break; the per-line fallback
+        // redacts only the truncated first line.
+        let multiline = "{\"password\":\"BALNL_LEAK\nKEEP_LINE_TWO\":\"safe\"}"
+        let redactedMultiline = RedactedLogFileManager.redact(multiline)
+        XCTAssertFalse(redactedMultiline.contains("BALNL_LEAK"), redactedMultiline)
+        XCTAssertEqual(
+            redactedMultiline,
+            "{\"password\":\"<redacted>\"\nKEEP_LINE_TWO\":\"safe\"}",
+            "following-line bytes must survive byte-for-byte"
+        )
+
+        // Unterminated value with an escaped quote inside: escape pairs are
+        // consumed to end of line and the string is re-closed (SEC-4).
+        let escapedUnterminated = RedactedLogFileManager.redact(#"{"password":"esc \" ESC_UNTERM_LEAK tail"#)
+        XCTAssertFalse(escapedUnterminated.contains("ESC_UNTERM_LEAK"), escapedUnterminated)
+        XCTAssertEqual(escapedUnterminated, #"{"password":"<redacted>""#)
+
+        // Unterminated value ending in a lone trailing backslash.
+        let trailingBackslash = RedactedLogFileManager.redact(#"{"token":"TRAILBS_LEAK\"#)
+        XCTAssertFalse(trailingBackslash.contains("TRAILBS_LEAK"), trailingBackslash)
+        XCTAssertEqual(trailingBackslash, #"{"token":"<redacted>""#)
+
+        // Separator hardening: a colon separator must not bridge a newline.
+        let foldedYaml = RedactedLogFileManager.redact("password:\nPLAIN_NEXT_LINE")
+        XCTAssertEqual(foldedYaml, "password:\nPLAIN_NEXT_LINE", "separator must stay on one line")
+
+    }
+
+    /// SEC-3 announce policy (WP13-SEC-HARDEN-001 REVIEW-002): INTENTIONALLY
+    /// BROAD. ANY opaque [A-Za-z0-9_-]{9,} first segment before
+    /// /announce(.php)? is treated as a private-tracker passkey and redacted
+    /// BY DESIGN — digits and the leading character are irrelevant, because
+    /// numeric, underscore-led, dash-led, and plain-alphanumeric passkeys all
+    /// occur in the wild. Deliberate diagnostic-fidelity tradeoff: the HOST
+    /// and the announce suffix always survive, so tracker connectivity stays
+    /// diagnosable while no credential-shaped token reaches logs. The former
+    /// digit-heuristic survivor framing is gone; these are covered vectors.
+    func testAnnouncePolicyRedactsEveryOpaqueSegmentShapeByDesign() {
+        let redactedByDesign: [(input: String, expected: String)] = [
+            // Numeric-bearing alphanumeric segment (former heuristic match).
+            ("https://tracker.example.net/tracker-path2/announce",
+             "https://tracker.example.net/<redacted>/announce"),
+            // Underscore-led segment WITHOUT any digit.
+            ("https://tracker.example.net/_passkey_nodigit/announce",
+             "https://tracker.example.net/<redacted>/announce"),
+            // Dash-led segment WITHOUT any digit.
+            ("https://tracker.example.net/-PASSKEY-LED/announce",
+             "https://tracker.example.net/<redacted>/announce"),
+            // Plain lowercase alphanumeric segment WITHOUT any digit.
+            ("https://tracker.example.net/AbCdEfGhIj/announce",
+             "https://tracker.example.net/<redacted>/announce"),
+            // The former "false positive survivor" corpus vector: now a
+            // designed redaction under the intentionally broad policy.
+            ("http://t.example/tracker-path/announce",
+             "http://t.example/<redacted>/announce"),
+            // announce.php suffix variant.
+            ("https://t.example/0123456789/announce.php",
+             "https://t.example/<redacted>/announce.php"),
+        ]
+        for (input, expected) in redactedByDesign {
+            XCTAssertEqual(
+                RedactedLogFileManager.redact(input),
+                expected,
+                "opaque announce first segment must be redacted by design: \(input)"
+            )
+        }
+
+        // Survivors: no opaque ≥9-char first segment — host, short segments,
+        // and query material stay structurally intact.
+        let survivors = [
+            "http://t.example/announce?info_hash=abc",
+            "http://t.example/a/announce",
+            "https://t.example/announce.php",
+        ]
+        for input in survivors {
+            XCTAssertEqual(
+                RedactedLogFileManager.redact(input),
+                input,
+                "non-opaque announce URL must survive untouched: \(input)"
+            )
+        }
+    }
+
+    /// SEC-1(a): with an authenticated proxy configured, the persisted
+    /// `engine_settings` row (decoded through the existing store seam AND
+    /// scanned raw on disk across the forensic trio) contains no credential
+    /// material — only the presence marker.
+    func testPersistedSettingsRowContainsNoCredentialMaterialAtRest() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let secret = "RestSecretProxyPW_7f31"
+        let candidate = EngineSettings(
+            downloadDirectory: tempDir.path,
+            maxDownloadBytesPerSec: 1024,
+            maxUploadBytesPerSec: 2048,
+            listenPort: 49_100,
+            dhtEnabled: true,
+            lsdEnabled: false,
+            upnpEnabled: true,
+            natPmpEnabled: false,
+            encryptionEnabled: true,
+            proxy: ProxyConfiguration(
+                kind: .socks5,
+                host: "127.0.0.1",
+                port: 10_805,
+                username: "sec-user",
+                password: secret
+            )
+        )
+        try await store.persistSettings(candidate, revision: 3)
+
+        let persistedBytes = try await store.sessionValue(key: "engine_settings")
+        let rowText = String(decoding: persistedBytes?.data ?? Data(), as: UTF8.self)
+        XCTAssertFalse(rowText.contains(secret), "credential material found in engine_settings row: \(rowText)")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(persistedBytes?.data)) as? [String: Any])
+        XCTAssertEqual(row["hasProxyPassword"] as? Bool, true, "presence marker must record the withheld credential")
+        XCTAssertEqual(row["version"] as? Int, 1)
+        let projectedProxy = try XCTUnwrap(
+            ((row["settings"] as? [String: Any])?["proxy"]) as? [String: Any]
+        )
+        XCTAssertFalse(projectedProxy.keys.contains("password"), "projection must have no representation for the credential")
+        XCTAssertEqual(projectedProxy["username"] as? String, "sec-user")
+
+        // Raw at-rest scan: main database plus WAL/-shm sidecars.
+        let databaseURL = store.databaseURL
+        let walURL = await store.walURL
+        let shmURL = await store.shmURL
+        for url in [databaseURL, walURL, shmURL] where FileManager.default.fileExists(atPath: url.path) {
+            let bytes = try Data(contentsOf: url)
+            XCTAssertFalse(String(decoding: bytes, as: UTF8.self).range(of: secret) != nil,
+                           "credential bytes found at rest in \(url.lastPathComponent)")
+        }
+
+        // Loading reconstructs without the secret: present-but-withheld.
+        let loaded = try await store.loadSettings()
+        XCTAssertEqual(loaded?.revision, 3)
+        XCTAssertEqual(loaded?.settings.proxy.kind, .socks5)
+        XCTAssertEqual(loaded?.settings.proxy.host, "127.0.0.1")
+        XCTAssertEqual(loaded?.settings.proxy.port, 10_805)
+        XCTAssertEqual(loaded?.settings.proxy.username, "sec-user")
+        XCTAssertEqual(loaded?.settings.proxy.password, "")
+    }
+
+    /// SEC-1(b): boot restore reconstructs the configuration without the
+    /// credential, and an applySettings round trip restores full proxy
+    /// function while keeping the durable row credential-free.
+    func testBootRestoreStripsSecretThenApplyRoundTripRestoresProxyFunction() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let secret = "RoundTripProxyPW_99aa"
+        let candidate = EngineSettings(
+            downloadDirectory: tempDir.path,
+            maxDownloadBytesPerSec: 4096,
+            maxUploadBytesPerSec: 8192,
+            listenPort: 49_101,
+            dhtEnabled: false,
+            lsdEnabled: true,
+            upnpEnabled: false,
+            natPmpEnabled: true,
+            encryptionEnabled: false,
+            proxy: ProxyConfiguration(
+                kind: .http,
+                host: "proxy.internal",
+                port: 3128,
+                username: "rt-user",
+                password: secret
+            )
+        )
+        try await store.persistSettings(candidate, revision: 7)
+
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: bus,
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: tempDir.path)
+        )
+        await coordinator.restoreFromPersistence()
+
+        let fetchedReply = await coordinator.processCommandForTest(.fetchSettings(FetchSettingsRequest(requestID: RequestID())))
+        guard case .success(.settingsFetch(let fetched)) = fetchedReply else {
+            return XCTFail("settings fetch after restore failed: \(fetchedReply)")
+        }
+        XCTAssertEqual(fetched.revision, 7)
+        XCTAssertEqual(fetched.settings.proxy.kind, .http)
+        XCTAssertEqual(fetched.settings.proxy.host, "proxy.internal")
+        XCTAssertEqual(fetched.settings.proxy.port, 3128)
+        XCTAssertEqual(fetched.settings.proxy.username, "rt-user")
+        XCTAssertEqual(fetched.settings.proxy.password, "", "boot restore must not retain the credential value")
+
+        let applied = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: candidate,
+            expectedRevision: fetched.revision
+        )))
+        guard case .success(.settingsApply(let applyResult)) = applied else {
+            return XCTFail("apply round trip failed: \(applied)")
+        }
+        XCTAssertEqual(applyResult.revision, 8)
+
+        let applications = await engine.settingsApplications()
+        XCTAssertEqual(applications.last, candidate, "the live engine must receive the full configuration")
+
+        let repersisted = try await store.loadSettings()
+        XCTAssertEqual(repersisted?.revision, 8)
+        XCTAssertEqual(repersisted?.settings.proxy.password, "")
+        XCTAssertEqual(repersisted?.settings.proxy.host, "proxy.internal")
+
+        let persistedBytes = try await store.sessionValue(key: "engine_settings")
+        XCTAssertFalse(String(decoding: persistedBytes?.data ?? Data(), as: UTF8.self).contains(secret),
+                       "round trip re-persisted credential material")
+    }
+
+    /// SEC-1 credential delivery (WP13-SEC-HARDEN-001): an applySettings
+    /// carrying proxyPassword reaches the LIVE engine configuration and the
+    /// in-memory active settings, while every durable byte — the persisted
+    /// engine_settings row and the forensic trio (db + wal + shm) — stays
+    /// credential-free.
+    func testApplySettingsDeliversProxyPasswordToLiveEngineMemoryOnly() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let secret = "DeliverSecret_PW_5c1"
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: tempDir.path)
+        )
+        let candidate = EngineSettings(
+            downloadDirectory: tempDir.path,
+            maxDownloadBytesPerSec: 1024,
+            maxUploadBytesPerSec: 512,
+            listenPort: 49_102,
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: false,
+            natPmpEnabled: false,
+            encryptionEnabled: true,
+            proxy: ProxyConfiguration(kind: .socks5, host: "proxy.delivery", port: 10_806, username: "del-user")
+        )
+        XCTAssertNil(candidate.proxy.password)
+
+        let applied = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: candidate,
+            expectedRevision: nil,
+            proxyPassword: secret
+        )))
+        guard case .success(.settingsApply(let result)) = applied else {
+            return XCTFail("credential delivery apply failed: \(applied)")
+        }
+        XCTAssertEqual(result.revision, 2)
+
+        let applications = await engine.settingsApplications()
+        XCTAssertEqual(applications.last?.proxy.host, "proxy.delivery")
+        XCTAssertEqual(applications.last?.proxy.username, "del-user")
+        XCTAssertEqual(applications.last?.proxy.password, secret,
+                       "the live engine session must receive the delivered credential")
+
+        let fetchedReply = await coordinator.processCommandForTest(.fetchSettings(FetchSettingsRequest(requestID: RequestID())))
+        guard case .success(.settingsFetch(let fetched)) = fetchedReply else {
+            return XCTFail("settings fetch after delivery failed: \(fetchedReply)")
+        }
+        XCTAssertEqual(fetched.settings.proxy.password, secret,
+                       "activeSettings holds the delivered credential in memory only")
+
+        // No durable byte carries the secret: the row is the credential-free
+        // projection with the DELIVERED-configuration presence marker (F1
+        // marker invariant, REVIEW-002) and a raw scan of the forensic trio
+        // stays clean.
+        let rowPayload = try await store.sessionValue(key: "engine_settings")
+        let rowText = String(decoding: rowPayload?.data ?? Data(), as: UTF8.self)
+        XCTAssertFalse(rowText.contains(secret), "persisted row absorbed the delivered credential: \(rowText)")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(rowPayload?.data)) as? [String: Any])
+        XCTAssertEqual(row["hasProxyPassword"] as? Bool, true,
+                       "a delivered credential must persist marker=true with zero secret bytes")
+        let projectedProxy = try XCTUnwrap(((row["settings"] as? [String: Any])?["proxy"]) as? [String: Any])
+        XCTAssertFalse(projectedProxy.keys.contains("password"),
+                       "projection must have no representation for the credential")
+        for url in [store.databaseURL, await store.walURL, await store.shmURL]
+        where FileManager.default.fileExists(atPath: url.path) {
+            let bytes = try Data(contentsOf: url)
+            XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains(secret),
+                           "delivered credential bytes found at rest in \(url.lastPathComponent)")
+        }
+
+        // The redactor corpus covers the new wire field name too.
+        let redactedJSON = RedactedLogFileManager.redact("{"+"\"proxyPassword\":\"\(secret)\"}")
+        XCTAssertFalse(redactedJSON.contains(secret), "redactor leaked the delivered credential shape: \(redactedJSON)")
+    }
+
+    /// SEC-1 compatibility: applySettings WITHOUT the optional credential
+    /// keeps today's exact behavior — the engine receives the candidate
+    /// verbatim and no password appears anywhere.
+    func testApplySettingsWithoutProxyPasswordKeepsCandidateCredentialFree() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: tempDir.path)
+        )
+        let candidate = EngineSettings(
+            downloadDirectory: tempDir.path,
+            maxDownloadBytesPerSec: 256,
+            maxUploadBytesPerSec: 128,
+            listenPort: 49_103,
+            dhtEnabled: false,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: true,
+            encryptionEnabled: true,
+            proxy: ProxyConfiguration(kind: .http, host: "anon.proxy", port: 3128)
+        )
+
+        let applied = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: candidate,
+            expectedRevision: nil
+        )))
+        guard case .success(.settingsApply) = applied else {
+            return XCTFail("credential-free apply failed: \(applied)")
+        }
+
+        let applications = await engine.settingsApplications()
+        XCTAssertEqual(applications.last, candidate,
+                       "an apply without the credential must hand the engine the untouched candidate")
+        XCTAssertNil(applications.last?.proxy.password)
+
+        let persisted = try await store.loadSettings()
+        XCTAssertEqual(persisted?.settings, candidate)
+
+        // F1 marker invariant: an apply that delivered NO credential must
+        // persist marker=false — the live configuration is genuinely
+        // unauthenticated.
+        let rowPayload = try await store.sessionValue(key: "engine_settings")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(rowPayload?.data)) as? [String: Any])
+        XCTAssertEqual(row["hasProxyPassword"] as? Bool, false,
+                       "an apply without a delivered credential must persist marker=false")
+    }
+
+    /// SEC-1 boot transient (WP13-SEC-HARDEN-001): a marker-only disk restore
+    /// boots the authenticated proxy WITHOUT its credential (the withheld
+    /// empty value) until the first UI-driven apply re-supplies it; later
+    /// boots then carry the delivered memory-only credential.
+    func testBootRestoredAuthenticatedProxyBootsUnauthenticatedUntilFirstApply() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let secret = "BootTransient_PW_77e"
+        func configuredCandidate(password: String?) -> EngineSettings {
+            EngineSettings(
+                downloadDirectory: tempDir.path,
+                maxDownloadBytesPerSec: 2048,
+                maxUploadBytesPerSec: 1024,
+                listenPort: 49_104,
+                dhtEnabled: true,
+                lsdEnabled: false,
+                upnpEnabled: true,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .http, host: "proxy.boot", port: 3128, username: "boot-user", password: password)
+            )
+        }
+        try await store.persistSettings(configuredCandidate(password: secret), revision: 4)
+
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: tempDir.path)
+        )
+        await coordinator.restoreFromPersistence()
+
+        let bootRestart = await coordinator.processCommandForTest(.restartEngineSafely(
+            RestartEngineSafelyRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey())
+        ))
+        guard case .success(.ack) = bootRestart else {
+            return XCTFail("boot restart failed: \(bootRestart)")
+        }
+        var configurations = await engine.recordedConfigurations()
+        var booted = try XCTUnwrap(configurations.last, "restart must hand the engine a configuration")
+        XCTAssertEqual(booted?.proxy.username, "boot-user")
+        XCTAssertEqual(booted?.proxy.password, "",
+                       "boot from marker-only rows must run the authenticated proxy unauthenticated until the first apply")
+
+        let applied = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: configuredCandidate(password: nil),
+            expectedRevision: 4,
+            proxyPassword: secret
+        )))
+        guard case .success(.settingsApply) = applied else {
+            return XCTFail("post-boot credential delivery failed: \(applied)")
+        }
+        let applications = await engine.settingsApplications()
+        XCTAssertEqual(applications.last?.proxy.password, secret)
+
+        let postApplyRestart = await coordinator.processCommandForTest(.restartEngineSafely(
+            RestartEngineSafelyRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey())
+        ))
+        guard case .success(.ack) = postApplyRestart else {
+            return XCTFail("post-apply restart failed: \(postApplyRestart)")
+        }
+        configurations = await engine.recordedConfigurations()
+        booted = try XCTUnwrap(configurations.last)
+        XCTAssertEqual(booted?.proxy.password, secret,
+                       "after the delivery the memory-only credential must survive restarts")
+    }
+
+    /// F1 sentinel distinction (WP13-SEC-HARDEN-001 REVIEW-002): a
+    /// marker=true restore takes the WITHHELD path — "" until the first
+    /// apply re-supplies it, notice-worthy, then authenticated live state —
+    /// while a marker=false restore is genuinely unauthenticated (nil,
+    /// silent). The predicate behind the boot notice is asserted directly so
+    /// the two sentinel shapes can never collapse into one notice path again.
+    func testBootRestoreMarkerStatesDistinguishWithheldFromGenuinelyUnauthenticated() async throws {
+        let secret = "Sentinel_PW_41f"
+        func configuredCandidate(
+            host: String,
+            password: String?
+        ) -> EngineSettings {
+            EngineSettings(
+                downloadDirectory: tempDir.path,
+                maxDownloadBytesPerSec: 1024,
+                maxUploadBytesPerSec: 512,
+                listenPort: 49_105,
+                dhtEnabled: true,
+                lsdEnabled: false,
+                upnpEnabled: true,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .http, host: host, port: 3128, username: "sentinel-user", password: password)
+            )
+        }
+
+        // marker=true row: persisted by an apply that DELIVERED a credential.
+        let withheldDir = tempDir.appendingPathComponent("marker-true", isDirectory: true)
+        try FileManager.default.createDirectory(at: withheldDir, withIntermediateDirectories: true)
+        let withheldStore = PersistenceStore(dataDirectory: withheldDir)
+        _ = try await withheldStore.open()
+        try await withheldStore.persistSettings(configuredCandidate(host: "withheld.proxy", password: secret), revision: 5)
+
+        let withheldEngine = StubTransferEngine()
+        let withheldCoordinator = TransferCoordinator(
+            engine: withheldEngine,
+            persistence: withheldStore,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: withheldDir.path)
+        )
+        await withheldCoordinator.restoreFromPersistence()
+
+        let withheldFetch = await withheldCoordinator.processCommandForTest(
+            .fetchSettings(FetchSettingsRequest(requestID: RequestID()))
+        )
+        guard case .success(.settingsFetch(let withheld)) = withheldFetch else {
+            return XCTFail("marker-true fetch failed: \(withheldFetch)")
+        }
+        XCTAssertEqual(withheld.settings.proxy.password, "",
+                       "a marker-true boot must withhold the credential as empty, not nil")
+        XCTAssertTrue(
+            TransferCoordinator.shouldNoteUnauthenticatedProxyWindow(withheld.settings.proxy),
+            "the withheld sentinel must take the unauthenticated-window notice path"
+        )
+
+        let firstApply = await withheldCoordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: configuredCandidate(host: "withheld.proxy", password: nil),
+            expectedRevision: 5,
+            proxyPassword: secret
+        )))
+        guard case .success(.settingsApply) = firstApply else {
+            return XCTFail("re-supply apply failed: \(firstApply)")
+        }
+        let postApplyApplications = await withheldEngine.settingsApplications()
+        XCTAssertEqual(postApplyApplications.last?.proxy.password, secret,
+                       "the first post-boot apply must deliver the credential to the live engine")
+        let postApplyFetch = await withheldCoordinator.processCommandForTest(
+            .fetchSettings(FetchSettingsRequest(requestID: RequestID()))
+        )
+        guard case .success(.settingsFetch(let authenticated)) = postApplyFetch else {
+            return XCTFail("post-apply fetch failed: \(postApplyFetch)")
+        }
+        XCTAssertEqual(authenticated.settings.proxy.password, secret)
+        XCTAssertFalse(
+            TransferCoordinator.shouldNoteUnauthenticatedProxyWindow(authenticated.settings.proxy),
+            "an authenticated live configuration must never take the notice path"
+        )
+
+        // marker=false row: no credential was ever configured.
+        let silentDir = tempDir.appendingPathComponent("marker-false", isDirectory: true)
+        try FileManager.default.createDirectory(at: silentDir, withIntermediateDirectories: true)
+        let silentStore = PersistenceStore(dataDirectory: silentDir)
+        _ = try await silentStore.open()
+        try await silentStore.persistSettings(configuredCandidate(host: "silent.proxy", password: nil), revision: 2)
+
+        let silentCoordinator = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: silentStore,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: silentDir.path)
+        )
+        await silentCoordinator.restoreFromPersistence()
+
+        let silentFetch = await silentCoordinator.processCommandForTest(
+            .fetchSettings(FetchSettingsRequest(requestID: RequestID()))
+        )
+        guard case .success(.settingsFetch(let silent)) = silentFetch else {
+            return XCTFail("marker-false fetch failed: \(silentFetch)")
+        }
+        XCTAssertNil(silent.settings.proxy.password,
+                     "a marker-false boot restores nil — genuinely unauthenticated")
+        XCTAssertFalse(
+            TransferCoordinator.shouldNoteUnauthenticatedProxyWindow(silent.settings.proxy),
+            "the nil sentinel boots silently; only the withheld empty value notices"
+        )
+    }
+
+    /// F1-ROLLBACK-SENTINEL (WP13-SEC-HARDEN-001 REVIEW-003): a failed
+    /// apply on top of a marker=true boot must roll the durable row back to
+    /// the EXACT pre-apply at-rest semantics — marker=true with zero secret
+    /// bytes across db/-wal/-shm — so the next boot restores the withheld ""
+    /// sentinel instead of a silent nil while the Keychain secret survives.
+    func testFailedApplyRollbackRestoresWithheldMarkerTrueAndZeroSecretBytes() async throws {
+        let secret = "RollbackSentinel_PW_9d2"
+        func configuredCandidate(host: String, password: String?) -> EngineSettings {
+            EngineSettings(
+                downloadDirectory: tempDir.path,
+                maxDownloadBytesPerSec: 1024,
+                maxUploadBytesPerSec: 512,
+                listenPort: 49_106,
+                dhtEnabled: true,
+                lsdEnabled: false,
+                upnpEnabled: true,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .http, host: host, port: 3128, username: "rollback-user", password: password)
+            )
+        }
+
+        let withheldDir = tempDir.appendingPathComponent("rollback-marker-true", isDirectory: true)
+        try FileManager.default.createDirectory(at: withheldDir, withIntermediateDirectories: true)
+        let store = PersistenceStore(dataDirectory: withheldDir)
+        _ = try await store.open()
+        // Seed the marker=true row exactly the way a delivered apply leaves it.
+        try await store.persistSettings(configuredCandidate(host: "withheld.proxy", password: secret), revision: 5)
+
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: withheldDir.path)
+        )
+        await coordinator.restoreFromPersistence()
+
+        await engine.failNextSettingsApplication()
+        let failed = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: configuredCandidate(host: "withheld.proxy", password: nil),
+            expectedRevision: 5
+        )))
+        guard case .failure(let fault) = failed else {
+            return XCTFail("forced apply failure did not fail: \(failed)")
+        }
+        XCTAssertEqual(fault.code, .engineBusy, "the stub failure must surface as the typed busy fault")
+
+        let applications = await engine.settingsApplications()
+        XCTAssertEqual(applications.count, 1,
+                       "only the live-engine rollback may land: the failed delivery throws before recording")
+        XCTAssertEqual(applications.last?.proxy.password, "",
+                       "rollback must hand the engine back the withheld empty credential shape")
+
+        let rowPayload = try await store.sessionValue(key: "engine_settings")
+        let rowText = String(decoding: rowPayload?.data ?? Data(), as: UTF8.self)
+        XCTAssertFalse(rowText.contains(secret), "rollback row absorbed the credential: \(rowText)")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(rowPayload?.data)) as? [String: Any])
+        XCTAssertEqual(row["hasProxyPassword"] as? Bool, true,
+                       "failed-apply rollback must restore the pre-apply withheld marker=true")
+        for url in [store.databaseURL, await store.walURL, await store.shmURL]
+        where FileManager.default.fileExists(atPath: url.path) {
+            let bytes = try Data(contentsOf: url)
+            XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains(secret),
+                           "credential bytes found at rest in \(url.lastPathComponent)")
+        }
+        let restored = try await store.loadSettings()
+        XCTAssertEqual(restored?.revision, 5, "rollback must restore the pre-apply revision")
+        XCTAssertEqual(restored?.settings.proxy.password, "",
+                       "next boot must see the withheld empty sentinel again, not nil")
+    }
+
+    /// F1-ROLLBACK-SENTINEL counterpart: the genuinely-unauthenticated boot
+    /// (marker=false) must survive a failed apply unchanged — no phantom
+    /// presence marker may appear on rollback.
+    func testFailedApplyRollbackKeepsGenuinelyUnauthenticatedMarkerFalse() async throws {
+        func configuredCandidate(host: String, password: String?) -> EngineSettings {
+            EngineSettings(
+                downloadDirectory: tempDir.path,
+                maxDownloadBytesPerSec: 1024,
+                maxUploadBytesPerSec: 512,
+                listenPort: 49_107,
+                dhtEnabled: true,
+                lsdEnabled: false,
+                upnpEnabled: true,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .http, host: host, port: 3128, username: "silent-user", password: password)
+            )
+        }
+
+        let silentDir = tempDir.appendingPathComponent("rollback-marker-false", isDirectory: true)
+        try FileManager.default.createDirectory(at: silentDir, withIntermediateDirectories: true)
+        let store = PersistenceStore(dataDirectory: silentDir)
+        _ = try await store.open()
+        try await store.persistSettings(configuredCandidate(host: "silent.proxy", password: nil), revision: 2)
+
+        let engine = StubTransferEngine()
+        let coordinator = TransferCoordinator(
+            engine: engine,
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: silentDir.path)
+        )
+        await coordinator.restoreFromPersistence()
+
+        await engine.failNextSettingsApplication()
+        let failed = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            candidate: configuredCandidate(host: "silent.proxy", password: nil),
+            expectedRevision: 2
+        )))
+        guard case .failure(let fault) = failed else {
+            return XCTFail("forced apply failure did not fail: \(failed)")
+        }
+        XCTAssertEqual(fault.code, .engineBusy)
+
+        let rowPayload = try await store.sessionValue(key: "engine_settings")
+        let row = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(rowPayload?.data)) as? [String: Any])
+        XCTAssertEqual(row["hasProxyPassword"] as? Bool, false,
+                       "rollback must keep the genuinely-unauthenticated marker=false")
+        let restored = try await store.loadSettings()
+        XCTAssertEqual(restored?.revision, 2)
+        XCTAssertNil(restored?.settings.proxy.password,
+                     "a marker-false boot stays nil after rollback — no withheld sentinel invented")
+    }
+
+    /// SEC-1 plumbing: the internal SessionProxyDTO carries the credential
+    /// across the PIMPL JSON boundary under the exact "password" key the
+    /// ObjC++ adapter decodes, omits the key when no credential is held, and
+    /// tolerates envelopes written before the field existed.
+    func testSessionProxyDTOPlumbsPasswordAcrossBridgeJSONBoundary() throws {
+        let withCredential = SessionConfigurationDTO(proxy: SessionProxyDTO(
+            kind: "socks5", host: "proxy.bridge", port: 1080, username: "svc", password: "BridgePW_31"
+        ))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(withCredential)) as? [String: Any]
+        )
+        let proxyObject = try XCTUnwrap(object["proxy"] as? [String: Any])
+        XCTAssertEqual(proxyObject["password"] as? String, "BridgePW_31")
+
+        // Old bridge-facing envelope (pre-field encoder output = key absent)
+        // decodes with nil while every other proxy field survives.
+        var legacyObject = object
+        var legacyProxy = proxyObject
+        legacyProxy.removeValue(forKey: "password")
+        legacyObject["proxy"] = legacyProxy
+        let legacyDTO = try JSONDecoder().decode(
+            SessionConfigurationDTO.self,
+            from: JSONSerialization.data(withJSONObject: legacyObject)
+        )
+        XCTAssertNil(legacyDTO.proxy.password)
+        XCTAssertEqual(legacyDTO.proxy.username, "svc")
+        XCTAssertEqual(legacyDTO.proxy.host, "proxy.bridge")
+
+        // A nil credential encodes key-absent, so the segment handed to
+        // adapter.applyEngine(withConfigurationData:) stays old-shape.
+        let credentialFree = SessionConfigurationDTO(proxy: SessionProxyDTO(
+            kind: "http", host: "proxy.bridge", port: 1080, username: "svc"
+        ))
+        let freeObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(credentialFree)) as? [String: Any]
+        )
+        let freeProxy = try XCTUnwrap(freeObject["proxy"] as? [String: Any])
+        XCTAssertFalse(freeProxy.keys.contains("password"))
+    }
+
+    /// SEC-1(c)/SEC-1-LEGACY: legacy rows that DID carry credential material
+    /// are sanitized on load — typed legacy shape, tolerant dictionary, AND
+    /// missing-revision rows — and the very load that sanitizes them rewrites
+    /// the persisted row so a RAW scan of the forensic trio (main db + -wal +
+    /// -shm) finds zero credential bytes afterwards, with the sanitized
+    /// envelope in place.
+    func testLegacyPersistedSettingsWithCredentialAreSanitizedAndScrubbedAtRestOnLoad() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+
+        // Shared scrub proof: the active row decodes as the sanitized
+        // envelope (presence marker preserved, no credential value), and no
+        // file of the forensic trio contains the secret's bytes anymore.
+        func assertRowScrubbedAtRest(secret: String, username: String) async throws {
+            let payload = try await store.sessionValue(key: "engine_settings")
+            let row = try XCTUnwrap(payload)
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: row.data) as? [String: Any])
+            XCTAssertEqual(record["version"] as? Int, 1)
+            XCTAssertEqual(record["hasProxyPassword"] as? Bool, true, "presence marker must survive the scrub")
+            let projectedProxy = try XCTUnwrap(((record["settings"] as? [String: Any])?["proxy"]) as? [String: Any])
+            XCTAssertFalse(projectedProxy.keys.contains("password"), "projection must have no representation for the credential")
+            XCTAssertEqual(projectedProxy["username"] as? String, username)
+            let walURL = await store.walURL
+            let shmURL = await store.shmURL
+            for url in [store.databaseURL, walURL, shmURL]
+            where FileManager.default.fileExists(atPath: url.path) {
+                let bytes = try Data(contentsOf: url)
+                XCTAssertFalse(
+                    String(decoding: bytes, as: UTF8.self).contains(secret),
+                    "credential bytes found at rest in \(url.lastPathComponent)"
+                )
+            }
+        }
+
+        // Shape 1: pre-projection rows were verbatim EngineSettings JSON.
+        let legacyTyped = EngineSettings(
+            downloadDirectory: "/Users/legacy/Downloads",
+            maxDownloadBytesPerSec: 512,
+            maxUploadBytesPerSec: 256,
+            listenPort: 49_102,
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: true,
+            encryptionEnabled: true,
+            proxy: ProxyConfiguration(
+                kind: .socks5,
+                host: "legacy.proxy",
+                port: 1080,
+                username: "old-user",
+                password: "LegacyLeak_PW1"
+            )
+        )
+        try await store.setSessionValue(key: "engine_settings", data: try JSONEncoder().encode(legacyTyped))
+        try await store.setSessionValue(key: "engine_settings_revision", data: Data("12".utf8))
+        let sanitized = try await store.loadSettings()
+        XCTAssertEqual(sanitized?.revision, 12)
+        XCTAssertEqual(sanitized?.settings.downloadDirectory, "/Users/legacy/Downloads")
+        XCTAssertEqual(sanitized?.settings.listenPort, 49_102)
+        XCTAssertEqual(sanitized?.settings.proxy.kind, .socks5)
+        XCTAssertEqual(sanitized?.settings.proxy.host, "legacy.proxy")
+        XCTAssertEqual(sanitized?.settings.proxy.username, "old-user")
+        XCTAssertEqual(sanitized?.settings.proxy.password, "", "legacy credential must be withheld, not retained")
+        try await assertRowScrubbedAtRest(secret: "LegacyLeak_PW1", username: "old-user")
+
+        // Shape 2: damaged scalar forces the tolerant dictionary fallback;
+        // its proxy reconstruction must strip the credential too.
+        let tolerantShape: [String: Any] = [
+            "downloadDirectory": "/Users/legacy/Downloads",
+            "listenPort": "not-a-number",
+            "dhtEnabled": true,
+            "proxy": [
+                "kind": "http",
+                "host": "tolerant.proxy",
+                "port": 8080,
+                "username": "tolerant-user",
+                "password": "TolerantLeak_PW2",
+            ],
+        ]
+        let tolerantData = try JSONSerialization.data(withJSONObject: tolerantShape)
+        try await store.setSessionValue(key: "engine_settings", data: tolerantData)
+        try await store.setSessionValue(key: "engine_settings_revision", data: Data("13".utf8))
+        let tolerantLoaded = try await store.loadSettings()
+        XCTAssertEqual(tolerantLoaded?.revision, 13)
+        XCTAssertEqual(tolerantLoaded?.settings.downloadDirectory, "/Users/legacy/Downloads")
+        XCTAssertEqual(tolerantLoaded?.settings.proxy.kind, .http)
+        XCTAssertEqual(tolerantLoaded?.settings.proxy.host, "tolerant.proxy")
+        XCTAssertEqual(tolerantLoaded?.settings.proxy.port, 8080)
+        XCTAssertEqual(tolerantLoaded?.settings.proxy.password, "", "tolerant decode must not retain the credential")
+        try await assertRowScrubbedAtRest(secret: "TolerantLeak_PW2", username: "tolerant-user")
+
+        // Shape 3: settings row WITHOUT its revision companion. The load
+        // keeps the historical nil restore result but must still scrub the
+        // credential bytes at rest (SEC-1-LEGACY).
+        try await store.setSessionValue(key: "engine_settings", data: try JSONEncoder().encode(legacyTyped))
+        try await store.removeSessionValue(key: "engine_settings_revision")
+        let missingRevision = try await store.loadSettings()
+        XCTAssertNil(missingRevision, "missing-revision row keeps the historical nil restore result")
+        try await assertRowScrubbedAtRest(secret: "LegacyLeak_PW1", username: "old-user")
+    }
+
+    /// SEC-5: the payload size gate runs before any typed decoding. An
+    /// oversized-but-parseable request envelope is rejected with the
+    /// correlated requestID; an oversized undecodable blob is rejected with no
+    /// correlation. Neither pays a full envelope/command decode.
+    func testProcessCommandEnforcesSizeLimitBeforeDecoding() async throws {
+        let store = PersistenceStore(dataDirectory: tempDir)
+        _ = try await store.open()
+        let coordinator = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: tempDir.path)
+        )
+
+        // Oversized yet structurally parseable envelope: correlate the ID.
+        let requestID = RequestID()
+        let envelopeData = try JSONEncoder().encode(IPCEnvelope.request(
+            .fetchSettings(FetchSettingsRequest(requestID: requestID))
+        ))
+        var padded = String(decoding: envelopeData, as: UTF8.self)
+        // Pad INSIDE the TOP-LEVEL object (before its closing brace; the
+        // encoded envelope always ends with the root "}"). JSONDecoder ignores
+        // unknown keys, so this stays a valid envelope while exceeding the
+        // size gate.
+        padded.insert(contentsOf: ",\"padding\":\"\(String(repeating: "A", count: IPCPayloadLimit.maxBytes))\"", at: padded.index(before: padded.endIndex))
+        let paddedData = Data(padded.utf8)
+        XCTAssertGreaterThan(paddedData.count, IPCPayloadLimit.maxBytes)
+
+        let correlatedReply = await coordinator.processCommand(paddedData)
+        let correlatedEnvelope = try JSONDecoder().decode(IPCEnvelope.self, from: correlatedReply)
+        guard case .failure(let oversizedFault) = correlatedEnvelope.result else {
+            return XCTFail("expected oversized failure result")
+        }
+        XCTAssertEqual(oversizedFault.code, .oversizedPayload)
+        XCTAssertEqual(correlatedEnvelope.requestID, requestID, "oversized reply must keep requestID correlation when parseable")
+
+        // Oversized garbage: rejected with the typed fault and no meaningful
+        // correlation. Baseline wire behavior stands — result envelopes always
+        // carry some requestID (a fresh one when none can be recovered) and no
+        // command is decoded or dispatched.
+        let garbage = Data(repeating: 0x7B, count: IPCPayloadLimit.maxBytes + 1)
+        let garbageReply = await coordinator.processCommand(garbage)
+        let garbageEnvelope = try JSONDecoder().decode(IPCEnvelope.self, from: garbageReply)
+        guard case .failure(let garbageFault) = garbageEnvelope.result else {
+            return XCTFail("expected oversized failure for garbage payload")
+        }
+        XCTAssertEqual(garbageFault.code, .oversizedPayload)
+        XCTAssertNotEqual(garbageEnvelope.requestID?.rawValue, requestID.rawValue)
     }
 
     func testDiagnosticExportRejectsDestinationContainingPreExistingFiles() async throws {
@@ -586,8 +1552,13 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
             encryptionEnabled: false,
             proxy: ProxyConfiguration(kind: .socks5, host: "10.0.0.7", port: 1080, username: "svc-account", password: hostilePassword)
         )
+        // The delivered wire credential (SEC-1) is a second hostile vector:
+        // the export projection must exclude it exactly like the in-candidate
+        // one.
+        let deliveredPassword = "DELIVERED_PW_LEAK_9f2"
         let applied = await coordinator.processCommandForTest(.applySettings(ApplySettingsRequest(
-            requestID: RequestID(), idempotencyKey: IdempotencyKey(), candidate: hostileSettings
+            requestID: RequestID(), idempotencyKey: IdempotencyKey(), candidate: hostileSettings,
+            proxyPassword: deliveredPassword
         )))
         guard case .success(.settingsApply) = applied else {
             return XCTFail("hostile-password settings apply failed: \(applied)")
@@ -618,7 +1589,7 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
 
         for fileName in ["system_info.json", "health_metrics.json", "engine_settings.json", "recent_logs.txt", "persistence_status.json"] {
             let content = try String(contentsOf: bundleURL.appendingPathComponent(fileName), encoding: .utf8)
-            for leak in ["QUOTE_LEAK", "BS_LEAK", "NL_LEAK", "LEAK_PW", "NL_PWLEAK"] {
+            for leak in ["QUOTE_LEAK", "BS_LEAK", "NL_LEAK", "LEAK_PW", "NL_PWLEAK", "DELIVERED_PW_LEAK_9f2"] {
                 XCTAssertFalse(content.contains(leak), "\(leak) leaked in \(fileName)")
             }
         }

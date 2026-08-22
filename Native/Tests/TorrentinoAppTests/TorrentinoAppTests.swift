@@ -364,6 +364,165 @@ final class TorrentinoAppTests: TestProfileCase {
         XCTAssertNil(loaded)
     }
 
+    // MARK: - SEC-1 Credential Delivery (WP13-SEC-HARDEN-001)
+
+    /// The single delivery rule every UI apply path must use: a
+    /// non-anonymous proxy kind with a held password ships it on
+    /// ApplySettingsRequest.proxyPassword; anything else delivers nil.
+    func testProxyPasswordDeliveryRule() {
+        XCTAssertEqual(
+            ApplySettingsRequest.proxyPasswordForDelivery(kind: .socks5, entered: "kc_secret_1"),
+            "kc_secret_1"
+        )
+        XCTAssertEqual(
+            ApplySettingsRequest.proxyPasswordForDelivery(kind: .http, entered: "kc_secret_2"),
+            "kc_secret_2"
+        )
+        XCTAssertNil(
+            ApplySettingsRequest.proxyPasswordForDelivery(kind: .none, entered: "kc_secret_3"),
+            "an anonymously authenticating proxy kind must not ship a credential"
+        )
+        XCTAssertNil(
+            ApplySettingsRequest.proxyPasswordForDelivery(kind: .socks5, entered: ""),
+            "no held credential means nothing is delivered"
+        )
+        XCTAssertNil(ApplySettingsRequest.proxyPasswordForDelivery(kind: .none, entered: ""))
+    }
+
+    /// Spying send closure recorder: captures every command the seam sends.
+    private actor RequestSpy {
+        private(set) var commands: [EngineCommandV1] = []
+        func record(_ command: EngineCommandV1) { commands.append(command) }
+    }
+
+    private static func makeFormInput(
+        kind: ProxyConfiguration.Kind,
+        password: String
+    ) -> SettingsApplyFlow.FormInput {
+        SettingsApplyFlow.FormInput(
+            downloadDir: "~/Downloads",
+            maxDownKB: "0",
+            maxUpKB: "0",
+            listenPort: "6881",
+            dhtEnabled: true,
+            lsdEnabled: true,
+            upnpEnabled: true,
+            natPmpEnabled: true,
+            encryptionEnabled: true,
+            proxyKind: kind,
+            proxyHost: "proxy.local",
+            proxyPort: "1080",
+            proxyUsername: "app-user",
+            proxyPassword: password
+        )
+    }
+
+    /// TEST-HONESTY-UI-CHAIN (WP13-SEC-HARDEN-001 REVIEW-002): this drives
+    /// the SAME application-level functions the REAL SettingsView.applySettings
+    /// delegates to — no mirrored request building. A REAL KeychainStore seeds
+    /// the form state and a spying send closure captures the actual outgoing
+    /// ApplySettingsRequest. Mutation honesty: removing the Keychain
+    /// attachment anywhere on that path (e.g. passing nil instead of
+    /// proxyPasswordForDelivery(kind:entered:)) makes `outgoing.proxyPassword`
+    /// nil while the Keychain holds a credential — every captured-request
+    /// assertion below fails. Two-leg composition: this leg proves the UI→IPC
+    /// chain; the captured request SHAPE (optional delivery field present,
+    /// candidate.proxy password-free) is what the live bridge harness leg
+    /// (`scripts/test_bridge_swift.sh` through libtorrent 2.1.1) exercises
+    /// across the engine boundary.
+    func testApplyFlowDeliversKeychainPasswordThroughCapturedRequest() async throws {
+        _ = await KeychainStore.deleteProxyPassword()
+        let keychainPassword = "keychain_delivered_pw_41"
+        let saved = await KeychainStore.saveProxyPassword(keychainPassword)
+        XCTAssertTrue(saved)
+        defer { Task { _ = await KeychainStore.deleteProxyPassword() } }
+
+        // loadCurrentSettings() seeds the form state from the REAL Keychain…
+        let loadedFormPassword = await KeychainStore.loadProxyPassword()
+        let formPassword = try XCTUnwrap(loadedFormPassword)
+        XCTAssertEqual(formPassword, keychainPassword)
+
+        // …and applySettings moves that value through the shared seam only.
+        let request = try XCTUnwrap(
+            SettingsApplyFlow.makeRequest(
+                from: Self.makeFormInput(kind: .socks5, password: formPassword),
+                expectedRevision: 8
+            ).get()
+        )
+        XCTAssertNil(request.candidate.proxy.password,
+                     "the durable candidate must stay credential-free")
+
+        let spy = RequestSpy()
+        let outcome = await SettingsApplyFlow.apply(request) { command in
+            await spy.record(command)
+            return .settingsApply(SettingsApplyResult(revision: 9))
+        }
+        guard case .applied(let revision, let credentialsSaved) = outcome else {
+            return XCTFail("seam apply failed: \(outcome)")
+        }
+        XCTAssertEqual(revision, 9)
+        XCTAssertTrue(credentialsSaved, "post-acceptance Keychain commit must succeed")
+
+        let captured = await spy.commands
+        XCTAssertEqual(captured.count, 1)
+        guard case .applySettings(let outgoing) = captured[0] else {
+            return XCTFail("unexpected captured command: \(captured[0])")
+        }
+        // THE chain proof: the actual outgoing request carries the Keychain
+        // credential via the single delivery rule.
+        XCTAssertEqual(outgoing.proxyPassword, keychainPassword)
+        XCTAssertEqual(
+            outgoing.proxyPassword,
+            ApplySettingsRequest.proxyPasswordForDelivery(kind: .socks5, entered: formPassword)
+        )
+        XCTAssertNil(outgoing.candidate.proxy.password)
+        let encoded = try JSONEncoder().encode(outgoing)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["proxyPassword"] as? String, keychainPassword)
+        let candidateObject = try XCTUnwrap(object["candidate"] as? [String: Any])
+        let proxyObject = try XCTUnwrap(candidateObject["proxy"] as? [String: Any])
+        XCTAssertFalse(proxyObject.keys.contains("password"),
+                       "the wire candidate must carry no credential representation")
+
+        // The real Keychain still holds the committed credential afterwards.
+        let committedPassword = await KeychainStore.loadProxyPassword()
+        XCTAssertEqual(committedPassword, keychainPassword)
+    }
+
+    /// Failure path of the same seam: a rejected apply must preserve the
+    /// prior Keychain state exactly — no commit, no delete.
+    func testApplyFlowFailurePreservesPriorKeychainState() async throws {
+        _ = await KeychainStore.deleteProxyPassword()
+        let priorPassword = "prior_state_pw_77"
+        let saved = await KeychainStore.saveProxyPassword(priorPassword)
+        XCTAssertTrue(saved)
+        defer { Task { _ = await KeychainStore.deleteProxyPassword() } }
+
+        let loadedFormPassword = await KeychainStore.loadProxyPassword()
+        let formPassword = try XCTUnwrap(loadedFormPassword)
+        let request = try XCTUnwrap(
+            SettingsApplyFlow.makeRequest(
+                from: Self.makeFormInput(kind: .http, password: formPassword),
+                expectedRevision: 3
+            ).get()
+        )
+
+        struct SendRejected: Error {}
+        let spy = RequestSpy()
+        let outcome = await SettingsApplyFlow.apply(request) { command in
+            await spy.record(command)
+            throw SendRejected()
+        }
+        guard case .failed = outcome else {
+            return XCTFail("expected failure outcome, got \(outcome)")
+        }
+        let captured = await spy.commands
+        XCTAssertEqual(captured.count, 1, "the rejected attempt must be the only traffic")
+        let preservedPassword = await KeychainStore.loadProxyPassword()
+        XCTAssertEqual(preservedPassword, priorPassword,
+                       "a failed apply must not touch the prior Keychain state")
+    }
+
     func testSettingsTransactionValidation() {
         let invalidCandidate = EngineSettings(
             downloadDirectory: "~/Downloads",

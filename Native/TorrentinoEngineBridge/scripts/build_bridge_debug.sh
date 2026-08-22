@@ -4,7 +4,11 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 BRIDGE="Native/TorrentinoEngineBridge"
 PREFIX="Native/ThirdParty/.build/prefix"
-LT="${PREFIX}/libtorrent-2.1.0-release"
+# Single source of truth for the libtorrent pin (SEC-2 partial-pin fix):
+# always link the release prefix of the versions.lock DEFAULT version.
+# shellcheck source=../../ThirdParty/versions.lock
+source "Native/ThirdParty/versions.lock"
+LT="${PREFIX}/libtorrent-${LT_DEFAULT_VERSION}-release"
 BOOST="${PREFIX}/boost-1.91.0"
 OPENSSL="${PREFIX}/openssl-3.5.7"
 OUT="$1"

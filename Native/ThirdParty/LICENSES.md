@@ -11,11 +11,11 @@ release SBOM are produced from this file in a later WP.
 
 | Component | Version | License | SPDX | Linkage | Attribution required |
 |---|---|---|---|---|---|
-| libtorrent (rasterbar) | 2.1.0 | BSD 3-Clause | `BSD-3-Clause` | static | yes — copyright + disclaimer |
+| libtorrent (rasterbar) | 2.1.1 (fallback pin 2.0.14) | BSD 3-Clause | `BSD-3-Clause` | static | yes — copyright + disclaimer |
 | Boost | 1.91.0 | Boost Software License 1.0 | `BSL-1.0` | headers only | no for binaries, yes for source redistribution |
 | OpenSSL (libssl, libcrypto) | 3.5.7 | Apache License 2.0 | `Apache-2.0` | static | yes — license text + NOTICE |
-| ed25519 (bundled in libtorrent `src/ed25519`) | as shipped in libtorrent 2.1.0 | public domain + zlib-style grant | `Zlib` | static, via libtorrent | courtesy attribution |
-| try_signal (bundled in libtorrent `deps/try_signal`) | as shipped in libtorrent 2.1.0 | BSD 3-Clause | `BSD-3-Clause` | static, via libtorrent | yes |
+| ed25519 (bundled in libtorrent `src/ed25519`) | as shipped in libtorrent 2.1.1 / 2.0.14 | public domain + zlib-style grant | `Zlib` | static, via libtorrent | courtesy attribution |
+| try_signal (bundled in libtorrent `deps/try_signal`) | as shipped in libtorrent 2.1.1 / 2.0.14 | BSD 3-Clause | `BSD-3-Clause` | static, via libtorrent | yes |
 
 All of these are permissive. None is copyleft, so static linking imposes no
 source-disclosure obligation on Torrentino.

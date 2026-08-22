@@ -5,38 +5,44 @@ live in [`../versions.lock`](../versions.lock); `build.sh` refuses to build
 anything whose SHA-256 does not match them.
 
 Verified on: macOS 26.5 (25F84), Apple M-series (arm64), Xcode 26.6
-(Apple clang 21.0.0), CMake 4.4.0, 2026-08-01.
+(Apple clang 21.0.0), CMake 4.4.0, 2026-08-01. Pins refreshed to the
+2026-08-10 hardening releases under SEC-2 (WP-13) and rebuilt 2026-08-22
+(Xcode 26.6 / Apple clang 21.0.0 clang-2100.1.1.101, CMake 4.4.2, SDK 26.5 —
+see `.build/manifest-*.json`).
 
 ## 1. Engine — libtorrent
 
 | Field | Primary | Fallback candidate |
 |---|---|---|
-| Version | **2.1.0** | 2.0.13 |
-| Tag | `v2.1.0` | `v2.0.13` |
-| Commit | `578e06824c3546f3371ab43967ab288a7e253eca` | `7d7fc38fac61177fa5e02148f791b2f65250b09d` |
-| Released | 2026-07-09 | 2026-06-08 |
+| Version | **2.1.1** | 2.0.14 |
+| Tag | `v2.1.1` | `v2.0.14` |
+| Commit | `56ae8caba38bf154ffc210403cb23f91d0ecaa49` | `aab2a10e2f60d9eac78e885a696736d043527794` |
+| Released | 2026-08-10 | 2026-08-10 |
 | Branch | `RC_2_1` | `RC_2_0` (maintenance) |
-| Archive | `libtorrent-rasterbar-2.1.0.tar.gz` | `libtorrent-rasterbar-2.0.13.tar.gz` |
-| SHA-256 | `ceed657606b8df453ec5e775326e3c759a2779e1202fa04abe42ed262e7bf0b6` | `892cb75c06318e2420de0faf9f63a908069d3d237676e2459fd30abe0cb3b1bf` |
+| Archive | `libtorrent-rasterbar-2.1.1.tar.gz` | `libtorrent-rasterbar-2.0.14.tar.gz` |
+| SHA-256 | `0f163516ecef2e3331500266751de3098835a3c3ae0c2290448046c632bc0e93` | `1b0b21b9755b5fbec23ca9ba2d2d10434ecb6711c39f37f5fc9d5aa25cf369c9` |
 | License | BSD-3-Clause | BSD-3-Clause |
 | Source | <https://github.com/arvidn/libtorrent/releases> | same |
 
 Hashes were cross-checked against the `digest` field GitHub publishes for the
 release assets, not only computed locally.
 
-**Why 2.1.0 is the primary.** It is the newest stable 2.x release and the branch
-upstream develops on. **Why 2.0.13 stays pinned.** It is the maintenance branch
+**Why 2.1.1 is the primary.** It is the newest stable 2.x release and the branch
+upstream develops on. **Why 2.0.14 stays pinned.** It is the maintenance branch
 most other clients ship; the harness builds and passes against both, so a
 regression in 2.1.x can be answered by flipping `LT_DEFAULT_VERSION` instead of
-by an emergency port. Both were validated in this WP — see §6.
+by an emergency port. **SEC-2 (WP-13).** Both pins were moved up one release
+(2.1.0→2.1.1, 2.0.13→2.0.14) to pick up upstream's un-CVE'd memory-safety
+hardening (DHT canonical-string salt limit, i2p SAM stack buffer, merkle tree
+validation); same hardening delta on both branches.
 
-Bakeoff result (same harness, same machine):
+Bakeoff result (same harness, same machine; sizes below are the shipped
+static archives of the refreshed prefixes):
 
-| | 2.1.0 | 2.0.13 |
+| | 2.1.1 | 2.0.14 |
 |---|---|---|
 | Builds arm64 static | yes | yes |
-| 11/11 scenarios | pass | pass |
-| `libtorrent-rasterbar.a` | 17 107 520 B | 15 959 336 B |
+| `libtorrent-rasterbar.a` | 17 112 744 B | 15 971 200 B |
 | API delta handled | `create_torrent(std::vector<create_file_entry>)` | `create_torrent(file_storage&)` |
 
 The only version-dependent code in the whole harness is guarded by
@@ -118,26 +124,23 @@ Feature flags chosen for v1 and the reason each one is set:
 | `CMAKE_IGNORE_PREFIX_PATH` | `/opt/homebrew;/usr/local` | hard guard against picking up a system Boost/OpenSSL |
 | `CMAKE_POLICY_DEFAULT_CMP0167` | OLD | keeps the `FindBoost` module, which supports our header-only Boost layout |
 
-## 6. Verification evidence (2026-08-01)
+## 6. Verification evidence
 
-```
-$ bash Native/ThirdParty/libtorrent/build.sh --flavor release
-==> verified libtorrent-rasterbar-2.1.0.tar.gz (sha256 ceed6576…)
-    libtorrent-2.1.0-release/lib/libtorrent-rasterbar.a
-      file : current ar archive
-      lipo : arm64
-      minos: 13.0 (expected 13.0)
-==> artifact verification passed
+WP-01 original bakeoff (2026-08-01, pins 2.1.0/2.0.13): 11/11 harness
+scenarios on both, ASan+UBSan flavor of the 2.1.x build with zero sanitizer
+reports; harness `otool -L` showed only system frameworks/libc++/libSystem
+(no /opt/homebrew, no /usr/local, no rpath).
 
-$ otool -L .../harness-2.1.0-release/torrentino-harness
-    /System/Library/Frameworks/CoreFoundation.framework/…/CoreFoundation
-    /System/Library/Frameworks/SystemConfiguration.framework/…/SystemConfiguration
-    /usr/lib/libc++.1.dylib
-    /usr/lib/libSystem.B.dylib          # no /opt/homebrew, no /usr/local, no rpath
-```
-
-Both `2.1.0` and `2.0.13` produced 11/11 passing scenarios; the ASan+UBSan
-flavor of 2.1.0 ran the same suite with zero sanitizer reports.
+SEC-2 pin refresh (2026-08-22, pins 2.1.1/2.0.14): both release prefixes were
+rebuilt clean from lock-verified archives —
+`bash Native/ThirdParty/libtorrent/build.sh --flavor release` verified
+`libtorrent-rasterbar-2.1.1.tar.gz` (sha256 `0f163516…`) and
+`libtorrent-rasterbar-2.0.14.tar.gz` (sha256 `1b0b21b9…`) against
+`versions.lock` before compiling (a mismatch is a hard failure), passed the
+arm64/min-os artifact verification, and recorded
+`.build/manifest-2.1.1-release.json` / `.build/manifest-2.0.14-release.json`.
+Per §8, a refreshed pin adoption re-runs the harness scenario suites before
+release sign-off.
 
 ## 7. Upstream sharp edges found during the bakeoff
 

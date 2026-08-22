@@ -229,7 +229,10 @@ public actor EngineCoordinator {
                 kind: settings.proxy.kind.rawValue,
                 host: settings.proxy.host,
                 port: settings.proxy.port,
-                username: settings.proxy.username
+                username: settings.proxy.username,
+                // SEC-1 memory-only credential: forwarded across the PIMPL
+                // boundary into the libtorrent pack; never persisted.
+                password: settings.proxy.password
             )
         )
     }

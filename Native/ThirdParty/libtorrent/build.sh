@@ -12,7 +12,7 @@
 #          Native/ThirdParty/versions.lock.
 #
 # Usage: bash Native/ThirdParty/libtorrent/build.sh [options]
-#   --lt-version <2.1.0|2.0.13>   libtorrent release to build (default: lock)
+#   --lt-version <2.1.1|2.0.14>   libtorrent release to build (default: lock)
 #   --flavor <release|asan>       release, or ASan+UBSan instrumented build
 #   --jobs <N>                    parallel build jobs (default: all cores)
 #   --deps-only                   build Boost/OpenSSL only

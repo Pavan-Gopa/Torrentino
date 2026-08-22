@@ -10,7 +10,8 @@
 #
 # Usage: bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh [options]
 #   --flavor <release|asan>      match a built third-party flavor (default release)
-#   --lt-version <2.1.0|2.0.13>  libtorrent release to link against
+#   --lt-version <pinned>        libtorrent release to link against; must be
+#                                in LT_SUPPORTED_VERSIONS of versions.lock
 #   --timeout <seconds>          wall-clock timeout for the whole run
 #
 set -euo pipefail
@@ -35,6 +36,12 @@ while [[ $# -gt 0 ]]; do
 		*) echo "error: unknown option '$1'" >&2; exit 2 ;;
 	esac
 done
+# SEC-2 partial-pin closure (WP13-SEC-HARDEN-001 REVIEW-002): fail closed on
+# removed pins instead of resolving a stale/absent prefix.
+case " ${LT_SUPPORTED_VERSIONS} " in
+	*" ${LT_VERSION} "*) ;;
+	*) echo "error: libtorrent ${LT_VERSION} is not pinned in versions.lock (supported: ${LT_SUPPORTED_VERSIONS})" >&2; exit 2 ;;
+esac
 
 PREFIX_ROOT="${THIRD_PARTY_DIR}/.build/prefix"
 LT_PREFIX="${PREFIX_ROOT}/libtorrent-${LT_VERSION}-${FLAVOR}"

@@ -8,7 +8,7 @@ Authoritative Software Bill of Materials (SBOM) and security review for **Torren
 
 | Component | Version / Tag | Git Commit | License | Distribution Model | SHA-256 Digest |
 |---|---|---|---|---|---|
-| **libtorrent (rasterbar)** | `2.1.0` (`v2.1.0`) | `578e06824c3546f3371ab43967ab288a7e253eca` | BSD-3-Clause | Static (`libtorrent-rasterbar.a`) | `ceed657606b8df453ec5e775326e3c759a2779e1202fa04abe42ed262e7bf0b6` |
+| **libtorrent (rasterbar)** | `2.1.1` (`v2.1.1`) | `56ae8caba38bf154ffc210403cb23f91d0ecaa49` | BSD-3-Clause | Static (`libtorrent-rasterbar.a`) | `0f163516ecef2e3331500266751de3098835a3c3ae0c2290448046c632bc0e93` |
 | **OpenSSL** | `3.5.7` (`openssl-3.5.7`) | release tag | Apache-2.0 | Static (`libssl.a`, `libcrypto.a`) | `a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8` |
 | **Boost** | `1.91.0` | `1a80576db6b70828803819fb6925132193bc5d0e` | BSL-1.0 | Header-only (`boost/`) | `de5e6b0e4913395c6bdfa90537febd9028ea4c0735d2cdb0cd9b45d5f51264f5` |
 | **ed25519** | bundled in libtorrent | upstream | Zlib / Public Domain | Static | via libtorrent |
@@ -21,10 +21,14 @@ Authoritative Software Bill of Materials (SBOM) and security review for **Torren
 
 ## 2. CVE & Vulnerability Review (WP-13)
 
-- **libtorrent 2.1.0:**
+- **libtorrent 2.1.1** (SEC-2 refresh from 2.1.0; fallback pin 2.0.14):
   - Audited against NVD and GitHub Advisory Database for libtorrent-rasterbar.
-  - Critical/High Relevant CVEs: **0 found**.
-  - Historical issues related to UPnP/NAT-PMP packet handling in older 1.x releases do not affect the 2.1.0 release.
+  - Critical/High Relevant CVEs: **0 found** (upstream publishes no advisories).
+  - The 2026-08-10 hardening releases (2.1.1/2.0.14) fix compiled-in
+    memory-safety paths relevant to this build (DHT salt limit, i2p SAM stack
+    buffer, merkle tree validation); the pins were moved to them under SEC-2.
+  - Historical issues related to UPnP/NAT-PMP packet handling in older 1.x
+    releases do not affect the 2.1.x release line.
 - **OpenSSL 3.5.7:**
   - Audited against OpenSSL Vulnerabilities database (LTS branch 3.5.x, supported until April 2030).
   - OpenSSL configured with `no-shared no-legacy no-apps no-docs no-tests`.

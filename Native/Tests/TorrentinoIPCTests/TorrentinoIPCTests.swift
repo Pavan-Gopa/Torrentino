@@ -284,6 +284,71 @@ final class TorrentinoIPCTests: TestProfileCase {
         XCTAssertEqual(decoded.requestID, command.requestID)
     }
 
+    /// SEC-1 credential delivery (WP13-SEC-HARDEN-001): applySettings
+    /// .proxyPassword is an additive, optional wire field — old-shape
+    /// payloads without the key decode with nil, new payloads carry the
+    /// credential only when set, wrong types fail closed, and the schema
+    /// enumeration entry stays credential-free.
+    func testApplySettingsProxyPasswordIsAdditiveAndOptionalOnTheWire() throws {
+        let requestID = RequestID()
+        let idempotencyKey = IdempotencyKey()
+
+        // New-shape encode: the key exists only when a credential is set.
+        let delivering = ApplySettingsRequest(
+            requestID: requestID,
+            idempotencyKey: idempotencyKey,
+            candidate: .default,
+            expectedRevision: 3,
+            proxyPassword: "wire_secret_probe"
+        )
+        let deliveringObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(delivering)) as? [String: Any]
+        )
+        XCTAssertEqual(deliveringObject["proxyPassword"] as? String, "wire_secret_probe")
+
+        // Old-shape payload (pre-field encoder output = key absent) decodes
+        // with nil on the current decoder.
+        var oldShape = deliveringObject
+        oldShape.removeValue(forKey: "proxyPassword")
+        let oldShapeData = try JSONSerialization.data(withJSONObject: oldShape)
+        let oldDecoded = try JSONDecoder().decode(ApplySettingsRequest.self, from: oldShapeData)
+        XCTAssertNil(oldDecoded.proxyPassword)
+        XCTAssertEqual(oldDecoded.expectedRevision, 3)
+
+        // Nil delivery encodes key-absent, so current senders stay old-shape
+        // compatible for receivers that never learn the field.
+        let credentialFree = ApplySettingsRequest(
+            requestID: requestID, idempotencyKey: idempotencyKey, candidate: .default
+        )
+        let credentialFreeObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(credentialFree)) as? [String: Any]
+        )
+        XCTAssertFalse(credentialFreeObject.keys.contains("proxyPassword"))
+
+        // A wrong-typed field fails closed instead of decoding loosely.
+        var hostile = oldShape
+        hostile["proxyPassword"] = 42
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ApplySettingsRequest.self, from: JSONSerialization.data(withJSONObject: hostile)),
+            "non-string proxyPassword must fail decoding"
+        )
+
+        // The real transport path: envelope round trip preserves the field.
+        let envelope = IPCEnvelope.request(.applySettings(delivering))
+        XCTAssertNil(envelope.validate())
+        let decoded = try JSONDecoder().decode(IPCEnvelope.self, from: JSONEncoder().encode(envelope))
+        guard case .applySettings(let decodedPayload) = try XCTUnwrap(decoded.command) else {
+            return XCTFail("envelope round trip lost the applySettings case")
+        }
+        XCTAssertEqual(decodedPayload.proxyPassword, "wire_secret_probe")
+
+        // Schema enumeration's minimal payload entry stays credential-free.
+        for command in EngineCommandV1.allCases {
+            guard case .applySettings(let minimal) = command else { continue }
+            XCTAssertNil(minimal.proxyPassword, "schema enumeration must not ship a credential")
+        }
+    }
+
     // MARK: - EngineEventV1 (plan §7.5)
 
     func testEngineEventV1SurfaceComplete() {

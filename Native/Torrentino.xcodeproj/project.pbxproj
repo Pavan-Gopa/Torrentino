@@ -22,6 +22,8 @@
 		4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010C /* TorrentinoEngineXPCProtocol.swift */; };
 		4A000000000000000000050E /* ServiceRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010E /* ServiceRegistration.swift */; };
 		4A000000000000000000050F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A000000000000000000010F /* SettingsView.swift */; };
+		4A0000000000000000000938 /* SettingsApplyFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000940 /* SettingsApplyFlow.swift */; };
+		4A0000000000000000000939 /* SettingsApplyFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000940 /* SettingsApplyFlow.swift */; };
 		4A0000000000000000000510 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000110 /* Localizable.xcstrings */; };
 		4A0000000000000000000511 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000115 /* Assets.xcassets */; };
 		4A0000000000000000000521 /* TorrentinoEngineAgent in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = 4A0000000000000000000202 /* TorrentinoEngineAgent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -285,6 +287,7 @@
 		4A000000000000000000010D /* PeerValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerValidation.swift; sourceTree = "<group>"; };
 		4A000000000000000000010E /* ServiceRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceRegistration.swift; sourceTree = "<group>"; };
 		4A000000000000000000010F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		4A0000000000000000000940 /* SettingsApplyFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsApplyFlow.swift; sourceTree = "<group>"; };
 		4A0000000000000000000110 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		4A0000000000000000000115 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4A0000000000000000000120 /* com.torrentino.app.engine-agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "com.torrentino.app.engine-agent.plist"; sourceTree = "<group>"; };
@@ -333,7 +336,7 @@
 		4A0000000000000000000165 /* EngineCoordinatorError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCoordinatorError.swift; sourceTree = "<group>"; };
 		4A0000000000000000000166 /* TorrentinoEngineAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TorrentinoEngineAgent-Bridging-Header.h"; sourceTree = "<group>"; };
 		4A0000000000000000000167 /* EngineBridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "TorrentinoEngineBridge/bridge/EngineBridge.cpp"; sourceTree = "<group>"; };
-		4A0000000000000000000168 /* libtorrent-rasterbar.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libtorrent-rasterbar.a; path = "ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib/libtorrent-rasterbar.a"; sourceTree = "<group>"; };
+		4A0000000000000000000168 /* libtorrent-rasterbar.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libtorrent-rasterbar.a; path = "ThirdParty/.build/prefix/libtorrent-2.1.1-release/lib/libtorrent-rasterbar.a"; sourceTree = "<group>"; };
 		4A0000000000000000000169 /* libssl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libssl.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libssl.a"; sourceTree = "<group>"; };
 		4A000000000000000000016A /* libcrypto.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcrypto.a; path = "ThirdParty/.build/prefix/openssl-3.5.7/lib/libcrypto.a"; sourceTree = "<group>"; };
 		4A00000000000000000001A1 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
@@ -679,6 +682,7 @@
 			children = (
 				4A000000000000000000010F /* SettingsView.swift */,
 				4A0000000000000000000811 /* KeychainStore.swift */,
+				4A0000000000000000000940 /* SettingsApplyFlow.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -1044,6 +1048,7 @@
 				4A00000000000000000005F4 /* FixtureLibrary.swift in Sources */,
 				4A000000000000000000050F /* SettingsView.swift in Sources */,
 				4A0000000000000000000801 /* KeychainStore.swift in Sources */,
+				4A0000000000000000000938 /* SettingsApplyFlow.swift in Sources */,
 				4A0000000000000000000802 /* NotificationManager.swift in Sources */,
 				4A0000000000000000000803 /* InspectorView.swift in Sources */,
 				4A000000000000000000050D /* TorrentinoEngineXPCProtocol.swift in Sources */,
@@ -1165,6 +1170,7 @@
 				4A0000000000000000000566 /* TorrentinoAppTests.swift in Sources */,
 				4A0000000000000000000933 /* CreatorTrackerSharingPolicy.swift in Sources */,
 				4A0000000000000000000804 /* KeychainStore.swift in Sources */,
+				4A0000000000000000000939 /* SettingsApplyFlow.swift in Sources */,
 				4A0000000000000000000805 /* NotificationManager.swift in Sources */,
 				4A0000000000000000000806 /* FixtureLibrary.swift in Sources */,
 				4A000000000000000000055B /* PeerValidation.swift in Sources */,
@@ -1379,7 +1385,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/TorrentinoEngineBridge/adapter",
 					"$(SRCROOT)/TorrentinoEngineBridge/bridge",
-					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.1-release/include",
 					"$(SRCROOT)/ThirdParty/.build/prefix/boost-1.91.0/include",
 					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/include",
 				);
@@ -1393,7 +1399,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.1-release/lib",
 					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/lib",
 				);
 			};
@@ -1429,7 +1435,7 @@
 					"$(inherited)",
 					"$(SRCROOT)/TorrentinoEngineBridge/adapter",
 					"$(SRCROOT)/TorrentinoEngineBridge/bridge",
-					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/include",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.1-release/include",
 					"$(SRCROOT)/ThirdParty/.build/prefix/boost-1.91.0/include",
 					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/include",
 				);
@@ -1443,7 +1449,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.0-release/lib",
+					"$(SRCROOT)/ThirdParty/.build/prefix/libtorrent-2.1.1-release/lib",
 					"$(SRCROOT)/ThirdParty/.build/prefix/openssl-3.5.7/lib",
 				);
 			};

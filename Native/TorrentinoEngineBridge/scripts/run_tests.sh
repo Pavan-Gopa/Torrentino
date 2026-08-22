@@ -6,7 +6,8 @@
 #          scenario against a pinned libtorrent flavor, and fails loudly.
 # Usage:   bash Native/TorrentinoEngineBridge/scripts/run_tests.sh [options]
 #            --flavor <release|asan>      default release
-#            --lt-version <2.1.0|2.0.13>  default from versions.lock
+#            --lt-version <pinned>        default from versions.lock; must be
+#                                         in LT_SUPPORTED_VERSIONS
 #            --timeout <seconds>          per-step timeout (default 120)
 #            --scenario <name>            run a single scenario
 #
@@ -34,6 +35,13 @@ while [[ $# -gt 0 ]]; do
 		*) echo "error: unknown option '$1'" >&2; exit 2 ;;
 	esac
 done
+# SEC-2 partial-pin closure (WP13-SEC-HARDEN-001 REVIEW-002): validate the
+# requested version BEFORE touching (let alone executing) any pre-existing
+# harness binary, so a stale removed-pin build can never be run again.
+case " ${LT_SUPPORTED_VERSIONS} " in
+	*" ${LT_VERSION} "*) ;;
+	*) echo "error: libtorrent ${LT_VERSION} is not pinned in versions.lock (supported: ${LT_SUPPORTED_VERSIONS})" >&2; exit 2 ;;
+esac
 
 BINARY="${BRIDGE_DIR}/.build/harness-${LT_VERSION}-${FLAVOR}/torrentino-harness"
 if [[ ! -x "${BINARY}" ]]; then

@@ -310,7 +310,7 @@ Suite entry: `Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 | `test_wp01_build_idempotent.sh` | build.sh idempotency |
 | `test_wp01_crash_restore.sh` | crash restore |
 | `test_wp01_exception_firewall.sh` | C-ABI exception firewall |
-| `test_wp01_fallback_2013.sh` | 2.0.11 fallback |
+| `test_wp01_fallback_2014.sh` | 2.0.14 fallback (renamed from `test_wp01_fallback_2013.sh`; suite discovers `test_wp0*` by glob) |
 | `test_wp01_flush_barrier_smoke.sh` | flush barrier |
 | `test_wp01_harness_all_scenarios.sh` | harness all scenarios |
 | `test_wp01_no_homebrew_negative.sh` | no Homebrew negative |

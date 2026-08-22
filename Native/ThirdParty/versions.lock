@@ -12,24 +12,27 @@
 # ---------------------------------------------------------------------------
 # libtorrent (primary engine candidate) — BSD-3-Clause
 # ---------------------------------------------------------------------------
-LT_DEFAULT_VERSION="2.1.0"
-LT_SUPPORTED_VERSIONS="2.1.0 2.0.13"
+LT_DEFAULT_VERSION="2.1.1"
+LT_SUPPORTED_VERSIONS="2.1.1 2.0.14"
 
-# libtorrent 2.1.0 — released 2026-07-09, branch RC_2_1 (latest stable 2.x)
-LT_2_1_0_TAG="v2.1.0"
-LT_2_1_0_COMMIT="578e06824c3546f3371ab43967ab288a7e253eca"
-LT_2_1_0_URL="https://github.com/arvidn/libtorrent/releases/download/v2.1.0/libtorrent-rasterbar-2.1.0.tar.gz"
-LT_2_1_0_ARCHIVE="libtorrent-rasterbar-2.1.0.tar.gz"
-LT_2_1_0_SHA256="ceed657606b8df453ec5e775326e3c759a2779e1202fa04abe42ed262e7bf0b6"
-LT_2_1_0_DIR="libtorrent-rasterbar-2.1.0"
+# libtorrent 2.1.1 — released 2026-08-10, branch RC_2_1 (latest stable 2.x).
+# SEC-2 (WP-13 security audit): supersedes 2.1.0; upstream fixes compiled-in
+# memory-safety paths (DHT salt limit, i2p SAM stack buffer, merkle tree).
+LT_2_1_1_TAG="v2.1.1"
+LT_2_1_1_COMMIT="56ae8caba38bf154ffc210403cb23f91d0ecaa49"
+LT_2_1_1_URL="https://github.com/arvidn/libtorrent/releases/download/v2.1.1/libtorrent-rasterbar-2.1.1.tar.gz"
+LT_2_1_1_ARCHIVE="libtorrent-rasterbar-2.1.1.tar.gz"
+LT_2_1_1_SHA256="0f163516ecef2e3331500266751de3098835a3c3ae0c2290448046c632bc0e93"
+LT_2_1_1_DIR="libtorrent-rasterbar-2.1.1"
 
-# libtorrent 2.0.13 — released 2026-06-08, branch RC_2_0 (maintenance fallback)
-LT_2_0_13_TAG="v2.0.13"
-LT_2_0_13_COMMIT="7d7fc38fac61177fa5e02148f791b2f65250b09d"
-LT_2_0_13_URL="https://github.com/arvidn/libtorrent/releases/download/v2.0.13/libtorrent-rasterbar-2.0.13.tar.gz"
-LT_2_0_13_ARCHIVE="libtorrent-rasterbar-2.0.13.tar.gz"
-LT_2_0_13_SHA256="892cb75c06318e2420de0faf9f63a908069d3d237676e2459fd30abe0cb3b1bf"
-LT_2_0_13_DIR="libtorrent-rasterbar-2.0.13"
+# libtorrent 2.0.14 — released 2026-08-10, branch RC_2_0 (maintenance
+# fallback). SEC-2: supersedes 2.0.13 on the same hardening delta as 2.1.1.
+LT_2_0_14_TAG="v2.0.14"
+LT_2_0_14_COMMIT="aab2a10e2f60d9eac78e885a696736d043527794"
+LT_2_0_14_URL="https://github.com/arvidn/libtorrent/releases/download/v2.0.14/libtorrent-rasterbar-2.0.14.tar.gz"
+LT_2_0_14_ARCHIVE="libtorrent-rasterbar-2.0.14.tar.gz"
+LT_2_0_14_SHA256="1b0b21b9755b5fbec23ca9ba2d2d10434ecb6711c39f37f5fc9d5aa25cf369c9"
+LT_2_0_14_DIR="libtorrent-rasterbar-2.0.14"
 
 # ---------------------------------------------------------------------------
 # Boost (headers + Boost.System) — BSL-1.0

@@ -98,6 +98,7 @@ AGENT_SOURCES=(
 	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineBridgeDTOs.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinatorError.swift"
+	"${NATIVE_DIR}/TorrentinoEngineAgent/Agent/EngineAlertDTOLogMapping.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/AdvisoryLock.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/AtomicGeneration.swift"
 	"${NATIVE_DIR}/TorrentinoEngineAgent/Persistence/FailpointInjector.swift"

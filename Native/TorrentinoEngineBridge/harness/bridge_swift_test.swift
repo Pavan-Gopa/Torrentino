@@ -287,6 +287,67 @@ struct BridgeSwiftTest {
             guard case .success(.ack) = Self.decode(agentReannounce).result else {
                 fatalError("real reannounce must succeed at IPC")
             }
+
+            // --- SEC-1 credential delivery (WP13-SEC-HARDEN-001): the full
+            // real chain applySettings(proxyPassword) -> TransferCoordinator
+            // -> BridgeTransferEngine -> EngineCoordinator.sessionConfiguration
+            // (DTO boundary) -> adapter JSON -> EngineBridge make_settings ->
+            // live libtorrent session. The authenticated-proxy apply must
+            // succeed, the credential must be held in memory afterwards, and
+            // the persisted settings row must stay credential-free.
+            let boundarySettings = EngineSettings(
+                downloadDirectory: agentRoot.path,
+                maxDownloadBytesPerSec: 0,
+                maxUploadBytesPerSec: 0,
+                listenPort: 6889,
+                dhtEnabled: false,
+                lsdEnabled: false,
+                upnpEnabled: false,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .http, host: "boundary.proxy", port: 3128, username: "b-user", password: "Boundary_PW_44")
+            )
+            let boundaryDTO = EngineCoordinator.sessionConfiguration(for: boundarySettings)
+            guard boundaryDTO.proxy.username == "b-user",
+                  boundaryDTO.proxy.password == "Boundary_PW_44" else {
+                fatalError("sessionConfiguration must forward the credential across the DTO boundary")
+            }
+
+            let deliveryCandidate = EngineSettings(
+                downloadDirectory: agentRoot.path,
+                maxDownloadBytesPerSec: 0,
+                maxUploadBytesPerSec: 0,
+                listenPort: 49_150,
+                dhtEnabled: false,
+                lsdEnabled: false,
+                upnpEnabled: false,
+                natPmpEnabled: false,
+                encryptionEnabled: true,
+                proxy: ProxyConfiguration(kind: .socks5, host: "127.0.0.1", port: 59999, username: "bridge-test-user")
+            )
+            let deliverySecret = "bridge-delivered-pw-sec1"
+            let deliveryReply = Self.decode(await agent.processCommand(Self.encode(.applySettings(ApplySettingsRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                candidate: deliveryCandidate,
+                expectedRevision: nil,
+                proxyPassword: deliverySecret
+            )))))
+            guard case .success(.settingsApply) = deliveryReply.result else {
+                fatalError("real authenticated-proxy applySettings must succeed through the bridge: \(String(describing: deliveryReply.result))")
+            }
+
+            let deliveryFetch = Self.decode(await agent.processCommand(Self.encode(.fetchSettings(
+                FetchSettingsRequest(requestID: RequestID())
+            ))))
+            guard case .success(.settingsFetch(let deliverySettings)) = deliveryFetch.result,
+                  deliverySettings.settings.proxy.password == deliverySecret else {
+                fatalError("delivered credential must be held in memory after the real apply: \(String(describing: deliveryFetch.result))")
+            }
+            let deliveryRow = try await store.sessionValue(key: "engine_settings")
+            if let row = deliveryRow, String(decoding: row.data, as: UTF8.self).contains(deliverySecret) {
+                fatalError("delivered credential reached the persisted settings row")
+            }
             await agentBridgeCoordinator.shutdown()
             try await store.close(clean: true)
 

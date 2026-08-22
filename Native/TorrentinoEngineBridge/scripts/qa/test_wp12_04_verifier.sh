@@ -2,7 +2,7 @@
 #
 # QA WP-12 - independent BEP-52 validator battery (§12.7 "independent validator").
 #
-# Cross-checks Swift-written torrents against libtorrent 2.0.13:
+# Cross-checks Swift-written torrents against libtorrent 2.0.14:
 #   * v1 piece lists bit-identical (single-file corpora)
 #   * v2 file-tree pieces roots byte-equal to libtorrent generate_buf()
 #   * piece-layer presence, length AND content byte-equal
@@ -16,7 +16,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
 
 SWIFT_BIN="${NATIVE_DIR}/TorrentinoHashing/.build/debug/TorrentinoHashingBench"
-HARNESS="${BRIDGE_DIR}/.build/harness-2.0.13-release/torrentino-harness"
+HARNESS="${BRIDGE_DIR}/.build/harness-2.0.14-release/torrentino-harness"
 [[ -x "${SWIFT_BIN}" ]] || qa_die "TorrentinoHashingBench missing; run test_wp12_01_correctness.sh first"
 [[ -x "${HARNESS}" ]] || qa_die "torrentino-harness missing; build via scripts/build_harness.sh"
 

@@ -68,10 +68,11 @@ public actor RedactedLogFileManager {
         }
 
         // 2. Redact plain-text query-style credential markers
-        // (proxyPassword=…, password=…, secret=…, passkey=…, token=…),
-        // keeping the field name. Lockstep with PersistenceStore.swift.
+        // (proxyPassword=…, password=…, passkey=…, authkey=…, secret=…,
+        // token=…, key=…, uid=…), keeping the field name. \b keeps mid-word
+        // text like "keyboard=" intact. Lockstep with PersistenceStore.swift.
         let plainSecretRegex = try? NSRegularExpression(
-            pattern: "(proxyPassword|password|secret|passkey|token)=[^&\\s\"']+",
+            pattern: "\\b(proxyPassword|password|passkey|authkey|secret|token|key|uid)=[^&\\s\"']+",
             options: [.caseInsensitive]
         )
         if let plainSecretRegex {
@@ -83,16 +84,57 @@ public actor RedactedLogFileManager {
                 withTemplate: "$1=<redacted>"
             )
         }
-        // 2b. The same fields commonly arrive as JSON diagnostics rather than
-        // query parameters. Keep the field name while removing its value. The
-        // value class tolerates escaped quotes/backslashes (WP-13
-        // escaped-secret finding; lockstep with PersistenceStore.swift).
-        // Newline-safety review: the plain-text patterns use negated classes
-        // excluding \s, so they never cross a line break; the JSON value class
-        // may over-redact forward to the next quote on unbalanced input — a
-        // fail-safe direction (never a secret leak).
+
+        // 3. yaml/log-style "field: value" credentials. Separators are
+        //    horizontal whitespace only (SEC-3: \s* would bridge a newline);
+        //    the value class stops at quotes so quoted JSON values keep
+        //    flowing to rule 5.
+        let yamlSecretRegex = try? NSRegularExpression(
+            pattern: "\\b(proxyPassword|password|passkey|authkey|secret|token)[ \\t]*:[ \\t]*[^\\s\"',;{}()\\[\\]]+",
+            options: [.caseInsensitive]
+        )
+        if let yamlSecretRegex {
+            let range = NSRange(location: 0, length: redacted.utf16.count)
+            redacted = yamlSecretRegex.stringByReplacingMatches(
+                in: redacted,
+                options: [],
+                range: range,
+                withTemplate: "$1: <redacted>"
+            )
+        }
+
+        // 4. Announce URLs whose FIRST path segment after the host is an
+        //    opaque token (≥9 chars from [A-Za-z0-9_-]). SEC-3 policy
+        //    (REVIEW-002): INTENTIONALLY BROAD — digits and the leading
+        //    character are irrelevant, because real private-tracker
+        //    passkeys come in every shape (numeric, underscore-led,
+        //    dash-led, plain alphanumeric). Deliberate diagnostic-
+        //    fidelity tradeoff: a long ordinary first segment of an
+        //    announce path is lost with the passkey it may be, but the
+        //    HOST and the /announce(.php)? suffix always survive — enough
+        //    to diagnose tracker connectivity while no credential-shaped
+        //    token ever reaches logs. Lockstep with PersistenceStore.swift.
+        let trackerURLRegex = try? NSRegularExpression(
+            pattern: "(https?://[^/\\s\"']+)/(?:[_\\-A-Za-z0-9]{9,})/(announce(?:\\.php)?)",
+            options: [.caseInsensitive]
+        )
+        if let trackerURLRegex {
+            let range = NSRange(location: 0, length: redacted.utf16.count)
+            redacted = trackerURLRegex.stringByReplacingMatches(
+                in: redacted,
+                options: [],
+                range: range,
+                withTemplate: "$1/<redacted>/$2"
+            )
+        }
+
+        // 5. The credential fields commonly arrive as JSON diagnostics rather
+        //    than query parameters. Keep the field name while removing its
+        //    value. The value class excludes literal \r\n (SEC-3 line
+        //    integrity) and tolerates escaped quotes/backslashes (WP-13
+        //    escaped-secret finding; lockstep with PersistenceStore.swift).
         let jsonSecretRegex = try? NSRegularExpression(
-            pattern: "(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"(?:[^\\\"\\\\]|\\\\.)*\\\"",
+            pattern: "(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"[ \\t]*:[ \\t]*)\\\"(?:[^\\\"\\\\\\r\\n]|\\\\.)*\\\"",
             options: [.caseInsensitive]
         )
         if let jsonSecretRegex {
@@ -105,8 +147,30 @@ public actor RedactedLogFileManager {
             )
         }
 
-        // 3. Redact Authorization headers (Bearer <token>)
-        let authHeaderRegex = try? NSRegularExpression(pattern: "Authorization:\\s*Bearer\\s+[^\\s\"']+", options: [.caseInsensitive])
+        // 6. Unterminated JSON value (truncated log line): the balanced rule
+        // cannot match when no later quote exists on the line, so this
+        // terminator-tolerant fallback redacts to the end of the CURRENT line
+        // (anchorsMatchLines keeps `$` line-bound). It consumes escape pairs
+        // (\\.) so backslash-bearing truncated secrets match too, tolerates a
+        // terminal trailing backslash, and never crosses \r\n. SEC-4 closure —
+        // both directions fail safe: diagnostics data loss, never a leak.
+        let unbalancedJSONRegex = try? NSRegularExpression(
+            pattern: "(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"[ \\t]*:[ \\t]*)\\\"(?:[^\\\"\\\\\\r\\n]|\\\\.)*\\\\?$",
+            options: [.caseInsensitive, .anchorsMatchLines]
+        )
+        if let unbalancedJSONRegex {
+            let range = NSRange(location: 0, length: redacted.utf16.count)
+            redacted = unbalancedJSONRegex.stringByReplacingMatches(
+                in: redacted,
+                options: [],
+                range: range,
+                withTemplate: "$1\"<redacted>\""
+            )
+        }
+
+        // 7. Redact Authorization headers (Bearer <token>; horizontal
+        //    separators only, SEC-3).
+        let authHeaderRegex = try? NSRegularExpression(pattern: "Authorization:[ \\t]*Bearer[ \\t]+[^\\s\"']+", options: [.caseInsensitive])
         if let authHeaderRegex {
             let range = NSRange(location: 0, length: redacted.utf16.count)
             redacted = authHeaderRegex.stringByReplacingMatches(in: redacted, options: [], range: range, withTemplate: "Authorization: Bearer <redacted>")

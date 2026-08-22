@@ -20,7 +20,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
 
 SWIFT_BIN="${NATIVE_DIR}/TorrentinoHashing/.build/debug/TorrentinoHashingBench"
-HARNESS="${BRIDGE_DIR}/.build/harness-2.0.13-release/torrentino-harness"
+HARNESS="${BRIDGE_DIR}/.build/harness-2.0.14-release/torrentino-harness"
 [[ -x "${SWIFT_BIN}" ]] || qa_die "TorrentinoHashingBench missing; run test_wp12_01_correctness.sh first"
 [[ -x "${HARNESS}" ]] || qa_die "torrentino-harness missing; build via scripts/build_harness.sh"
 
@@ -69,7 +69,7 @@ envlog="${MEAS_DIR}/env-${ts}.txt"
 	echo "lowpowermode: $(pmset -g | awk '/lowpowermode/{print $2}')"
 	echo "disk_free_bytes: $(df -k /System/Volumes/Data | tail -1 | awk '{print $4}')"
 	echo "swift_bench_bin: ${SWIFT_BIN}"
-	echo "harness_bin: ${HARNESS} (libtorrent 2.0.13)"
+	echo "harness_bin: ${HARNESS} (libtorrent 2.0.14)"
 	echo "reps: ${REPS}   full_matrix: ${FULL:-0}"
 } | tee "${envlog}" >&2
 

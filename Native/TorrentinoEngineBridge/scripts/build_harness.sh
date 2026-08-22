@@ -9,7 +9,8 @@
 #
 # Usage: bash Native/TorrentinoEngineBridge/scripts/build_harness.sh [options]
 #   --flavor <release|asan>       must match a built third-party flavor
-#   --lt-version <2.1.0|2.0.13>   libtorrent release to link against
+#   --lt-version <2.1.1|2.0.14>   libtorrent release to link against (must be
+#                                 pinned in Native/ThirdParty/versions.lock)
 #   --jobs <N>                    parallel jobs
 #   --clean                       reconfigure from scratch
 #
@@ -38,6 +39,12 @@ while [[ $# -gt 0 ]]; do
 		*) echo "error: unknown option '$1'" >&2; exit 2 ;;
 	esac
 done
+# SEC-2 partial-pin fix: refuse unsupported requests loudly instead of
+# silently pointing the harness at a nonexistent prefix.
+case " ${LT_SUPPORTED_VERSIONS} " in
+	*" ${LT_VERSION} "*) ;;
+	*) echo "error: libtorrent ${LT_VERSION} is not pinned in versions.lock (supported: ${LT_SUPPORTED_VERSIONS})" >&2; exit 2 ;;
+esac
 
 PREFIX_ROOT="${THIRD_PARTY_DIR}/.build/prefix"
 LT_PREFIX="${PREFIX_ROOT}/libtorrent-${LT_VERSION}-${FLAVOR}"

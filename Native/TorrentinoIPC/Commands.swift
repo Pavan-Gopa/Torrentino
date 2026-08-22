@@ -260,12 +260,38 @@ public struct ApplySettingsRequest: EngineCommandPayload {
     public let idempotencyKey: IdempotencyKey
     public let candidate: EngineSettings
     public let expectedRevision: SettingsRevision?
+    /// SEC-1 credential delivery (WP13-SEC-HARDEN-001): the proxy password
+    /// rides THIS envelope field only — the durable `candidate` stays
+    /// credential-free and the agent persists marker-only rows. Optional and
+    /// decode-tolerant in both directions: payloads written before this field
+    /// existed decode with `nil`, and a `nil` value is omitted from the wire,
+    /// so old peers interoperate unchanged.
+    public let proxyPassword: String?
 
-    public init(requestID: RequestID, idempotencyKey: IdempotencyKey, candidate: EngineSettings, expectedRevision: SettingsRevision? = nil) {
+    public init(
+        requestID: RequestID,
+        idempotencyKey: IdempotencyKey,
+        candidate: EngineSettings,
+        expectedRevision: SettingsRevision? = nil,
+        proxyPassword: String? = nil
+    ) {
         self.requestID = requestID
         self.idempotencyKey = idempotencyKey
         self.candidate = candidate
         self.expectedRevision = expectedRevision
+        self.proxyPassword = proxyPassword
+    }
+
+    /// The single delivery rule every UI apply path must use: the credential
+    /// held app-side (Keychain-backed form state seeded by
+    /// `KeychainStore.loadProxyPassword()`) crosses IPC exactly here. An
+    /// anonymously authenticating proxy kind or an empty value delivers nil.
+    public static func proxyPasswordForDelivery(
+        kind: ProxyConfiguration.Kind,
+        entered: String
+    ) -> String? {
+        guard kind != .none, !entered.isEmpty else { return nil }
+        return entered
     }
 }
 
@@ -938,7 +964,7 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
             .setLimits(SetLimitsRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID, limits: TransferLimits(maxDownloadBytesPerSec: nil, maxUploadBytesPerSec: nil))),
             .fetchSettings(FetchSettingsRequest(requestID: rid, expectedRevision: nil)),
             .validateSettings(ValidateSettingsRequest(requestID: rid, candidate: .default)),
-            .applySettings(ApplySettingsRequest(requestID: rid, idempotencyKey: idempotency, candidate: .default, expectedRevision: nil)),
+            .applySettings(ApplySettingsRequest(requestID: rid, idempotencyKey: idempotency, candidate: .default, expectedRevision: nil, proxyPassword: nil)),
             .testProxy(TestProxyRequest(requestID: rid, proxy: ProxyConfiguration(kind: .none, host: "", port: 0), timeoutSeconds: 10)),
             .testIncomingPort(TestIncomingPortRequest(requestID: rid, port: 0)),
             .editTrackers(EditTrackersRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID, addedURLs: [], removedURLs: [])),

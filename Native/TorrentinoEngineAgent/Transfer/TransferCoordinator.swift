@@ -240,6 +240,15 @@ public actor TransferCoordinator {
             if let restored = try await persistence.loadSettings() {
                 activeSettings = restored.settings
                 settingsRevision = restored.revision
+                // SEC-1 boot transient (WP13-SEC-HARDEN-001): the agent has
+                // no Keychain access, so this restore is credential-free by
+                // design. A marker=true row restores "" (withheld pending
+                // re-supply): that proxy runs WITHOUT its password between
+                // this boot and the first UI-driven applySettings delivery,
+                // and ensureEngineStarted logs a notice for exactly that
+                // withheld shape (REVIEW-002). A marker=false row restores
+                // nil — no authentication was ever configured — and boots
+                // silently.
             }
         } catch {
             log.warning("restore: settings load failed: \(TorrentinoLog.redactedDescription(error))")
@@ -576,14 +585,21 @@ public actor TransferCoordinator {
     /// returns the serialized result envelope. Never throws — every failure is
     /// a typed EngineFault on the wire.
     public func processCommand(_ data: Data) async -> Data {
+        // SEC-5 (defense-in-depth ordering): the size gate runs BEFORE any
+        // typed decoding work, so oversized payloads are rejected without
+        // paying a full decoder parse. The oversized reply still correlates
+        // the requestID when the envelope header itself is parseable.
+        guard IPCPayloadLimit.validate(data) else {
+            return Self.encodeResult(
+                .failure(EngineFault.oversizedPayload(limitBytes: IPCPayloadLimit.maxBytes)),
+                requestID: Self.parseableRequestID(in: data)
+            )
+        }
         let envelope: IPCEnvelope?
         do {
             envelope = try JSONDecoder().decode(IPCEnvelope.self, from: data)
         } catch {
             envelope = nil
-        }
-        guard IPCPayloadLimit.validate(data) else {
-            return Self.encodeResult(.failure(EngineFault.oversizedPayload(limitBytes: IPCPayloadLimit.maxBytes)), requestID: envelope?.requestID)
         }
         guard let envelope else {
             return Self.encodeResult(.failure(EngineFault.invalidPayload(details: "undecodable envelope")), requestID: nil)
@@ -620,6 +636,24 @@ public actor TransferCoordinator {
     private static func encodeResult(_ result: EngineCommandResult, requestID: RequestID?) -> Data {
         let envelope = IPCEnvelope.result(requestID: requestID ?? RequestID(), result: result)
         return (try? JSONEncoder().encode(envelope)) ?? Data()
+    }
+
+    /// Best-effort requestID correlation for oversized-payload faults. Runs
+    /// only after the size gate rejected the payload: one untyped
+    /// JSONSerialization pass over the top-level object (no typed envelope or
+    /// command graph is built). Mirrors IPCEnvelope decode semantics — only
+    /// request/result envelopes carry a correlatable requestID, encoded in its
+    /// wire shape {"rawValue": "<uuid>"}.
+    private static func parseableRequestID(in data: Data) -> RequestID? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let kind = object["kind"] as? String,
+              kind == IPCEnvelope.Kind.request.rawValue || kind == IPCEnvelope.Kind.result.rawValue,
+              let payload = object["requestID"] as? [String: Any],
+              let raw = payload["rawValue"] as? String,
+              let uuid = UUID(uuidString: raw) else {
+            return nil
+        }
+        return RequestID(rawValue: uuid)
     }
 
     private func sessionFault(for command: EngineCommandV1) -> EngineFault? {
@@ -1737,6 +1771,7 @@ public actor TransferCoordinator {
         let now = Date()
         guard now >= nextEngineStartAt else { return false }
         do {
+            noteUnauthenticatedProxyWindowIfNeeded()
             try await engine.start(configuration: activeSettings)
             engineStartFailures = 0
             nextEngineStartAt = .distantPast
@@ -1748,6 +1783,28 @@ public actor TransferCoordinator {
             log.warning("ensureEngineStarted failed: \(String(describing: error))")
             return false
         }
+    }
+
+    /// SEC-1 boot transient (WP13-SEC-HARDEN-001): honest observability for
+    /// the window between agent boot (withheld-credential restore) and the
+    /// first UI-driven applySettings. Only a restored-but-withheld credential
+    /// announces the window (see shouldNoteUnauthenticatedProxyWindow); a nil
+    /// password boots silently. The message is secret-free by construction;
+    /// the redactor pipeline stays in place regardless.
+    private func noteUnauthenticatedProxyWindowIfNeeded() {
+        guard Self.shouldNoteUnauthenticatedProxyWindow(activeSettings.proxy) else { return }
+        log.notice("proxy authentication credential not yet delivered; proxy runs unauthenticated until the next settings apply")
+    }
+
+    /// SEC-1 boot transient honesty (WP13-SEC-HARDEN-001 REVIEW-002): ONLY a
+    /// restored-but-withheld credential ("", from a marker-only row, pending
+    /// Keychain re-supply) announces the unauthenticated window. A nil
+    /// password means no authentication was ever configured — genuinely
+    /// unauthenticated by choice — and must boot silently.
+    static func shouldNoteUnauthenticatedProxyWindow(_ proxy: ProxyConfiguration) -> Bool {
+        guard proxy.kind != .none,
+              !(proxy.username ?? "").isEmpty else { return false }
+        return proxy.password == ""
     }
 
     private func canAdmitEngineWork(desiredState: DesiredTorrentState, totalBytes: Int64?) -> Bool {
@@ -1780,6 +1837,7 @@ public actor TransferCoordinator {
         defer { restartInFlight = false }
 
         do {
+            noteUnauthenticatedProxyWindowIfNeeded()
             try await engine.restart(configuration: activeSettings)
         } catch {
             healthReporter?.noteEngineFailure()
@@ -2407,6 +2465,40 @@ extension TransferCoordinator {
         let previousSettings = activeSettings
         let previousRevision = settingsRevision
         let persistence = self.persistence
+        // F1-ROLLBACK-SENTINEL (WP13-SEC-HARDEN-001 REVIEW-003): the
+        // rollback below re-persists `previousSettings`, whose restored
+        // credential is "" (withheld) — not a value — so persistSettings'
+        // default derivation from that password alone would erase a
+        // marker=true sentinel to false while the Keychain secret survives,
+        // leaving the next boot silent instead of empty/notice. Pin the
+        // marker to the PRE-APPLY durable row, read before the transaction
+        // can rewrite it: loadSettings reconstructs "" exactly when the row
+        // carries marker=true, nil when it does not, which stays honest even
+        // when the live configuration legitimately holds an empty credential
+        // persisted as marker=false.
+        let preApplyHadProxyPassword: Bool
+        do {
+            preApplyHadProxyPassword = try await persistence.loadSettings()?.settings.proxy.password != nil
+        } catch {
+            // Fail closed: without a truthful pre-apply marker the rollback
+            // could not restore exact at-rest semantics, so never enter the
+            // transaction. A store broken enough to fail this read rejects
+            // the persist step too; this only surfaces that same typed
+            // outcome before any durable byte moves.
+            return .failure(Self.persistenceFault(error, recordID: nil, volumeIdentifier: nil))
+        }
+        // SEC-1 boot re-supply invariant (WP13-SEC-HARDEN-001 REVIEW-002):
+        // the durable presence marker describes the DELIVERED/live
+        // configuration, never the credential-free candidate. The live
+        // configuration is therefore projected once, before the transaction,
+        // and both the persist step (marker only, zero secret bytes) and the
+        // engine apply use exactly that projection. A pre-delivery peer that
+        // still embeds its own password in the candidate joins through the
+        // same path, so the row stays truthful for old senders too.
+        let deliveredLive = Self.deliveringProxyPassword(
+            request.proxyPassword,
+            in: request.candidate
+        )
         let outcome = await SettingsTransaction.run(
             candidate: request.candidate,
             expectedRevision: request.expectedRevision,
@@ -2414,7 +2506,11 @@ extension TransferCoordinator {
                 currentRevision: previousRevision,
                 persist: { candidate, currentRevision in
                     let newRevision = currentRevision + 1
-                    try await persistence.persistSettings(candidate, revision: newRevision)
+                    try await persistence.persistSettings(
+                        candidate,
+                        revision: newRevision,
+                        hadProxyPassword: !(deliveredLive.proxy.password ?? "").isEmpty
+                    )
                     return newRevision
                 },
                 apply: { [weak self] candidate in
@@ -2422,8 +2518,14 @@ extension TransferCoordinator {
                         return .failure(.internalError(details: "settings coordinator deallocated"))
                     }
                     do {
-                        try await self.engine.apply(settings: candidate)
-                        await self.setActiveSettings(candidate, revision: previousRevision + 1)
+                        // SEC-1 credential delivery (WP13-SEC-HARDEN-001):
+                        // `deliveredLive` above is the received credential
+                        // joined onto the candidate — in-memory
+                        // activeSettings and the engine session only.
+                        // `persist` stays on the credential-free candidate,
+                        // so durable rows remain marker-only.
+                        try await self.engine.apply(settings: deliveredLive)
+                        await self.setActiveSettings(deliveredLive, revision: previousRevision + 1)
                         return .success(())
                     } catch {
                         return .failure(Self.engineFault(
@@ -2438,7 +2540,7 @@ extension TransferCoordinator {
                         try await self.engine.apply(settings: previousSettings)
                         await self.setActiveSettings(previousSettings, revision: previousRevision)
                     }
-                    try await persistence.persistSettings(previousSettings, revision: previousRevision)
+                    try await persistence.persistSettings(previousSettings, revision: previousRevision, hadProxyPassword: preApplyHadProxyPassword)
                 }
             )
         )
@@ -3342,6 +3444,36 @@ extension TransferCoordinator {
     private func setActiveSettings(_ settings: EngineSettings, revision: SettingsRevision) {
         activeSettings = settings
         settingsRevision = revision
+    }
+
+    /// SEC-1 credential delivery (WP13-SEC-HARDEN-001): joins the received
+    /// applySettings credential onto the live configuration. The value is
+    /// held in memory only (activeSettings / engine session); persistence
+    /// keeps stripping credentials at rest, so no durable byte ever carries
+    /// it — including the rollback path that re-persists `previousSettings`.
+    private static func deliveringProxyPassword(
+        _ password: String?,
+        in candidate: EngineSettings
+    ) -> EngineSettings {
+        guard let password, !password.isEmpty else { return candidate }
+        return EngineSettings(
+            downloadDirectory: candidate.downloadDirectory,
+            maxDownloadBytesPerSec: candidate.maxDownloadBytesPerSec,
+            maxUploadBytesPerSec: candidate.maxUploadBytesPerSec,
+            listenPort: candidate.listenPort,
+            dhtEnabled: candidate.dhtEnabled,
+            lsdEnabled: candidate.lsdEnabled,
+            upnpEnabled: candidate.upnpEnabled,
+            natPmpEnabled: candidate.natPmpEnabled,
+            encryptionEnabled: candidate.encryptionEnabled,
+            proxy: ProxyConfiguration(
+                kind: candidate.proxy.kind,
+                host: candidate.proxy.host,
+                port: candidate.proxy.port,
+                username: candidate.proxy.username,
+                password: password
+            )
+        )
     }
     // MARK: - Creator Flow
 

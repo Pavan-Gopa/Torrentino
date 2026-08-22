@@ -70,6 +70,10 @@ struct SessionConfiguration {
 	std::string proxy_host;
 	std::uint16_t proxy_port = 0;
 	std::string proxy_username;
+	// SEC-1 memory-only credential (WP13-SEC-HARDEN-001): delivered through
+	// this internal configuration into make_settings' libtorrent pack. It is
+	// never echoed back by any report DTO, persisted, or logged.
+	std::string proxy_password;
 	// Stable prefix libtorrent expands into the 20-byte wire peer ID. The full
 	// wire ID is synthesized inside libtorrent and not exposed by any
 	// non-deprecated API in 2.x, so the boot report reports this configured,

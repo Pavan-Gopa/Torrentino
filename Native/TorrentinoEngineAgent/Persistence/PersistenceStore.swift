@@ -67,17 +67,54 @@ public actor RedactedLogFileManager {
 
     public static func redact(_ text: String) -> String {
         var redacted = text
-        // Newline-safety review: every plain-text marker pattern below uses a
-        // negated class that excludes \s, so a match can never cross a line
-        // break. The JSON value class tolerates escaped quotes/backslashes
-        // (WP-13 escaped-secret finding); on input with an unbalanced quote it
-        // may over-redact forward to the next quote — a fail-safe direction
-        // (diagnostics data loss, never a secret leak).
+        // Newline-safety review (SEC-3 line integrity): every value class
+        // below excludes \r\n and every separator is the horizontal [ \\t]
+        // only, so no rule can consume or bridge material on another line;
+        // the unterminated-JSON fallback additionally runs with
+        // anchorsMatchLines so `$` is line-bound. When a secret sits in an
+        // UNterminated JSON-shaped line (no later quote on THAT line), the
+        // balanced rule cannot match; the terminator-tolerant fallback (rule
+        // 6) then redacts to end of that line — SEC-4 closure — consuming
+        // escape pairs and tolerating a terminal trailing backslash so
+        // backslash-bearing truncated secrets are covered too. Both
+        // directions fail safe: diagnostics data loss, never a secret leak.
         let patterns: [(String, String, NSRegularExpression.Options)] = [
+            // 1. Complete absolute user/volume paths.
             ("(?:/Users|/Volumes|/private/var)/[^\\s\"']+", "~", []),
-            ("(proxyPassword|password|secret|passkey|token)=[^&\\s\"']+", "$1=<redacted>", [.caseInsensitive]),
-            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"\\s*:\\s*)\\\"(?:[^\\\"\\\\]|\\\\.)*\\\"", "$1\"<redacted>\"", [.caseInsensitive]),
-            ("Authorization:\\s*Bearer\\s+[^\\s\"']+", "Authorization: Bearer <redacted>", [.caseInsensitive]),
+            // 2. Plain-text credential markers (query params and key=value log
+            //    shapes), including private-tracker styles (?key=, ?uid=,
+            //    ?authkey=). \b keeps mid-word text like "keyboard=" intact.
+            ("\\b(proxyPassword|password|passkey|authkey|secret|token|key|uid)=[^&\\s\"']+", "$1=<redacted>", [.caseInsensitive]),
+            // 3. yaml/log-style "field: value" credentials. Separators are
+            //    horizontal whitespace only (SEC-3: \s* would bridge a
+            //    newline); the value class stops at quotes so quoted JSON
+            //    values keep flowing to rule 5.
+            ("\\b(proxyPassword|password|passkey|authkey|secret|token)[ \\t]*:[ \\t]*[^\\s\"',;{}()\\[\\]]+", "$1: <redacted>", [.caseInsensitive]),
+            // 4. Announce URLs whose FIRST path segment after the host is an
+            //    opaque token (≥9 chars from [A-Za-z0-9_-]). SEC-3 policy
+            //    (REVIEW-002): INTENTIONALLY BROAD — digits and the leading
+            //    character are irrelevant, because real private-tracker
+            //    passkeys come in every shape (numeric, underscore-led,
+            //    dash-led, plain alphanumeric). Deliberate diagnostic-
+            //    fidelity tradeoff: a long ordinary first segment of an
+            //    announce path is lost with the passkey it may be, but the
+            //    HOST and the /announce(.php)? suffix always survive — enough
+            //    to diagnose tracker connectivity while no credential-shaped
+            //    token ever reaches logs.
+            ("(https?://[^/\\s\"']+)/(?:[_\\-A-Za-z0-9]{9,})/(announce(?:\\.php)?)", "$1/<redacted>/$2", [.caseInsensitive]),
+            // 5. Balanced JSON string values for credential fields. The value
+            //    class excludes literal \r\n (SEC-3 line integrity: a value
+            //    split across lines must never consume the following one);
+            //    escaped pairs still match via \\. .
+            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"[ \\t]*:[ \\t]*)\\\"(?:[^\\\"\\\\\\r\\n]|\\\\.)*\\\"", "$1\"<redacted>\"", [.caseInsensitive]),
+            // 6. Unterminated JSON value (truncated log line): redact to the
+            //    end of the current line and re-close the string. Consumes
+            //    escape pairs (\\.) so backslash-bearing truncated secrets
+            //    match too, and tolerates a terminal trailing backslash;
+            //    never crosses \r\n (SEC-4 closure).
+            ("(\\\"(?:password|proxyPassword|secret|passkey|token)\\\"[ \\t]*:[ \\t]*)\\\"(?:[^\\\"\\\\\\r\\n]|\\\\.)*\\\\?$", "$1\"<redacted>\"", [.caseInsensitive, .anchorsMatchLines]),
+            // 7. Authorization headers (horizontal separators only; SEC-3).
+            ("Authorization:[ \\t]*Bearer[ \\t]+[^\\s\"']+", "Authorization: Bearer <redacted>", [.caseInsensitive]),
         ]
         for (pattern, replacement, options) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
@@ -957,25 +994,113 @@ actor PersistenceStore {
         }
     }
 
-    func persistSettings(_ settings: EngineSettings, revision: SettingsRevision) throws {
-        let settingsData = try JSONEncoder().encode(settings)
+    // MARK: - Engine settings (SEC-1 credential-free at-rest projection)
+
+    /// At-rest shape of the `engine_settings` session row. The settings value
+    /// is a projection whose proxy credential is ALWAYS stripped; the presence
+    /// marker records that the live configuration had one so the UI can
+    /// re-supply it from the Keychain. The secret itself never reaches SQLite
+    /// (nor its WAL/-shm sidecars).
+    private struct PersistedSettingsRecord: Codable {
+        var version: Int
+        var hasProxyPassword: Bool
+        var settings: EngineSettings
+    }
+
+    private static let persistedSettingsVersion = 1
+
+    /// Proxy copy with the credential value removed. `withheld` decides how a
+    /// load reconstructs it: `false` reads as absent (nil); `true` reads as
+    /// present-but-withheld ("") until applySettings re-supplies it.
+    private static func credentialFreeProxy(_ proxy: ProxyConfiguration, withheld: Bool) -> ProxyConfiguration {
+        ProxyConfiguration(
+            kind: proxy.kind,
+            host: proxy.host,
+            port: proxy.port,
+            username: proxy.username,
+            password: withheld ? "" : nil
+        )
+    }
+
+    /// The credential-free at-rest projection of a live configuration: the
+    /// proxy password value is removed (never encoded) while the presence
+    /// marker records that the live configuration had one.
+    private static func atRestEnvelope(of settings: EngineSettings, hadProxyPassword: Bool) -> PersistedSettingsRecord {
+        PersistedSettingsRecord(
+            version: Self.persistedSettingsVersion,
+            hasProxyPassword: hadProxyPassword,
+            settings: EngineSettings(
+                downloadDirectory: settings.downloadDirectory,
+                maxDownloadBytesPerSec: settings.maxDownloadBytesPerSec,
+                maxUploadBytesPerSec: settings.maxUploadBytesPerSec,
+                listenPort: settings.listenPort,
+                dhtEnabled: settings.dhtEnabled,
+                lsdEnabled: settings.lsdEnabled,
+                upnpEnabled: settings.upnpEnabled,
+                natPmpEnabled: settings.natPmpEnabled,
+                encryptionEnabled: settings.encryptionEnabled,
+                proxy: Self.credentialFreeProxy(settings.proxy, withheld: false)
+            )
+        )
+    }
+
+    private static func atRestEnvelope(of settings: EngineSettings) -> PersistedSettingsRecord {
+        atRestEnvelope(of: settings, hadProxyPassword: !(settings.proxy.password ?? "").isEmpty)
+    }
+
+    /// `hadProxyPassword` lets the caller pin the presence marker to the
+    /// DELIVERED/live configuration instead of the passed projection (SEC-1
+    /// boot re-supply invariant, WP13-SEC-HARDEN-001 REVIEW-002): an apply
+    /// that delivered a credential persists marker=true with ZERO secret
+    /// bytes even though the credential-free candidate carries none. When
+    /// nil, the marker is derived from the settings' own proxy password
+    /// (rollback paths re-persisting the live configuration).
+    func persistSettings(
+        _ settings: EngineSettings,
+        revision: SettingsRevision,
+        hadProxyPassword: Bool? = nil
+    ) throws {
         try setSessionValues([
-            (key: "engine_settings", data: settingsData),
+            (key: "engine_settings", data: try JSONEncoder().encode(
+                Self.atRestEnvelope(
+                    of: settings,
+                    hadProxyPassword: hadProxyPassword ?? !(settings.proxy.password ?? "").isEmpty
+                )
+            )),
             (key: "engine_settings_revision", data: Data("\(revision)".utf8)),
         ])
     }
 
     func loadSettings() throws -> (settings: EngineSettings, revision: SettingsRevision)? {
-        guard let settingsPayload = try sessionValue(key: "engine_settings"),
-              let revisionPayload = try sessionValue(key: "engine_settings_revision") else {
+        guard let settingsPayload = try sessionValue(key: "engine_settings") else {
+            return nil
+        }
+        guard let revisionPayload = try sessionValue(key: "engine_settings_revision") else {
+            // SEC-1-LEGACY: a credential-bearing row without its revision
+            // companion still gets scrubbed; the historical result (nil)
+            // stays unchanged so restore semantics never shift under this fix.
+            _ = try scrubLegacySettingsRowAtRest(settingsPayload.data)
             return nil
         }
         let settings: EngineSettings
-        do {
-            settings = try JSONDecoder().decode(EngineSettings.self, from: settingsPayload.data)
-        } catch {
-            log.warning("settings tolerant decode fallback: \(TorrentinoLog.redactedDescription(error))")
-            settings = tolerantSettings(from: settingsPayload.data) ?? .default
+        if let record = try? JSONDecoder().decode(PersistedSettingsRecord.self, from: settingsPayload.data) {
+            settings = EngineSettings(
+                downloadDirectory: record.settings.downloadDirectory,
+                maxDownloadBytesPerSec: record.settings.maxDownloadBytesPerSec,
+                maxUploadBytesPerSec: record.settings.maxUploadBytesPerSec,
+                listenPort: record.settings.listenPort,
+                dhtEnabled: record.settings.dhtEnabled,
+                lsdEnabled: record.settings.lsdEnabled,
+                upnpEnabled: record.settings.upnpEnabled,
+                natPmpEnabled: record.settings.natPmpEnabled,
+                encryptionEnabled: record.settings.encryptionEnabled,
+                proxy: Self.credentialFreeProxy(record.settings.proxy, withheld: record.hasProxyPassword)
+            )
+        } else {
+            // Legacy/damaged rows are sanitized in memory AND rewritten at
+            // rest by the same load (SEC-1-LEGACY), so the credential-bearing
+            // bytes leave the database trio on first contact.
+            settings = try scrubLegacySettingsRowAtRest(settingsPayload.data)
         }
         let revision: SettingsRevision
         if let text = String(data: revisionPayload.data, encoding: .utf8),
@@ -988,23 +1113,106 @@ actor PersistenceStore {
         return (settings, revision)
     }
 
-    private func tolerantSettings(from data: Data) -> EngineSettings? {
+    /// SEC-1-LEGACY at-rest scrub: sanitizes a pre-projection (or damaged)
+    /// engine_settings payload in memory, atomically rewrites the row with its
+    /// credential-free envelope, and collapses byte-level residue — VACUUM
+    /// rebuilds the main database so no slack copy of the superseded record
+    /// survives between pages, then the TRUNCATE checkpoint drains -wal of
+    /// every pre-scrub frame (-shm is only a wal-index and never holds row
+    /// bytes). Quarantined corrupt-* forensic copies are intentionally NOT
+    /// touched: they are pre-existing incident artifacts whose retention is a
+    /// documented residual (see WP-13 SEC-1 notes). Returns the sanitized
+    /// settings the caller would have obtained from the old decode paths.
+    private func scrubLegacySettingsRowAtRest(_ payload: Data) throws -> EngineSettings {
+        let settings: EngineSettings
+        let envelope: PersistedSettingsRecord
+        if let legacy = try? JSONDecoder().decode(EngineSettings.self, from: payload) {
+            log.warning("settings legacy row sanitized on load")
+            settings = EngineSettings(
+                downloadDirectory: legacy.downloadDirectory,
+                maxDownloadBytesPerSec: legacy.maxDownloadBytesPerSec,
+                maxUploadBytesPerSec: legacy.maxUploadBytesPerSec,
+                listenPort: legacy.listenPort,
+                dhtEnabled: legacy.dhtEnabled,
+                lsdEnabled: legacy.lsdEnabled,
+                upnpEnabled: legacy.upnpEnabled,
+                natPmpEnabled: legacy.natPmpEnabled,
+                encryptionEnabled: legacy.encryptionEnabled,
+                proxy: Self.credentialFreeProxy(
+                    legacy.proxy,
+                    withheld: !(legacy.proxy.password ?? "").isEmpty
+                )
+            )
+            envelope = Self.atRestEnvelope(of: legacy)
+        } else {
+            log.warning("settings tolerant decode fallback during at-rest scrub")
+            let tolerant = tolerantSettings(from: payload)
+            settings = tolerant?.settings ?? .default
+            // An undecodable payload cannot be projected faithfully; it
+            // already read back as defaults, so replacing it with the
+            // sanitized default envelope leaves nothing unknowable at rest.
+            envelope = tolerant.map { Self.atRestEnvelope(of: $0.settings, hadProxyPassword: $0.hasProxyPassword) }
+                ?? PersistedSettingsRecord(
+                    version: Self.persistedSettingsVersion,
+                    hasProxyPassword: false,
+                    settings: .default
+                )
+        }
+        // Atomic rewrite through the store's own transaction machinery.
+        try setSessionValues([(key: "engine_settings", data: try JSONEncoder().encode(envelope))])
+        // Residue cleanup is best-effort: the security control above is the
+        // atomic rewrite; VACUUM/checkpoint only remove forensic remnants.
+        do {
+            try exec("VACUUM")
+            let statement = try prepare("PRAGMA wal_checkpoint(TRUNCATE)")
+            while try statement.step() == .row {}
+        } catch {
+            log.warning("settings at-rest residue cleanup failed: \(TorrentinoLog.redactedDescription(error))")
+        }
+        return settings
+    }
+
+    /// Tolerant reconstruction of a damaged settings row. Also reports
+    /// whether the damaged payload carried a proxy password so the at-rest
+    /// scrub can preserve the presence marker (the value itself is stripped).
+    private func tolerantSettings(from data: Data) -> (settings: EngineSettings, hasProxyPassword: Bool)? {
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
         let defaults = EngineSettings.default
         let listenPort = UInt16(clamping: (dict["listenPort"] as? NSNumber)?.intValue ?? Int(defaults.listenPort))
-        return EngineSettings(
-            downloadDirectory: dict["downloadDirectory"] as? String ?? defaults.downloadDirectory,
-            maxDownloadBytesPerSec: (dict["maxDownloadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxDownloadBytesPerSec,
-            maxUploadBytesPerSec: (dict["maxUploadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxUploadBytesPerSec,
-            listenPort: listenPort == 0 ? defaults.listenPort : listenPort,
-            dhtEnabled: (dict["dhtEnabled"] as? NSNumber)?.boolValue ?? defaults.dhtEnabled,
-            lsdEnabled: (dict["lsdEnabled"] as? NSNumber)?.boolValue ?? defaults.lsdEnabled,
-            upnpEnabled: (dict["upnpEnabled"] as? NSNumber)?.boolValue ?? defaults.upnpEnabled,
-            natPmpEnabled: (dict["natPmpEnabled"] as? NSNumber)?.boolValue ?? defaults.natPmpEnabled,
-            encryptionEnabled: (dict["encryptionEnabled"] as? NSNumber)?.boolValue ?? defaults.encryptionEnabled,
-            proxy: defaults.proxy
+        // Reconstruct whatever proxy metadata survives in the damaged row,
+        // minus any credential material (SEC-1).
+        let proxy: ProxyConfiguration
+        var hasProxyPassword = false
+        if let proxyDict = dict["proxy"] as? [String: Any] {
+            hasProxyPassword = !(proxyDict["password"] as? String ?? "").isEmpty
+            proxy = Self.credentialFreeProxy(
+                ProxyConfiguration(
+                    kind: ProxyConfiguration.Kind(rawValue: proxyDict["kind"] as? String ?? "") ?? defaults.proxy.kind,
+                    host: proxyDict["host"] as? String ?? "",
+                    port: UInt16(clamping: (proxyDict["port"] as? NSNumber)?.intValue ?? 0),
+                    username: proxyDict["username"] as? String
+                ),
+                withheld: hasProxyPassword
+            )
+        } else {
+            proxy = defaults.proxy
+        }
+        return (
+            EngineSettings(
+                downloadDirectory: dict["downloadDirectory"] as? String ?? defaults.downloadDirectory,
+                maxDownloadBytesPerSec: (dict["maxDownloadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxDownloadBytesPerSec,
+                maxUploadBytesPerSec: (dict["maxUploadBytesPerSec"] as? NSNumber)?.int64Value ?? defaults.maxUploadBytesPerSec,
+                listenPort: listenPort == 0 ? defaults.listenPort : listenPort,
+                dhtEnabled: (dict["dhtEnabled"] as? NSNumber)?.boolValue ?? defaults.dhtEnabled,
+                lsdEnabled: (dict["lsdEnabled"] as? NSNumber)?.boolValue ?? defaults.lsdEnabled,
+                upnpEnabled: (dict["upnpEnabled"] as? NSNumber)?.boolValue ?? defaults.upnpEnabled,
+                natPmpEnabled: (dict["natPmpEnabled"] as? NSNumber)?.boolValue ?? defaults.natPmpEnabled,
+                encryptionEnabled: (dict["encryptionEnabled"] as? NSNumber)?.boolValue ?? defaults.encryptionEnabled,
+                proxy: proxy
+            ),
+            hasProxyPassword
         )
     }
 

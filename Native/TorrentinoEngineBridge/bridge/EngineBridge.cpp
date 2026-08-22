@@ -387,9 +387,10 @@ lt::settings_pack make_settings(const SessionConfiguration& config)
 	pack.set_int(lt::settings_pack::upload_rate_limit,
 		static_cast<int>(config.max_upload_bytes_per_sec));
 
-	// Proxy passwords never cross the Swift/XPC boundary. The UI owns that
-	// secret in Keychain; the bridge still applies every non-secret proxy field
-	// and deliberately clears the unavailable password slot.
+	// Proxy routing. The credential (SEC-1, WP13-SEC-HARDEN-001) arrives
+	// memory-only through the internal SessionConfiguration and is forwarded
+	// straight into the libtorrent pack; it never touches persistence rows,
+	// logs, or diagnostics projections upstream of this boundary.
 	int proxyType = static_cast<int>(lt::settings_pack::none);
 	if (config.proxy_kind == "socks5") {
 		proxyType = static_cast<int>(config.proxy_username.empty()
@@ -402,7 +403,7 @@ lt::settings_pack make_settings(const SessionConfiguration& config)
 	pack.set_int(lt::settings_pack::proxy_port, static_cast<int>(config.proxy_port));
 	pack.set_str(lt::settings_pack::proxy_hostname, config.proxy_host);
 	pack.set_str(lt::settings_pack::proxy_username, config.proxy_username);
-	pack.set_str(lt::settings_pack::proxy_password, "");
+	pack.set_str(lt::settings_pack::proxy_password, config.proxy_password);
 
 	const auto encryptionPolicy = config.encryption_enabled
 		? lt::settings_pack::pe_enabled

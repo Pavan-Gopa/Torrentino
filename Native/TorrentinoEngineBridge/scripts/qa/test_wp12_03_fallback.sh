@@ -30,7 +30,7 @@ qa_ok "FailureTests + CancellationTests green (device/compile/commit/buffer/self
 
 ROOT="$(qa_mktemp)"
 mkdir -p "${ROOT}/64m"
-HARNESS="${BRIDGE_DIR}/.build/harness-2.0.13-release/torrentino-harness"
+HARNESS="${BRIDGE_DIR}/.build/harness-2.0.14-release/torrentino-harness"
 [[ -x "${HARNESS}" ]] || qa_die "torrentino-harness missing; build via scripts/build_harness.sh"
 "${HARNESS}" gen-corpus --path "${ROOT}/64m/payload.bin" --size 67108864 --seed 7 > /dev/null 2>&1
 

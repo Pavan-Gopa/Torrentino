@@ -26,6 +26,6 @@ check_binary() { # <binary> <label>
 }
 
 check_binary "${BRIDGE_DIR}/.build/harness-${LT_DEFAULT_VERSION}-release/torrentino-harness" "default ${LT_DEFAULT_VERSION}"
-check_binary "${BRIDGE_DIR}/.build/harness-2.0.13-release/torrentino-harness" "fallback 2.0.13"
+check_binary "${BRIDGE_DIR}/.build/harness-2.0.14-release/torrentino-harness" "fallback 2.0.14"
 
 qa_pass

@@ -333,6 +333,9 @@ SessionConfiguration configurationFromJSON(NSDictionary* dict)
 		config.proxy_host = std::string(stringValue(proxy, "host", @"").UTF8String);
 		config.proxy_port = static_cast<uint16_t>(uint32Value(proxy, "port", 0));
 		config.proxy_username = std::string(stringValue(proxy, "username", @"").UTF8String);
+		// SEC-1 memory-only credential (WP13-SEC-HARDEN-001); tolerated to be
+		// absent so configurations from older coordinators decode unchanged.
+		config.proxy_password = std::string(stringValue(proxy, "password", @"").UTF8String);
 	}
 	config.peer_id_prefix = std::string(stringValue(dict, "peer-id-prefix", @"-TT0400-").UTF8String);
 	config.operation_timeout_ms = uint32Value(dict, "operation-timeout-ms", 10000);

@@ -1,8 +1,10 @@
 # libtorrent patches
 
-**Currently empty — libtorrent 2.1.0 and 2.0.13 build unmodified on arm64
-macOS 13+.** That is a deliberate project goal: the plan forbids forking
-libtorrent, and an unpatched upstream is what makes a version bump cheap.
+**Currently empty — libtorrent 2.1.1 and 2.0.14 build unmodified on arm64
+macOS 13+** (the superseded 2.1.0 / 2.0.13 pins built unmodified too, and the
+SEC-2 bump to the 2026-08-10 hardening releases kept it that way). That is a
+deliberate project goal: the plan forbids forking libtorrent, and an
+unpatched upstream is what makes a version bump cheap.
 
 If a patch ever becomes unavoidable:
 

@@ -306,81 +306,48 @@ struct SettingsView: View {
         validationErrors.removeAll()
         applyStatus = nil
         applyStatusIsError = false
-        guard let expectedRevision = settingsRevision else {
-            applyStatus = String(localized: "settings.load_failed")
-            applyStatusIsError = true
-            return
-        }
 
-        guard let downRate = parseRate(maxDownKB, field: "maxDownloadBytesPerSec"),
-              let upRate = parseRate(maxUpKB, field: "maxUploadBytesPerSec") else {
-            return
-        }
-        let port = UInt16(listenPort.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        let proxyPortValue = UInt16(proxyPort.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-
-        let candidate = EngineSettings(
-            downloadDirectory: downloadDir,
-            maxDownloadBytesPerSec: downRate,
-            maxUploadBytesPerSec: upRate,
-            listenPort: port,
+        // TEST-HONESTY-UI-CHAIN (WP13-SEC-HARDEN-001 REVIEW-002): request
+        // building and sending live in SettingsApplyFlow — the single seam
+        // the app tests drive with a real KeychainStore and a spying send
+        // closure that captures the outgoing request. This view keeps only
+        // UI-state mapping.
+        let form = SettingsApplyFlow.FormInput(
+            downloadDir: downloadDir,
+            maxDownKB: maxDownKB,
+            maxUpKB: maxUpKB,
+            listenPort: listenPort,
             dhtEnabled: dhtEnabled,
             lsdEnabled: lsdEnabled,
             upnpEnabled: upnpEnabled,
             natPmpEnabled: natPmpEnabled,
             encryptionEnabled: encryptionEnabled,
-            proxy: ProxyConfiguration(
-                kind: proxyKind,
-                host: proxyHost.trimmingCharacters(in: .whitespacesAndNewlines),
-                port: proxyPortValue,
-                username: proxyUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : proxyUsername.trimmingCharacters(in: .whitespacesAndNewlines),
-                password: nil
-            )
+            proxyKind: proxyKind,
+            proxyHost: proxyHost,
+            proxyPort: proxyPort,
+            proxyUsername: proxyUsername,
+            proxyPassword: proxyPassword
         )
-
-        // Pure client-side validation check first
-        let errors = SettingsRules.validate(candidate)
-        guard errors.isEmpty else {
+        let request: ApplySettingsRequest
+        switch SettingsApplyFlow.makeRequest(from: form, expectedRevision: settingsRevision) {
+        case .failure(.missingRevision):
+            applyStatus = String(localized: "settings.load_failed")
+            applyStatusIsError = true
+            return
+        case .failure(.validation(let errors)):
             validationErrors = errors
             return
+        case .success(let built):
+            request = built
         }
 
-        // This is a side-effect-free UI preflight. The agent repeats the same
-        // transaction with its real persistence/apply/rollback context below.
-        let preflight = SettingsTransaction.run(
-            candidate: candidate,
-            expectedRevision: expectedRevision,
-            context: SettingsTransaction.Context(
-                currentRevision: expectedRevision,
-                persist: { _, revision in revision + 1 },
-                apply: { _ in .success(()) },
-                rollback: { _, _ in }
-            )
-        )
-        guard case .applied = preflight else { return }
-
         Task {
-            let command = EngineCommandV1.applySettings(ApplySettingsRequest(
-                requestID: RequestID(),
-                idempotencyKey: IdempotencyKey(),
-                candidate: candidate,
-                expectedRevision: expectedRevision
-            ))
-            do {
-                guard case .settingsApply(let result) = try await viewModel.client.sendCommand(command) else {
-                    throw EngineClientError.protocolMismatch(details: "unexpected applySettings reply")
-                }
-                settingsRevision = result.revision
-                // Credentials are committed only after the agent accepted the
-                // complete settings transaction; the password never crosses IPC.
-                let credentialsSaved: Bool
-                if proxyKind != .none && !proxyPassword.isEmpty {
-                    credentialsSaved = await KeychainStore.saveProxyPassword(proxyPassword)
-                } else {
-                    credentialsSaved = await KeychainStore.deleteProxyPassword()
-                }
+            let outcome = await SettingsApplyFlow.apply(request, send: { [client = viewModel.client] command in
+                try await client.sendCommand(command)
+            })
+            switch outcome {
+            case .applied(let revision, let credentialsSaved):
+                settingsRevision = revision
                 if credentialsSaved {
                     applyStatus = String(localized: "settings.saved_successfully")
                     applyStatusIsError = false
@@ -388,26 +355,11 @@ struct SettingsView: View {
                     applyStatus = String(localized: "settings.keychain_failed")
                     applyStatusIsError = true
                 }
-            } catch {
+            case .failed(let error):
                 applyStatus = localizedApplyError(error)
                 applyStatusIsError = true
             }
         }
-    }
-
-    private func parseRate(_ value: String, field: String) -> Int64? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return 0 }
-        guard let kilobytes = Int64(trimmed) else {
-            validationErrors.append(SettingsValidationError(field: field, message: "settings.validation.number_required"))
-            return nil
-        }
-        let conversion = kilobytes.multipliedReportingOverflow(by: 1024)
-        guard !conversion.overflow else {
-            validationErrors.append(SettingsValidationError(field: field, message: "settings.validation.number_required"))
-            return nil
-        }
-        return conversion.partialValue
     }
 
     private func localizedValidationMessage(_ error: SettingsValidationError) -> String {

@@ -26,18 +26,24 @@ extension CodingUserInfoKey {
 // ---------------------------------------------------------------------------
 
 /// Startup configuration passed to the engine (`SessionConfiguration`).
+/// `password` is the SEC-1 memory-only credential (WP13-SEC-HARDEN-001): it
+/// lives on this internal agent→bridge DTO only, never in the XPC wire
+/// contract or any durable row. Optional and decode-tolerant: envelopes from
+/// older bridge-facing code without the key decode with `nil`.
 public struct SessionProxyDTO: Codable, Sendable, Equatable {
     public let kind: String
     public let host: String
     public let port: UInt16
     public let username: String?
+    public let password: String?
 
     public init(kind: String = "none", host: String = "", port: UInt16 = 0,
-                username: String? = nil) {
+                username: String? = nil, password: String? = nil) {
         self.kind = kind
         self.host = host
         self.port = port
         self.username = username
+        self.password = password
     }
 }
 

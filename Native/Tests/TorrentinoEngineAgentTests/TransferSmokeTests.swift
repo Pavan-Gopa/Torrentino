@@ -3354,6 +3354,10 @@ actor StubTransferEngine: TransferEngine {
     private var restartCalls = 0
     private var statuses: [String: TransferTorrentStatus] = [:]
     private var settingsHistory: [EngineSettings] = []
+    /// Boot configurations handed to start/restart (nil = engine defaults),
+    /// letting tests prove what a boot applied — e.g. the SEC-1
+    /// unauthenticated-until-apply window.
+    private var configurationHistory: [EngineSettings?] = []
     private var resourceBudgetHistory: [EngineResourceBudget] = []
     private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
     private var appliedTrackerTiers: [String: [[String]]] = [:]
@@ -3378,6 +3382,7 @@ actor StubTransferEngine: TransferEngine {
     var isStarted: Bool { started }
 
     func start(configuration: EngineSettings?) async throws {
+        configurationHistory.append(configuration)
         started = true
     }
 
@@ -3387,6 +3392,7 @@ actor StubTransferEngine: TransferEngine {
 
     func restart(configuration: EngineSettings?) async throws {
         restartCalls += 1
+        configurationHistory.append(configuration)
         statuses.removeAll()
         started = true
     }
@@ -3453,6 +3459,9 @@ actor StubTransferEngine: TransferEngine {
 
     func resourceBudgetApplications() -> [EngineResourceBudget] {
         resourceBudgetHistory
+    }
+    func recordedConfigurations() -> [EngineSettings?] {
+        configurationHistory
     }
 
     func addCallCount() -> Int {
