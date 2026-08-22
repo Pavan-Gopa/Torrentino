@@ -92,7 +92,7 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: 5756a70
+  last_commit: 1207750
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
