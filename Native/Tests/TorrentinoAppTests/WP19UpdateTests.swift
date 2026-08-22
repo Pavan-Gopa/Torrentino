@@ -8,7 +8,7 @@ final class WP19UpdateTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, UpdateFeed.appcastURLString)
         XCTAssertEqual(url.scheme?.lowercased(), "https")
         XCTAssertEqual(url.host?.lowercased(), "github.com")
-        XCTAssertTrue(UpdateFeed.isPlaceholder)
+        XCTAssertFalse(UpdateFeed.isPlaceholder)
     }
 
     func testMenuActionRoutesThroughInjectedCheckerWithoutSparkle() {
@@ -38,7 +38,7 @@ final class WP19UpdateTests: XCTestCase {
     }
 
 
-    func testInfoPlistDisablesAutomaticChecksAndKeepsSignatureKeyPlaceholder() throws {
+    func testInfoPlistDisablesAutomaticChecksAndContainsReleasePublicKey() throws {
         let infoURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -48,7 +48,10 @@ final class WP19UpdateTests: XCTestCase {
 
         XCTAssertEqual(info["SUEnableAutomaticChecks"] as? Bool, false)
         XCTAssertNil(info["SUFeedURL"], "UpdateFeed is the sole runtime feed source")
-        XCTAssertEqual(info["SUPublicEDKey"] as? String, "")
+        XCTAssertEqual(
+            info["SUPublicEDKey"] as? String,
+            "2aZihX3u9EefwO03jIqYOLGhKVnx/+yPs9i688UwxvE="
+        )
     }
 }
 

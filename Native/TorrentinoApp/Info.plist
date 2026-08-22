@@ -29,11 +29,11 @@
 	     through SPUUpdaterDelegate; do not add a second hardcoded SUFeedURL here. -->
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
-	<!-- WP19.H1 HUMAN gate: replace the empty placeholder with the EdDSA public
-	     key generated for release by sign_update. Until then Sparkle must fail
-	     closed on signature verification; never remove this key or disable it. -->
+	<!-- Sparkle EdDSA public key for account Pavan-Gopa-Torrentino.
+	     The private key remains in the release owner's macOS Keychain and must
+	     never be committed or exported into the repository. -->
 	<key>SUPublicEDKey</key>
-	<string></string>
+	<string>2aZihX3u9EefwO03jIqYOLGhKVnx/+yPs9i688UwxvE=</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
