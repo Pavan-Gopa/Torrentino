@@ -105,6 +105,7 @@ final class TorrentListViewModel: ObservableObject {
     }
 
     let client: EngineClient
+    private let sendRemovalCommand: @Sendable (EngineCommandV1) async throws -> SuccessPayload
     private(set) var directoryStack: [String] = []
     private var fileCursor: PageCursor?
     private var filesLoadRequestID = UUID()
@@ -115,8 +116,14 @@ final class TorrentListViewModel: ObservableObject {
     private var snapshotBackstopTask: Task<Void, Never>?
     private var appActivationObserver: NSObjectProtocol?
     private var snapshotRequestGeneration: UInt64 = 0
-    init(client: EngineClient) {
+    init(
+        client: EngineClient,
+        sendRemovalCommand: (@Sendable (EngineCommandV1) async throws -> SuccessPayload)? = nil
+    ) {
         self.client = client
+        self.sendRemovalCommand = sendRemovalCommand ?? { command in
+            try await client.sendCommand(command)
+        }
         appActivationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -127,6 +134,7 @@ final class TorrentListViewModel: ObservableObject {
             }
         }
     }
+
 
     // MARK: - Derived presentation
 
@@ -855,31 +863,28 @@ final class TorrentListViewModel: ObservableObject {
     }
 
     func removeSelected() {
-        let selectedIDs = Array(selection)
-        Task {
-            for recordID in selectedIDs {
-                let prepare = EngineCommandV1.prepareRemoval(PrepareRemovalRequest(
-                    requestID: RequestID(),
-                    idempotencyKey: IdempotencyKey(),
-                    recordID: recordID,
-                    deleteFiles: false
-                ))
+        _ = removeIDs(selection, deleteFiles: false)
+    }
+
+    @discardableResult
+    func removeIDs(
+        _ ids: Set<TorrentRecordID>,
+        deleteFiles: Bool
+    ) -> Task<Void, Never> {
+        let targetIDs = Array(ids)
+        let sendRemovalCommand = self.sendRemovalCommand
+        return Task {
+            for recordID in targetIDs {
                 do {
-                    guard case .removalToken(let token) = try await client.sendCommand(prepare) else {
-                        throw EngineClientError.protocolMismatch(details: "unexpected prepareRemoval reply")
-                    }
-                    let commit = EngineCommandV1.commitRemoval(CommitRemovalRequest(
-                        requestID: RequestID(),
-                        idempotencyKey: IdempotencyKey(),
-                        token: token
-                    ))
                     // WP-10 (Gate 9): the batch outcome (completed/partial/
                     // failed + per-item failures) is surfaced, never discarded.
                     // The engine itself is resumable: a partial or failed batch
                     // keeps its token pending for an explicit guided retry.
-                    guard case .removalResult(let result) = try await client.sendCommand(commit) else {
-                        throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
-                    }
+                    let result = try await TorrentRemovalFlow.run(
+                        recordID: recordID,
+                        deleteFiles: deleteFiles,
+                        send: sendRemovalCommand
+                    )
                     applyRemovalResult(result)
                     await refreshAuthoritativeSnapshotAfterMutation()
                     clearRemovalError()
@@ -1436,6 +1441,106 @@ final class TorrentListViewModel: ObservableObject {
                 )
             }
         }
+    }
+}
+
+enum TorrentRemovalFlow {
+    static func run(
+        recordID: TorrentRecordID,
+        deleteFiles: Bool,
+        send: @escaping @Sendable (EngineCommandV1) async throws -> SuccessPayload
+    ) async throws -> RemovalBatchResult {
+        let prepare = EngineCommandV1.prepareRemoval(PrepareRemovalRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            recordID: recordID,
+            deleteFiles: deleteFiles
+        ))
+        guard case .removalToken(let token) = try await send(prepare) else {
+            throw EngineClientError.protocolMismatch(details: "unexpected prepareRemoval reply")
+        }
+
+        let commit = EngineCommandV1.commitRemoval(CommitRemovalRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            token: token
+        ))
+        guard case .removalResult(let result) = try await send(commit) else {
+            throw EngineClientError.protocolMismatch(details: "unexpected commitRemoval reply")
+        }
+        return result
+    }
+}
+
+struct TorrentRemovalConfirmationRequest: Equatable {
+    let id: UUID
+    let ids: Set<TorrentRecordID>
+}
+
+/// MainActor-owned routing state for the destructive context-menu action.
+/// It captures the explicit context-menu IDs until confirmation and clears
+/// them on every dismissal path so later selection changes cannot retarget it.
+@MainActor
+struct TorrentRemovalConfirmationRouter: Equatable {
+    private var pendingRequest: TorrentRemovalConfirmationRequest?
+    private var lastRequestID: UUID?
+    private var consumedRequestID: UUID?
+    private(set) var isPresented = false
+
+    var pendingIDs: Set<TorrentRecordID> {
+        pendingRequest?.ids ?? []
+    }
+
+    /// Immutable data supplied to SwiftUI's confirmation action closure.
+    /// The closure can still confirm this request if SwiftUI writes
+    /// `isPresented = false` before invoking the button action.
+    var confirmationSnapshot: TorrentRemovalConfirmationRequest? {
+        guard isPresented else { return nil }
+        return pendingRequest
+    }
+
+    mutating func request(for ids: Set<TorrentRecordID>) {
+        guard !ids.isEmpty else {
+            cancel()
+            return
+        }
+        let request = TorrentRemovalConfirmationRequest(id: UUID(), ids: ids)
+        pendingRequest = request
+        lastRequestID = request.id
+        consumedRequestID = nil
+        isPresented = true
+    }
+
+    mutating func confirm() -> Set<TorrentRecordID> {
+        guard let request = pendingRequest else { return [] }
+        return confirm(request)
+    }
+
+    /// Consumes exactly one immutable request snapshot. This is intentionally
+    /// separate from the live presentation state for SwiftUI teardown order.
+    mutating func confirm(_ request: TorrentRemovalConfirmationRequest) -> Set<TorrentRecordID> {
+        guard !request.ids.isEmpty,
+              request.id == lastRequestID,
+              request.id != consumedRequestID else {
+            return []
+        }
+        consumedRequestID = request.id
+        clearPresentation()
+        return request.ids
+    }
+
+    mutating func cancel() {
+        consumedRequestID = lastRequestID
+        clearPresentation()
+    }
+
+    mutating func dismiss() {
+        clearPresentation()
+    }
+
+    private mutating func clearPresentation() {
+        pendingRequest = nil
+        isPresented = false
     }
 }
 

@@ -4285,6 +4285,23 @@
         }
       }
     },
+    "common.cancel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отмена"
+          }
+        }
+      }
+    },
     "common.close": {
       "extractionState": "manual",
       "localizations": {
@@ -4349,6 +4366,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить"
+          }
+        }
+      }
+    },
+    "torrents.action.remove_and_delete_files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove and Delete Files…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить вместе с файлами…"
           }
         }
       }
@@ -4485,6 +4519,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось удалить"
+          }
+        }
+      }
+    },
+    "remove.confirm.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove selected torrents and delete files?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить выбранные торренты и файлы?"
+          }
+        }
+      }
+    },
+    "remove.confirm.message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This cannot be undone. The selected torrent tasks will be removed and downloaded files moved to Trash. Files shared by other torrents are protected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это действие нельзя отменить. Выбранные задачи торрентов будут удалены, а загруженные файлы перемещены в Корзину. Файлы, общие с другими торрентами, защищены."
+          }
+        }
+      }
+    },
+    "remove.confirm.delete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove and Delete Files"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить вместе с файлами"
           }
         }
       }

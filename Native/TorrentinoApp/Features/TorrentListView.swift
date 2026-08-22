@@ -17,6 +17,7 @@ struct TorrentListView: View {
     @State private var selectedFilter: TorrentListFilter? = .all
     @State private var sortOrder = [KeyPathComparator(\TorrentSnapshot.displayName)]
     @AppStorage(FilesPaneSizing.persistenceKey) private var persistedFilesPaneHeight = 0.0
+    @State private var removalConfirmation = TorrentRemovalConfirmationRouter()
 
     var body: some View {
         NavigationSplitView {
@@ -79,6 +80,21 @@ struct TorrentListView: View {
         .sheet(isPresented: $viewModel.showInspector) {
             InspectorView(torrent: viewModel.selectedTorrent, viewModel: viewModel)
         }
+        .confirmationDialog(
+            String(localized: "remove.confirm.title"),
+            isPresented: deleteFilesConfirmationPresented,
+            titleVisibility: .visible,
+            presenting: removalConfirmation.confirmationSnapshot
+        ) { request in
+            Button(String(localized: "remove.confirm.delete"), role: .destructive) {
+                confirmDeleteFilesRemoval(request)
+            }
+            Button(String(localized: "common.cancel"), role: .cancel) {
+                cancelDeleteFilesRemoval()
+            }
+        } message: { _ in
+            Text(String(localized: "remove.confirm.message"))
+        }
         .onChange(of: viewModel.selection) { _ in
             viewModel.selectionDidChange()
         }
@@ -97,6 +113,31 @@ struct TorrentListView: View {
             if reduceMotion { transaction.animation = nil }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: viewModel.torrents)
+    }
+
+    private var deleteFilesConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { removalConfirmation.isPresented },
+            set: { presented in
+                if !presented {
+                    removalConfirmation.dismiss()
+                }
+            }
+        )
+    }
+
+    private func requestDeleteFilesConfirmation(for ids: Set<TorrentRecordID>) {
+        removalConfirmation.request(for: ids)
+    }
+
+    private func confirmDeleteFilesRemoval(_ request: TorrentRemovalConfirmationRequest) {
+        let ids = removalConfirmation.confirm(request)
+        guard !ids.isEmpty else { return }
+        viewModel.removeIDs(ids, deleteFiles: true)
+    }
+
+    private func cancelDeleteFilesRemoval() {
+        removalConfirmation.cancel()
     }
 
     // MARK: - Sidebar
@@ -241,9 +282,14 @@ struct TorrentListView: View {
             }
             .disabled(!viewModel.canResume(targetIDs))
             Button(String(localized: "torrents.action.remove")) {
-                viewModel.removeSelected()
+                viewModel.removeIDs(targetIDs, deleteFiles: false)
             }
-            .disabled(viewModel.selection.isEmpty)
+            .disabled(targetIDs.isEmpty)
+
+            Button(String(localized: "torrents.action.remove_and_delete_files"), role: .destructive) {
+                requestDeleteFilesConfirmation(for: targetIDs)
+            }
+            .disabled(targetIDs.isEmpty)
 
             Divider()
 
