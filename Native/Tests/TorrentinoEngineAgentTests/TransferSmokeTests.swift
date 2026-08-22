@@ -2023,6 +2023,87 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertLessThanOrEqual(pending, 8)
     }
 
+    // MARK: - WP14 overflow recovery marker stickiness
+
+    func testWP14OverflowMarkerSurvivesTrailingReplacement() async throws {
+        // Failing campaign shape, minimized: a stalled consumer owns the
+        // first delivery, coalescing replacements pile up while it is busy,
+        // one bounded overflow burst queues the droppedDelta recovery
+        // marker, and a trailing urgent event replaces the queued batch.
+        // Exactly one marker must be delivered, ahead of the tail content.
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0, maxPendingEvents: 8)
+        let collector = GatedBatchCollector()
+        await bus.register(collector.sink())
+
+        await bus.publish([makeHealthEvent(0)], urgent: true)
+        for revision in 1...10 {
+            await bus.publish([makeHealthEvent(UInt64(revision))], urgent: true)
+        }
+        await bus.publish(makeOverflowBurst(count: 32, startRevision: 100), urgent: true)
+        let overflowed = await bus.overflowed()
+        XCTAssertTrue(overflowed)
+        await bus.publish([makeHealthEvent(999)], urgent: true)
+
+        await collector.releaseGate()
+        let batches = await collector.batches(waitingFor: 2, timeoutNanoseconds: 5_000_000_000)
+        XCTAssertEqual(batches.count, 2, "stalled first delivery plus one merged replacement")
+        let markers = batches.flatMap(\.self).filter(isDroppedDeltaMarker)
+        XCTAssertEqual(markers.count, 1, "exactly one resync marker must survive the replacement")
+        if let leading = batches[1].first {
+            XCTAssertTrue(isDroppedDeltaMarker(leading), "marker must lead the surviving batch")
+        }
+        XCTAssertEqual(batches[1].last, makeHealthEvent(999), "tail content rides behind the marker")
+    }
+
+    func testWP14RepeatedReplacementsKeepExactlyOneOverflowMarker() async throws {
+        // Repeated queued-batch replacements must neither duplicate nor drop
+        // the marker — including a second overflow whose fresh marker meets
+        // the still-queued one.
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0, maxPendingEvents: 8)
+        let collector = GatedBatchCollector()
+        await bus.register(collector.sink())
+
+        await bus.publish([makeHealthEvent(0)], urgent: true)
+        await bus.publish(makeOverflowBurst(count: 32, startRevision: 1), urgent: true)
+        await bus.publish([makeHealthEvent(200)], urgent: true)
+        await bus.publish([makeHealthEvent(201)], urgent: true)
+        await bus.publish(makeOverflowBurst(count: 32, startRevision: 300), urgent: true)
+        await bus.publish([makeHealthEvent(500)], urgent: true)
+
+        await collector.releaseGate()
+        let batches = await collector.batches(waitingFor: 2, timeoutNanoseconds: 5_000_000_000)
+        XCTAssertEqual(batches.count, 2)
+        let markers = batches.flatMap(\.self).filter(isDroppedDeltaMarker)
+        XCTAssertEqual(markers.count, 1, "repeated replacements must not duplicate or drop the marker")
+        if let leading = batches[1].first {
+            XCTAssertTrue(isDroppedDeltaMarker(leading))
+        }
+        XCTAssertEqual(batches[1].last, makeHealthEvent(500))
+    }
+
+    func testWP14OverflowMarkerClearsAfterSuccessfulDelivery() async throws {
+        // Once a marker-carrying batch is delivered, later traffic must not
+        // resurrect it: exactly one marker ever, no re-delivery loop.
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0, maxPendingEvents: 8)
+        let collector = GatedBatchCollector()
+        await bus.register(collector.sink())
+
+        await bus.publish([makeHealthEvent(0)], urgent: true)
+        await bus.publish(makeOverflowBurst(count: 32, startRevision: 1), urgent: true)
+
+        await collector.releaseGate()
+        var batches = await collector.batches(waitingFor: 2, timeoutNanoseconds: 5_000_000_000)
+        XCTAssertEqual(batches.count, 2)
+        XCTAssertTrue(batches[1].contains(where: isDroppedDeltaMarker))
+
+        await bus.publish([makeHealthEvent(900)], urgent: true)
+        batches = await collector.batches(waitingFor: 3, timeoutNanoseconds: 5_000_000_000)
+        XCTAssertEqual(batches.count, 3, "no re-delivery loop after the marker cleared")
+        XCTAssertEqual(batches.last, [makeHealthEvent(900)], "post-recovery delivery carries no marker")
+        XCTAssertEqual(batches.flatMap(\.self).filter(isDroppedDeltaMarker).count, 1)
+    }
+
+
     func testWP09OfflinePreservesDesiredStateAndRecoversWithoutSpin() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
@@ -3678,5 +3759,63 @@ private actor DeliveryCollector {
         }
         return collected
     }
+}
+
+// MARK: - Overflow-marker fixtures
+
+/// Records every delivered batch separately. The first delivery stalls on a
+/// test-controlled gate so publishes land while the consumer is provably
+/// busy, making queued-batch replacement deterministic.
+private actor GatedBatchCollector {
+    private var batches: [[EngineEventV1]] = []
+    private var gateOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func sink() -> TransferEventBus.Sink {
+        TransferEventBus.Sink(id: UUID()) { [weak self] events in
+            guard let self else { return }
+            await self.receive(events)
+        }
+    }
+
+    private func receive(_ batch: [EngineEventV1]) async {
+        if !gateOpen {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        batches.append(batch)
+    }
+
+    /// Releases stalled deliveries; later ones pass through immediately.
+    func releaseGate() {
+        gateOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    /// Waits until `count` batches arrived, then adds a grace window so an
+    /// unexpected extra delivery would surface to the caller's assertion.
+    func batches(waitingFor count: Int, timeoutNanoseconds: UInt64) async -> [[EngineEventV1]] {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ timeoutNanoseconds
+        while batches.count < count && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        return batches
+    }
+}
+
+private func makeHealthEvent(_ revision: UInt64) -> EngineEventV1 {
+    .engineHealthChanged(EngineHealthChangedEvent(healthy: true, reason: nil, engineRevision: revision))
+}
+
+private func makeOverflowBurst(count: Int, startRevision: UInt64) -> [EngineEventV1] {
+    (0..<count).map { offset in makeHealthEvent(startRevision &+ UInt64(offset)) }
+}
+
+private func isDroppedDeltaMarker(_ event: EngineEventV1) -> Bool {
+    if case .snapshotRequired(let payload) = event {
+        return payload.reason == .droppedDelta
+    }
+    return false
 }
     

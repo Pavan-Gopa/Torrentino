@@ -100,9 +100,22 @@ actor TransferEventBus {
         let sinkValues = Array(sinks.values)
         for sink in sinkValues {
             if activeDeliveries.contains(sink.id) {
-                // Replace stale queued state with the newest batch. The batch
-                // already contains a snapshotRequired marker after overflow.
-                queuedDeliveries[sink.id] = batch
+                // Replace stale queued state with the newest batch, keeping
+                // relative order of non-marker events. A
+                // snapshotRequired(.droppedDelta) marker is sticky across
+                // replacements: whichever batch carries it, exactly one copy
+                // leads the surviving batch. A trailing event published after
+                // an overflow burst therefore cannot erase the resync signal
+                // before a slow sink delivers it, repeated replacements
+                // neither duplicate nor resurrect it, and delivering the
+                // batch consumes it (no re-delivery loop). The merged batch
+                // stays within maxPendingEvents plus the carried marker.
+                var merged = batch
+                if !merged.contains(where: { Self.isDroppedDeltaMarker($0) }),
+                   let stalled = queuedDeliveries[sink.id]?.first(where: { Self.isDroppedDeltaMarker($0) }) {
+                    merged.insert(stalled, at: 0)
+                }
+                queuedDeliveries[sink.id] = merged
             } else {
                 activeDeliveries.insert(sink.id)
                 Task { [weak self] in
@@ -112,6 +125,16 @@ actor TransferEventBus {
             }
         }
         log.debug("published \(batch.count) events to \(sinkValues.count) sink(s)")
+    }
+
+    /// True for the overflow recovery signal: the snapshotRequired event that
+    /// tells a consumer its delta stream lost events and a full snapshot is
+    /// required to restore an authoritative view.
+    private static func isDroppedDeltaMarker(_ event: EngineEventV1) -> Bool {
+        if case .snapshotRequired(let payload) = event {
+            return payload.reason == .droppedDelta
+        }
+        return false
     }
 
     private func deliveryFinished(id: UUID) {
