@@ -26,9 +26,13 @@ public actor RedactedLogFileManager {
     public static let shared = RedactedLogFileManager()
 
     private let fileManager: FileManager
-    private let logDirectory: URL
+    private let requestedLogDirectory: URL?
+    private var logDirectory: URL
     private let maxFileSize: Int64
     private let maxFileCount: Int
+    private var directoryResolved = false
+    private var directoryWasOverride = false
+    private var resolvedEnvironmentOverride: URL?
     private var currentFileHandle: FileHandle?
 
     public init(
@@ -38,28 +42,27 @@ public actor RedactedLogFileManager {
         fileManager: FileManager = .default
     ) {
         self.fileManager = fileManager
+        self.requestedLogDirectory = logDirectory
+        self.logDirectory = logDirectory ?? Self.defaultLogDirectory(fileManager: fileManager)
         self.maxFileSize = max(1, maxFileSize)
         self.maxFileCount = max(1, maxFileCount)
-
-        if let logDirectory {
-            self.logDirectory = logDirectory
-        } else if let override = ProcessInfo.processInfo.environment["TORRENTINO_LOG_DIRECTORY"], !override.isEmpty {
-            self.logDirectory = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
-        } else {
-            self.logDirectory = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("Logs", isDirectory: true)
-                .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
-                ?? URL(fileURLWithPath: "/tmp/torrentino-logs", isDirectory: true)
-        }
-
-        try? fileManager.createDirectory(at: self.logDirectory, withIntermediateDirectories: true)
     }
 
     public nonisolated static func defaultLogDirectory(fileManager: FileManager = .default) -> URL {
-        if let override = ProcessInfo.processInfo.environment["TORRENTINO_LOG_DIRECTORY"], !override.isEmpty {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+        Self.environmentLogDirectory() ?? Self.productionLogDirectory(fileManager: fileManager)
+    }
+
+    private static func environmentLogDirectory() -> URL? {
+        guard let value = getenv("TORRENTINO_LOG_DIRECTORY"),
+              let override = String(validatingCString: value),
+              !override.isEmpty else {
+            return nil
         }
-        return fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
+        return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    private static func productionLogDirectory(fileManager: FileManager) -> URL {
+        fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Logs", isDirectory: true)
             .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
             ?? URL(fileURLWithPath: "/tmp/torrentino-logs", isDirectory: true)
@@ -130,6 +133,8 @@ public actor RedactedLogFileManager {
         let line = "[\(timestamp)] [\(category)] [\(level.uppercased())] \(cleanMessage)\n"
         guard let data = line.data(using: .utf8) else { return }
 
+        refreshEnvironmentOverrideIfNeeded()
+
         do {
             let handle = try prepareCurrentFileHandle()
             try handle.seekToEnd()
@@ -174,13 +179,112 @@ public actor RedactedLogFileManager {
 
     private func prepareCurrentFileHandle() throws -> FileHandle {
         if let currentFileHandle { return currentFileHandle }
+
+        do {
+            try resolveLogDirectoryIfNeeded()
+            return try openCurrentFileHandle()
+        } catch {
+            guard directoryWasOverride else { throw error }
+
+            let failedDirectory = logDirectory
+            let isolatedDirectory = try makeIsolatedLogDirectory()
+            logDirectory = isolatedDirectory
+            directoryWasOverride = false
+            try writeIsolationWarning(
+                failedDirectory: failedDirectory,
+                reason: error
+            )
+            return try openCurrentFileHandle()
+        }
+    }
+
+    private func refreshEnvironmentOverrideIfNeeded() {
+        guard requestedLogDirectory == nil else { return }
+
+        let liveOverride = Self.environmentLogDirectory()
+        guard liveOverride != resolvedEnvironmentOverride else { return }
+
+        try? currentFileHandle?.close()
+        currentFileHandle = nil
+        logDirectory = liveOverride
+            ?? Self.productionLogDirectory(fileManager: fileManager)
+        directoryResolved = false
+        directoryWasOverride = false
+        resolvedEnvironmentOverride = liveOverride
+    }
+
+    private func resolveLogDirectoryIfNeeded() throws {
+        guard !directoryResolved else { return }
+
+        let environmentOverride = Self.environmentLogDirectory()
+        logDirectory = requestedLogDirectory
+            ?? environmentOverride
+            ?? Self.productionLogDirectory(fileManager: fileManager)
+        directoryWasOverride = requestedLogDirectory != nil || environmentOverride != nil
+        resolvedEnvironmentOverride = environmentOverride
+        directoryResolved = true
+        try fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+    }
+
+    private func openCurrentFileHandle() throws -> FileHandle {
         let url = logDirectory.appendingPathComponent("engine_log_current.log")
         if !fileManager.fileExists(atPath: url.path) {
-            fileManager.createFile(atPath: url.path, contents: nil)
+            guard fileManager.createFile(atPath: url.path, contents: nil) else {
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: CocoaError.Code.fileWriteUnknown.rawValue,
+                    userInfo: [NSFilePathErrorKey: url.path]
+                )
+            }
         }
         let handle = try FileHandle(forWritingTo: url)
         currentFileHandle = handle
         return handle
+    }
+
+    private func makeIsolatedLogDirectory() throws -> URL {
+        let template = fileManager.temporaryDirectory
+            .appendingPathComponent("TorrentinoLogIsolation.XXXXXX", isDirectory: true)
+            .path
+        var buffer = Array(template.utf8CString)
+        guard let path = buffer.withUnsafeMutableBufferPointer({ pointer -> String? in
+            guard let base = pointer.baseAddress, let result = mkdtemp(base) else {
+                return nil
+            }
+            return String(cString: result)
+        }) else {
+            throw NSError(
+                domain: "TorrentinoLogFileManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "mkdtemp failed for \(template)"]
+            )
+        }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    private func writeIsolationWarning(failedDirectory: URL, reason: Error) throws {
+        let url = logDirectory.appendingPathComponent("engine_log_current.log")
+        if !fileManager.fileExists(atPath: url.path) {
+            guard fileManager.createFile(atPath: url.path, contents: nil) else {
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: CocoaError.Code.fileWriteUnknown.rawValue,
+                    userInfo: [NSFilePathErrorKey: url.path]
+                )
+            }
+        }
+
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let warning = "[\(timestamp)] [diagnostics] [FAULT] FATAL: log-isolation failed closed; " +
+            "TORRENTINO_LOG_DIRECTORY override unusable; " +
+            "isolated_directory=\(Self.redact(logDirectory.path)); " +
+            "requested_directory=\(Self.redact(failedDirectory.path)); " +
+            "reason=\(Self.redact(String(describing: reason)))\n"
+        try handle.write(contentsOf: Data(warning.utf8))
+        try handle.synchronize()
     }
 
     private func rotateLogs() {

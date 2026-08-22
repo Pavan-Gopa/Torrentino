@@ -84,6 +84,109 @@ final class WP13DiagnosticsSecurityTests: XCTestCase {
         }
     }
 
+    func testLateEnvironmentOverrideResolvesOnFirstWrite() async throws {
+        let previousOverride = getenv("TORRENTINO_LOG_DIRECTORY").map { String(cString: $0) }
+        defer {
+            if let previousOverride {
+                setenv("TORRENTINO_LOG_DIRECTORY", previousOverride, 1)
+            } else {
+                unsetenv("TORRENTINO_LOG_DIRECTORY")
+            }
+        }
+
+        unsetenv("TORRENTINO_LOG_DIRECTORY")
+        let logManager = RedactedLogFileManager()
+        _ = await logManager.allLogFileURLs()
+
+        let lateDirectory = tempDir.appendingPathComponent("LateEnvironmentLogs", isDirectory: true)
+        try FileManager.default.createDirectory(at: lateDirectory, withIntermediateDirectories: true)
+        setenv("TORRENTINO_LOG_DIRECTORY", lateDirectory.path, 1)
+
+        let sentinel = "wp14-late-setenv-sentinel-\(UUID().uuidString)"
+        await logManager.writeLog(category: "diagnostics", level: "debug", message: sentinel)
+
+        let logURLs = await logManager.allLogFileURLs()
+        let currentURL = try XCTUnwrap(
+            logURLs.first(where: { $0.lastPathComponent == "engine_log_current.log" })
+        )
+        XCTAssertEqual(
+            currentURL.deletingLastPathComponent().standardizedFileURL,
+            lateDirectory.standardizedFileURL,
+            "late TORRENTINO_LOG_DIRECTORY must win before the first write"
+        )
+        let lines = await logManager.fetchRecentLogLines(maxCount: 100)
+        XCTAssertTrue(lines.contains { $0.contains(sentinel) })
+
+        let userSinkFile = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
+            .appendingPathComponent("engine_log_current.log")
+            ?? URL(fileURLWithPath: "/tmp/torrentino-logs/engine_log_current.log")
+        if FileManager.default.fileExists(atPath: userSinkFile.path),
+           let userContents = try? String(contentsOf: userSinkFile, encoding: .utf8) {
+            XCTAssertFalse(userContents.contains(sentinel),
+                           "late-setenv sentinel must not reach the user log directory")
+        }
+    }
+
+    func testUnusableEnvironmentOverrideFailsClosedIntoIsolatedDirectory() async throws {
+        let previousOverride = getenv("TORRENTINO_LOG_DIRECTORY").map { String(cString: $0) }
+        defer {
+            if let previousOverride {
+                setenv("TORRENTINO_LOG_DIRECTORY", previousOverride, 1)
+            } else {
+                unsetenv("TORRENTINO_LOG_DIRECTORY")
+            }
+        }
+        var isolatedDirectory: URL?
+        defer {
+            if let isolatedDirectory {
+                try? FileManager.default.removeItem(at: isolatedDirectory)
+            }
+        }
+
+
+        let unusableOverride = tempDir.appendingPathComponent("not-a-directory")
+        XCTAssertTrue(FileManager.default.createFile(atPath: unusableOverride.path, contents: Data("file".utf8)))
+        setenv("TORRENTINO_LOG_DIRECTORY", unusableOverride.path, 1)
+
+        let logManager = RedactedLogFileManager()
+        let sentinel = "wp14-fail-closed-sentinel-\(UUID().uuidString)"
+        await logManager.writeLog(category: "diagnostics", level: "fault", message: sentinel)
+
+        let logURLs = await logManager.allLogFileURLs()
+        let currentURL = try XCTUnwrap(
+            logURLs.first(where: { $0.lastPathComponent == "engine_log_current.log" })
+        )
+        let isolatedDirectoryURL = currentURL.deletingLastPathComponent()
+        isolatedDirectory = isolatedDirectoryURL
+        XCTAssertTrue(
+            isolatedDirectoryURL.lastPathComponent.hasPrefix("TorrentinoLogIsolation."),
+            "an unusable override must resolve to a fresh isolated directory"
+        )
+        XCTAssertNotEqual(isolatedDirectoryURL.standardizedFileURL, unusableOverride.standardizedFileURL)
+
+        let lines = await logManager.fetchRecentLogLines(maxCount: 100)
+        XCTAssertTrue(lines.contains { $0.contains(sentinel) })
+        XCTAssertTrue(
+            lines.contains { $0.contains("FATAL: log-isolation failed closed") },
+            "fail-closed resolution must leave a loud warning in the isolated sink"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unusableOverride.path))
+
+
+        let userSinkFile = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent("com.torrentino.app.engine-agent", isDirectory: true)
+            .appendingPathComponent("engine_log_current.log")
+            ?? URL(fileURLWithPath: "/tmp/torrentino-logs/engine_log_current.log")
+        if FileManager.default.fileExists(atPath: userSinkFile.path),
+           let userContents = try? String(contentsOf: userSinkFile, encoding: .utf8) {
+            XCTAssertFalse(userContents.contains(sentinel),
+                           "fail-closed sentinel must not reach the user log directory")
+        }
+    }
+
     // MARK: - 1. Redaction Logic Tests
 
     func testLogRedactionScrubsSensitiveFields() {
