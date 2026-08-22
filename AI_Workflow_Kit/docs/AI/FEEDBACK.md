@@ -1,3 +1,13 @@
+### [WP19-H1-PARTIAL] GitHub feed + EdDSA key configured; signed release/appcast pending (2026-08-22)
+- Human supplied repo: `https://github.com/Pavan-Gopa/Torrentino`.
+- UpdateFeed wired to
+  `https://github.com/Pavan-Gopa/Torrentino/releases/latest/download/appcast.xml`.
+- Sparkle `generate_keys --account Pavan-Gopa-Torrentino` generated the EdDSA
+  pair; private key remains in macOS Keychain only. Public key
+  `2aZihX3u9EefwO03jIqYOLGhKVnx/+yPs9i688UwxvE=` embedded as SUPublicEDKey.
+- Keychain public-key read-back matches Info.plist; TorrentinoAppTests 60/60.
+- H1 remains open until WP-16 supplies a Developer-ID-signed, notarized,
+  stapled artifact; only then publish GitHub Release + generate/sign appcast.
 ### [WP19-UPDATES-DONE] approved — Sparkle 2 manual updates, GitHub Releases (2026-08-22)
 - Lane [WP19.D1..D3]+[WP19.J1]; Human decisions: GitHub Releases / Sparkle 2 /
   manual-only UX. Open sub-item [WP19.H1] HUMAN (EdDSA key + appcast publish).

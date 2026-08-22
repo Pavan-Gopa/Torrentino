@@ -9,11 +9,11 @@ current_step: WP-19
 current_work_item_id: null
 current_work_item: null
 step_description: >-
-  WP-19 in-app updates CLOSED (reviewer approved after behavioral-test
-  delta; 60/60 app tests). Remaining open item: [WP19.H1] HUMAN gate —
-  generate EdDSA key via sign_update, publish GitHub Releases appcast,
-  substitute real repo URL in UpdateFeed.swift. No active lane; next_actor
-  human for live verification of WP-18/19/20 features and H1.
+  WP-19 in-app updates CLOSED (reviewer approved; 60/60 app tests).
+  [WP19.H1] partially complete: GitHub feed URL is wired to
+  Pavan-Gopa/Torrentino; EdDSA key generated in Keychain account
+  Pavan-Gopa-Torrentino and public key embedded. Remaining HUMAN/release gate:
+  WP-16 signed+notarized artifact, GitHub Release asset, generated appcast.
 target_files:
 - Native/TorrentinoApp/App/UpdateFeed.swift
 - Native/TorrentinoApp/Info.plist
@@ -92,7 +92,7 @@ checkpoint:
   last_pre_tag: torrentino/pre-WP-13
   last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: 1207750
+  last_commit: 6602ec3
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
