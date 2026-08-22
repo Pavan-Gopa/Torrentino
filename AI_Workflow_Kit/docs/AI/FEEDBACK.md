@@ -1,3 +1,217 @@
+### [WP13-SEC-HARDEN-001-DONE] qa_green — lane closed, step → WP-14 (2026-08-22)
+- Final independent `WP13SecHardenFinalTester001` (6m8s): **qa_green**.
+  Official `artifacts/tests/WP13FinalSentinel.xcresult` = **382 passed / 0
+  failed / 0 skipped**; both rollback-sentinel tests executed; negative
+  script clean; QA guard both directions; version guards fail-closed
+  (removed pins exit non-zero); scope recheck clean; zero findings.
+- Harness runtime evidence on retargeted pins: fallback 2014 → PASS 11/11
+  scenarios on libtorrent 2.0.14; wp12 retargeted suite PASS on
+  harness-2.0.14 (correctness 20/20, benchmarks 18 rows, fallbacks=0,
+  verifier 18/18).
+- Lane totals: audit findings SEC-1..5 remediated across five coder passes
+  and three review rounds; residual `hash_bench.cpp`-vs-2.1.1 routed to WP-14
+  prep. REPORT.md carries the final regression section.
+- Step transition recorded: current_step WP-13 → **WP-14**; hardening tree
+  commits to follow before measurements begin.
+### [WP13-SEC-HARDEN-001-ATTEMPT-04-DONE] sentinel micro-fix verified objectively (2026-08-22)
+- Coder005 (32m55s) fixed F1-ROLLBACK-SENTINEL at the root: pre-apply
+  durable marker captured via the existing loadSettings() seam
+  (`preApplyHadProxyPassword`, TransferCoordinator.swift:2479-2481) and passed
+  explicitly to the rollback persist (:2543); entry-read failure fails closed
+  through the existing persistenceFault mapper before any durable byte moves.
+- Tests added: boot withheld → failed apply → rollback row marker=true +
+  zero secret bytes across db/-wal/-shm + next-boot withheld "" restored;
+  boot nil → rollback marker=false. Ponytail ladder stopped at reuse rung
+  (existing seam/mapper/fixtures only).
+- Main objective verification (per REVIEW-003 ruling): official
+  `WP13SecHardenRollbackDerivedData` xcresult = **382/382/0**; both new tests
+  present; scoped diff = the two authorized files; negative script unchanged
+  32/32; QA guard green.
+- Routing: final independent Tester full regression
+  (`WP13SecHardenFinalTester001`) including retargeted harness runtime
+  evidence, then lane close → WP-14.
+### [WP13-SEC-HARDEN-001-REVIEW-003] changes_requested narrowed to F1-ROLLBACK-SENTINEL only (2026-08-22)
+- Fresh `WP13SecHardenReviewer003`: F2 corpus/lockstep PASS, 32-vector
+  negative script PASS, targeted XCTest TEST SUCCEEDED, live bridge swift +
+  headless 2.1.1 PASS, fallback 2.0.14 harness 11/11 PASS, old pins rejected
+  exit 2, official final xcresult 380/0/0, scoped diff-check clean,
+  Legacy untouched.
+- Sole finding **F1-ROLLBACK-SENTINEL major** (Main verified at
+  TransferCoordinator.swift:2521): rollback persistSettings omits the explicit
+  marker → default derivation from previousSettings erases a prior
+  marker=true/withheld sentinel to false after a failed apply while Keychain
+  retains the secret; next boot nil/silent instead of empty/notice.
+- Fix directive (reviewer verbatim + Main addition): capture the pre-apply
+  persisted marker at handleApplySettings entry and pass it explicitly in the
+  rollback persist call; tests: boot withheld → failed apply → row still
+  marker=true + zero bytes; boot nil → failed apply → marker=false.
+- Ruling: mechanical fix matching the verbatim directive inside an otherwise-
+  approved boundary → Main objective verification replaces a fourth judgment
+  round; final Tester follows.
+### [WP13-SEC-HARDEN-001-ATTEMPT-03-DONE] fix sweep waiting_review — Main verified (2026-08-22)
+- Coder004 (56m12s) closed F1-F4. Official
+  `artifacts/tests/WP13SecHardenConsolidatedFinal.xcresult` = **380/380/0**
+  (fresh `build/WP13SecHardenDerivedData3`). Mutation honesty EMPIRICAL:
+  removing the Keychain attachment made the UI-seam capture test FAIL
+  (exit 65), seam restored byte-identical (cmp), suite re-ran green.
+- Main re-verified: sentinel `shouldNoteUnauthenticatedProxyWindow` (:1804);
+  SettingsApplyFlow seam file exists; rename `_2013`→`_2014` complete; zero
+  removed-pin trees under both .build roots (find = 0); negative script
+  32/32 clean; QA guard both directions; version guards proven (2.1.0→exit 2,
+  2.1.1 → full smoke PASS); scoped git diff --check clean.
+- New disclosed residual (pre-existing product source, outside sweep):
+  `harness/src/hash_bench.cpp:214` fails to compile against libtorrent 2.1.1
+  headers — build_harness --lt-version 2.1.1 rebuild blocked until fixed;
+  2.0.14 fallback harness builds/passes. Routed as follow-up finding for the
+  Tester/wp12 surface owner.
+- Routing: fresh `WP13SecHardenReviewer003` five-gate delta check, then
+  final Tester, lane close, WP-14.
+### [WP13-SEC-HARDEN-001-REVIEW-002] changes_requested — consolidated 4-finding sweep (2026-08-22)
+- Fresh `WP13SecHardenReviewer002` (18m22s). PASS gates: SCOPE LEGITIMACY
+  (four pass-B extensions judged necessary-and-minimal), ADVERSARIAL
+  SPOT-PROBES (DELIVERED_PW_LEAK vector, wrong-type decode, old payload,
+  live bridge leg). FAIL: SEC-1 DELIVERY, BOOT TRANSIENT HONESTY, PASS-A
+  FIXES HOLD (announce policy only), PARTIAL-PIN CLOSURE, TEST HONESTY.
+- Consolidated findings (all previously ruled by Main via IRC injections):
+  1. **SEC-1-BOOT-RE-SUPPLY major**: persist closure writes marker=false
+     after a real delivery (marker derived from stripped candidate);
+     restore collapses nil vs empty-withheld into one notice path. Fix:
+     post-join live projection / explicit hadProxyPassword flag; nil vs
+     "" distinguished; notice only for withheld; marker-state tests.
+  2. **SEC-3-ANNOUNCE-POLICY minor**: digit heuristic contradicts the
+     intentional-broad policy → any opaque ≥9 segment before /announce(.php)?
+     redacted by design regardless of digits/leading char; comment + corpus
+     assert designed behavior (numeric/_/-/alnum all redacted).
+  3. **SEC-2-PARTIAL-PIN major**: runnable removed-pin trees (prefix
+     libtorrent-2.1.0-asan = 2.1.0.0; bridge .build harness/smoke/swift
+     2.1.0|2.0.13 variants); test_bridge_headless.sh accepts old versions
+     without validation; run_tests.sh can run pre-existing old binaries;
+     LICENSES.md + patches/README.md stale; test_wp01_fallback_2013.sh
+     rename to _2014 + callsites/docs.
+  4. **TEST-HONESTY-UI-CHAIN major**: extract the request-building seam used
+     by the REAL SettingsView path (no mirrored duplicate); app test drives it
+     with a spy EngineClient + real KeychainStore capturing the actual request;
+     captured shape feeds the live 2.1.1 bridge leg; mutation removing the
+     Keychain attachment must fail the test.
+- Routing: single fresh fix sweep `WP13SecHardenCoder004`, then Reviewer
+  delta-check, Tester, lane close, WP-14.
+### [WP13-SEC-HARDEN-001-ATTEMPT-02-DONE] rework + delivery waiting_review — Main verified (2026-08-22)
+- Pass A (Coder002, 52m14s): legacy rows scrubbed at rest (atomic rewrite +
+  VACUUM + WAL TRUNCATE; raw-scan test across db/-wal/-shm), redactor line-
+  integrity + backslash fallback + announce digit-heuristic (negative script
+  27/27, zero GAP/CLAIM-MISMATCH), partial pin closed (build_bridge_debug
+  sources lock, wp12 →2.0.14, build_harness validates against supported set,
+  SBOM/DEPENDENCIES refreshed, stale prefixes deleted, discovery 123/0).
+- Pass B (Coder003, 50m56s): wire-additive `proxyPassword` delivered
+  end-to-end — SettingsView seeds from Keychain on the apply path,
+  handleApplySettings joins onto LIVE config only (persist closure stays
+  credential-free), SessionProxyDTO forwards across PIMPL, EngineBridge.cpp:406
+  sets lt:: proxy_password (forced-empty removed), boot transient documented +
+  honest notice. Official **377/377/0**
+  (`WP13SecDeliverDerivedData/Logs/Test/Test-Torrentino-2026.08.22_12-24-56-+0530.xcresult`,
+  clean build); bridge harness leg through live libtorrent 2.1.1 PASS;
+  XPC envelope VERSION unchanged.
+- Scope notes: four justified pass-B extensions (adapter/, harness/,
+  scripts/test_bridge_swift.sh incl. one stale-line repair predating the lane,
+  TorrentinoIPCTests.swift) — routed to Reviewer for legitimacy judgment.
+  Coder002 schema carried a junk placeholder row ("REACTOR-LINES-PLACEHOLDER")
+  — cosmetic, ignored.
+- Routing: fresh `WP13SecHardenReviewer002` second-round delta review
+  (seven gates incl. adversarial probes). Tester follows approval.
+### [WP13-SEC-HARDEN-001-DECISION-01] Human delegated SEC-1 fork; Main chose wire-additive delivery (2026-08-22)
+- Exact Human instruction: **«Давай на твое усмотрение, потому что я в этом
+  не особо разбираюсь. Сделай так, как будет максимально правильно.»**
+- Main's engineering ruling: **full delivery, wire-additive, memory-only**.
+  Rationale: the settings UI advertises authenticated proxy but the secret
+  never reached the engine — shipping that surface as-is is a lie; keeping
+  the credential memory-only preserves the SEC-1 disk guarantee; additive
+  optional field is backward-compatible inside the versioned envelope
+  (JSONDecoder ignores unknown keys; sides ship together; N-1 lifecycle
+  tested); agent-side Keychain would duplicate secret stores (rejected,
+  ponytail); documented-defer ships a broken surface (rejected).
+- Implementation contract for the follow-up pass: ApplySettingsRequest gains
+  optional `proxyPassword` (nil-tolerant decode both directions);
+  SettingsView fills it from KeychainStore on every apply including launch;
+  agent holds it in activeSettings memory only; EngineCoordinator passes it
+  into session configuration; EngineBridge.cpp stops forcing
+  `proxy_password` empty and forwards what it receives; persistSettings stays
+  marker-only; boot transient (agent start → first UI apply) documented as
+  proxy-without-auth window; integration test drives SettingsView→Keychain→
+  apply→bridge boundary without StubTransferEngine as sole proof.
+- Sequencing: queued behind running rework pass (overlapping files);
+  single writer per file at a time.
+### [WP13-SEC-HARDEN-001-REVIEW-001] changes_requested — 6 findings, 5 gates fail (2026-08-22)
+- Fresh `WP13SecHardenReviewer001` (19m52s). PASS: pin supply-chain
+  end-to-end (ls-remote tags ↔ lock ↔ cache shas ↔ manifests ↔ pbxproj ↔
+  link proof), SEC-5 ordering, scoped diff/whitespace, covered negatives.
+- Findings:
+  1. **SEC-1-BOOT-RE-SUPPLY major**: production chain unwired — SettingsView
+     sends `password: nil` (:339), SessionProxyDTO has no password field,
+     EngineBridge.cpp sets `proxy_password` empty (:390-405), no agent
+     Keychain at startup; round-trip test bypasses everything via
+     StubTransferEngine. Main independently confirmed (testProxy handler is a
+     stub returning success:15ms).
+  2. **SEC-1-LEGACY-AT-REST major**: legacy credential rows sanitized only in
+     memory; bytes persist in main/WAL/SHM (+forensic copies); test checks
+     returned value only.
+  3. **SEC-2-PARTIAL-PIN major**: build_bridge_debug.sh hardcodes 2.1.0;
+     three WP12 scripts hardcode harness-2.0.13; build_harness.sh lacks
+     LT_SUPPORTED_VERSIONS validation; SBOM.md/DEPENDENCIES.md stale; old
+     prefixes still on disk.
+  4. **SEC-4 minor**: unterminated values containing backslash leak (probe
+     proven).
+  5. **SEC-3 minor**: balanced rule + `\s*` separators cross literal newlines
+     (following-line text consumed, probe proven); announce heuristic false-
+     positives on ordinary nested paths and misses `_`/`-`-leading tokens.
+  6. TEST-HONESTY: stub-based proof, missing persisted-bytes scan, incomplete
+     multiline edges.
+- Routing: uncontroversial fixes (2-6) go to fresh rework Coder now;
+  SEC-1 delivery design (wire-additive vs agent-Keychain vs documented defer)
+  goes to the Human as the one open fork — it predates this lane
+  (authenticated proxy never reached the engine; EngineBridge deliberately
+  emptied it) and defines v1 feature truth.
+### [WP13-SEC-HARDEN-001-ATTEMPT-01-DONE] waiting_review — Main verified incl. pin flip (2026-08-22)
+- Coder pass 1 closed SEC-1..5; Main-authorized addendum flipped the 5
+  pbxproj references to `libtorrent-2.1.1-release` (coder flagged the stale
+  prefix — regression would have linked the old engine).
+- Post-flip official evidence: `artifacts/tests/WP13SecHardenPinFlip.xcresult`
+  = **369 passed / 0 failed** (fresh `build/WP13SecHardenPinFlipDerivedData`,
+  clean build); link proof archived (linker resolves 2.1.1 archive, zero
+  2.1.0 in log; embedded agent binary strings = exactly `libtorrent/2.1.1`;
+  13329 lt:: symbols); negative redactor script exit 0, zero GAP/CLAIM-MISMATCH
+  lines; QA guard both directions; versions.lock ↔ cache shas ↔ manifests
+  consistent (2.1.1 `0f1635…`, 2.0.14 `1b0b21…`).
+- Scope: 10 files exactly (attempt set + authorized pbxproj addendum);
+  wp01 harness scripts retargeted 2.0.13→2.0.14 (runtime execution owned by
+  final Tester); SECURITY_FINDINGS.md residuals intentionally untouched
+  (auditor-owned artifact; remediation recorded here).
+- Routing: fresh `WP13SecHardenReviewer001` delta review (adversarial
+  false-positive probes on the 7-rule redactor, pin-bump supply-chain
+  integrity, SEC-1 byte-path completeness). Tester follows approval.
+### [WP13-SEC-HARDEN-001-OPEN] All five audit findings routed to fresh Coder (2026-08-22)
+- Checkpoint done: `6b30cad` (product/QA, 15 files +943/−59),
+  `d308f90` (workflow docs), tag `torrentino/WP-13-done`.
+- Lane scope (all five findings, ordered before WP-14 baselines because
+  SEC-2 changes the engine pin):
+  1. **SEC-1**: strip proxy password from persisted `engine_settings`
+     (non-secret fields + hasProxyPassword marker; Keychain re-supply at
+     boot via existing apply chain); prove zero secret bytes in state DB.
+  2. **SEC-2**: controlled pin bump libtorrent 2.1.0→2.1.1 /
+     2.0.13→2.0.14 — versions.lock tags+commits+SHA-256, cache refresh,
+     rebuild, full regression. Network fetch authorized with upstream hash
+     verification.
+  3. **SEC-3**: redactor plain-marker extension (tracker credential styles:
+     key=/uid=/path-embedded/yaml-colon) + corpus vectors.
+  4. **SEC-4**: terminator-tolerant fallback rule for unterminated-quote
+    JSON secrets (redact to EOL) + unbalanced vectors; fix the falsified
+    fail-safe comment.
+  5. **SEC-5**: hoist IPCPayloadLimit.validate above envelope decode in
+    processCommand.
+- Objective Gates: full clean XCTest fresh DerivedData 0 failures (baseline
+  364 + new tests); negative script GAP/CLAIM-MISMATCH lines eliminated;
+  persisted-settings test proves no password key; versions.lock pins verified
+  against fetched archives; QA guard both directions; git diff --check clean;
+  no commits by worker.
 ### [WP13-SECURITY-AUDIT-001-DONE] findings_open (0 Critical/High) — CVE gate CLOSED (2026-08-22)
 - Fresh `WP13SecurityAuditor001` (24m5s), 13 surfaces audited, Graphify
   staleness reported. Report: SECURITY_FINDINGS.md dated section +

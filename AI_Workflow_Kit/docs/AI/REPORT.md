@@ -6,7 +6,13 @@
 **Graphify:** `graphify query "WP-01 test scenarios, harness architecture, soak test, sanitizer suite, build scripts"` — OK (graph fresh, 2026-08-02 08:02)
 **Suite:** `bash Native/TorrentinoEngineBridge/scripts/qa/run_qa_suite.sh`
 
----
+> **HISTORICAL RECORD (2026-08-02).** Everything below documents the WP-01
+> bake-off as it ran, on the then-pinned libtorrent **2.1.0 / 2.0.13** and the
+> then-named `test_wp01_fallback_2013.sh`. Those pins were superseded by
+> SEC-2 (WP-13: now 2.1.1 / 2.0.14 per `Native/ThirdParty/versions.lock`) and
+> that QA script was renamed to `test_wp01_fallback_2014.sh` (WP13-SEC-HARDEN-001).
+> The old version numbers below are retained verbatim as history; they are not
+> live configuration.
 
 ## Verdict: **GREEN (tests green)**
 
@@ -35,7 +41,7 @@ for WP-02+ (coverage grows monotonically; nothing is deleted).
 | 1 | `test_wp01_build_idempotent.sh` | build.sh rebuild idempotent; arm64 artifact; SHA-256 == lock | **PASS** |
 | 2 | `test_wp01_versions_lock_valid.sh` | versions.lock format, pins, SHA-256/commit formats, reality match | **PASS** |
 | 3 | `test_wp01_harness_all_scenarios.sh` | run_tests.sh — all 11 scenarios PASS | **PASS** |
-| 4 | `test_wp01_fallback_2013.sh` | run_tests.sh --lt-version 2.0.13 — 11/11 PASS | **PASS** |
+| 4 | `test_wp01_fallback_2014.sh` — ran as `test_wp01_fallback_2013.sh` | run_tests.sh --lt-version 2.0.13 (then-pin) — 11/11 PASS | **PASS** |
 | 5 | `test_wp01_sanitizers_clean.sh` | run_sanitizers.sh — 0 ASan/UBSan reports | **PASS** |
 | 6 | `test_wp01_soak_smoke.sh` | run_soak.sh status parses; 25s smoke errors=0; report JSON valid | **PASS** |
 | 7 | `test_wp01_no_homebrew_positive.sh` | verify_no_homebrew CLEAN on default + fallback binaries | **PASS** |
@@ -613,3 +619,282 @@ WP13_TEST_FILTERS='TorrentinoEngineAgentTests/WP13NoSuchSuiteZeroCollectProbe' \
 bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh; echo EXIT:$?
 ```
 
+
+---
+## [WP13-SEC-HARDEN-001] Final regression
+
+**Date:** 2026-08-22T09:50Z
+**Lane:** WP13-SEC-HARDEN-001
+**Working dir:** /Users/pavan/Documents/AI Projects/Torrentino
+**HEAD:** d308f905198b144843c694822a23d05cec000dd5 (uncommitted hardening tree: 3 coder passes + micro-fix; sentinel edge fixed)
+**DerivedData:** build/WP13FinalSentinelDerivedData (fresh)
+**Result bundle:** artifacts/tests/WP13FinalSentinel.xcresult
+**Disposable TORRENTINO_LOG_DIRECTORY:** yes (xcodebuild and QA guard both use disposable; never touched ~/Library/Logs/com.torrentino.app.engine-agent or ~/Library/Application Support)
+**Tester:** WP13SecHardenFinalTester001 (fresh worker, evidence-only)
+
+### 1. FULL REGRESSION
+
+**Command:**
+```bash
+TORRENTINO_LOG_DIRECTORY=$(mktemp -d /tmp/torrentino-logs-WP13FinalSentinel-XXXXXX) \
+  xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/WP13FinalSentinelDerivedData \
+  -resultBundlePath artifacts/tests/WP13FinalSentinel.xcresult 2>&1 | tee artifacts/tests/WP13FinalSentinel.xcodebuild.log
+xcrun xcresulttool get test-results summary --path artifacts/tests/WP13FinalSentinel.xcresult
+xcrun xcresulttool get test-results tests --path artifacts/tests/WP13FinalSentinel.xcresult
+```
+
+**Result:** `TEST SUCCEEDED` exit 0, wall ~35s
+
+| Metric | Value |
+|---|---|
+| passedTests | **382** |
+| failedTests | **0** |
+| skippedTests | **0** |
+| totalTestCount | **382** |
+| result | Passed |
+| bundle | artifacts/tests/WP13FinalSentinel.xcresult (Info.plist 715B, database.sqlite3 392K, Data 28K entries) |
+| log | artifacts/tests/WP13FinalSentinel.xcodebuild.log (512K) |
+
+`xcresulttool get test-results summary` JSON (verbatim):
+```
+passedTests: 382, failedTests: 0, skippedTests: 0, totalTestCount: 382, result: Passed
+```
+
+**Sentinel tests executed (F1-ROLLBACK-SENTINEL, REVIEW-003):**
+
+```
+WP13DiagnosticsSecurityTests/testFailedApplyRollbackRestoresWithheldMarkerTrueAndZeroSecretBytes() — Passed (0.013s)
+WP13DiagnosticsSecurityTests/testFailedApplyRollbackKeepsGenuinelyUnauthenticatedMarkerFalse() — Passed (0.010s)
+```
+
+Both confirm the `TransferCoordinator.swift:2479-2481` pre-apply marker capture via `loadSettings` seam and the explicit rollback persist at `:2543` with `hadProxyPassword: preApplyHadProxyPassword` — withheld `""` vs genuinely-unauthenticated `nil` survive a failed apply with zero secret bytes at rest (db/-wal/-shm scan).
+
+Suite breakdown (via `xcodebuild` log tail, 382 cases across TorrentinoEngineAgentTests, TorrentinoAppTests, TorrentinoIPCTests, TorrentinoDomainTests, WPSafeFileOperationsTests, TransferSmokeTests, TorrentCreatorAgentTests, WP13I3/I7/I8/I9):
+
+| Suite | Approx cases |
+|---|---|
+| WP13DiagnosticsSecurityTests | 32 |
+| WP13I3HealthLaneSnapshotTests | 4 |
+| WP13I7ShutdownVetoTests | 3 |
+| WP13I8SubscribeEventsTests | 4 |
+| WP13I9DiagnosticsBootstrapTests | 3 |
+| TorrentinoDomainTests | ~19 |
+| TorrentinoIPCTests | ~77 |
+| TorrentinoEngineAgentPersistenceTests | ~16 |
+| TorrentCreatorAgentTests | ~23 |
+| TransferSmokeTests | ~117 |
+| WPSafeFileOperationsTests | ~30 |
+| Other | ~54 |
+| **Total** | **382** |
+
+Matches the disclosed Coder005 baseline (382/0) on the sentinel-fixed tree.
+
+### 2. REDACTOR NEGATIVE SCRIPT
+
+**Command:**
+```bash
+bash Native/TorrentinoEngineBridge/scripts/qa/test_security_redactor_negative.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_redactor.log
+```
+
+| Field | Value |
+|---|---|
+| exit | **0** |
+| PASS lines | **32** |
+| FAIL/GAP/CLAIM-MISMATCH lines | **0** |
+| log | artifacts/tests/WP13FinalSentinel_redactor.log |
+
+Vectors: plain query `passkey=/token=`, JSON `password/proxyPassword` (balanced + unterminated + escaped + trailing-backslash), `Authorization: Bearer`, `/Users/` and `/Volumes/` paths, multiline/newline safety, `key=/uid=/authkey=` query styles, path-embedded `/<opaque>/announce` (all shapes incl. `_/-` led, digit-free, numeric-bearing), `password: <colon>` yaml, word-boundary `keyboard/guid` guard, announce-shape host+suffix fidelity, `password:\n` line-integrity, `"secret":"UNBAL2_LEAK\nstill-no-quotes"` newline safety. Mirror sanity: 7 regex rules (lockstep via `testMirrorRedactorStaysInLockstepWithCompiledRedactor` executed above). `RESULT: PASS — compiled redactor scrubs all covered vectors incl. tracker styles and unterminated JSON values`
+
+### 3. QA GUARD — both directions
+
+**Probe A — real suite (must exit 0 GREEN):**
+```bash
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_qa_guard_real.log; echo EXIT:$?
+```
+| Field | Value |
+|---|---|
+| exit | **0** |
+| `[qa] executed` | **32** |
+| `[qa] failed` | **0** |
+| guard | `[ok] WP-13 Diagnostics & Security suite GREEN (executed=32, failed=0)` |
+| log | artifacts/tests/WP13FinalSentinel_qa_guard_real.log (excerpts: `testFailedApplyRollback…` both passed, `testMirrorRedactor…` 0.577s, `** TEST SUCCEEDED **`) |
+
+**Probe B — zero-collect (must fail closed exit 1):**
+```bash
+WP13_TEST_FILTERS='TorrentinoEngineAgentTests/WP13NoSuchSuiteZeroCollectProbe' \
+  bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_qa_guard_zero.log; echo EXIT:$?
+```
+| Field | Value |
+|---|---|
+| exit | **1** |
+| `[qa] executed` | **0** |
+| `[qa] failed` | **0** |
+| guard | `[FAIL] ZERO-COLLECT: xcodebuild executed 0 tests (suite not collected) — failing closed` (xcodebuild `** TEST SUCCEEDED **` with `Testing started completed.` 0.543s but zero cases) |
+| log | artifacts/tests/WP13FinalSentinel_qa_guard_zero.log |
+
+**Both directions green** — default GREEN with non-zero executed, nonexistent filter ZERO-COLLECT.
+
+### 4. HARNESS RUNTIME (retargeted pins, libtorrent 2.0.14)
+
+**WP01 fallback 2014 (expects PASS 11/11):**
+```bash
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp01_fallback_2014.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp01_fallback.log; echo EXIT:$?
+```
+| Field | Value |
+|---|---|
+| exit | **0** |
+| suite | **11 passed, 0 failed, total 2.984s** (Native/TorrentinoEngineBridge/runs/tests-2.0.14-release-20260822T091932Z/scenarios.log) |
+| log | artifacts/tests/WP13FinalSentinel_wp01_fallback.log (`[ok] harness reports libtorrent 2.0.14`, `[ok] fallback PASS count (= 11)`) |
+
+Scenarios: session_lifecycle, torrent_creation, add_torrent_file, info_hash_recognition, pause_resume, resume_data, session_state, exception_containment, magnet_metadata, data_transfer, crash_restore — all `--- PASS`.
+
+**WP12 retargeted (one of choice, harness-2.0.14):** ran the full WP12 retargeted battery against `harness-2.0.14-release`:
+
+| Script | Result | Evidence |
+|---|---|---|
+| `test_wp12_01_correctness.sh` | **PASS** (20/20 Swift, Metal gate) | artifacts/tests/WP13FinalSentinel_wp12_01.log (`20/20 green, Metal fully supported under flag`) |
+| `test_wp12_02_benchmarks.sh` | **PASS** (smoke 3 reps × 2 cells × 3 backends = 18 rows) | artifacts/tests/WP13FinalSentinel_wp12_02.log + Measurements/wp12/bench-20260822-145115.csv |
+| `test_wp12_03_fallback.sh` | **PASS** (injected device fail, Failure/CancellationTests, fallbacks=0) | artifacts/tests/WP13FinalSentinel_wp12_03.log |
+| `test_wp12_04_verifier.sh` | **PASS** (18/18 verifier cells, bench-hash CSV thermal evidence) | artifacts/tests/WP13FinalSentinel_wp12_04.log (`independent verifier battery: 18/18 cells PASS`, `No CPU power status recorded`) |
+
+WP12 was retargeted to `harness-2.0.14` per `Native/TorrentinoEngineBridge/scripts/qa/test_wp01_fallback_2014.sh`-style pin closure; all four scripts passed. The harness-2.0.14 smoke confirms 11 `--- PASS` lines with `11 passed, 0 failed`.
+
+### 5. VERSION GUARDS — fail-closed probes
+
+```bash
+bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh --lt-version 2.0.13 2>&1 | tee artifacts/tests/WP13FinalSentinel_version_guard_2013.log; echo EXIT:$?
+# error: libtorrent 2.0.13 is not pinned in versions.lock (supported: 2.1.1 2.0.14)  EXIT:2
+
+bash Native/TorrentinoEngineBridge/scripts/run_tests.sh --lt-version 2.1.0 2>&1 | tee artifacts/tests/WP13FinalSentinel_version_guard_210.log; echo EXIT:$?
+# error: libtorrent 2.1.0 is not pinned in versions.lock (supported: 2.1.1 2.0.14)  EXIT:2
+```
+
+| Probe | Expected | Actual |
+|---|---|---|
+| `test_bridge_headless.sh --lt-version 2.0.13` | exit non-zero | **2** (fail-closed, pre-harness validation at `run_tests.sh:41-43` / `test_bridge_headless.sh:41-43`) |
+| `run_tests.sh --lt-version 2.1.0` | exit non-zero | **2** (same `LT_SUPPORTED_VERSIONS` guard) |
+
+Both former pins (2.0.13, 2.1.0) are correctly rejected before any harness binary is touched (SEC-2 partial-pin closure, WP13-SEC-HARDEN-001 REVIEW-002).
+
+### 6. SCOPE RECHECK
+
+**Command:** `git status --short -- Native`
+
+```
+ M Native/Tests/TorrentinoAppTests/TorrentinoAppTests.swift
+ M Native/Tests/TorrentinoEngineAgentTests/TransferSmokeTests.swift
+ M Native/Tests/TorrentinoEngineAgentTests/WP13DiagnosticsSecurityTests.swift
+ M Native/Tests/TorrentinoIPCTests/TorrentinoIPCTests.swift
+ M Native/ThirdParty/LICENSES.md
+ M Native/ThirdParty/SBOM.md
+ M Native/ThirdParty/libtorrent/DEPENDENCIES.md
+ M Native/ThirdParty/libtorrent/build.sh
+ M Native/ThirdParty/libtorrent/patches/README.md
+ M Native/ThirdParty/versions.lock
+ M Native/Torrentino.xcodeproj/project.pbxproj
+ M Native/TorrentinoApp/Features/Settings/SettingsView.swift
+ M Native/TorrentinoEngineAgent/Agent/RedactedLogFileManager.swift
+ M Native/TorrentinoEngineAgent/EngineCoordinator/EngineBridgeDTOs.swift
+ M Native/TorrentinoEngineAgent/EngineCoordinator/EngineCoordinator.swift
+ M Native/TorrentinoEngineAgent/Persistence/PersistenceStore.swift
+ M Native/TorrentinoEngineAgent/Transfer/TransferCoordinator.swift
+ M Native/TorrentinoEngineBridge/adapter/EngineBridgeAdapter.mm
+ M Native/TorrentinoEngineBridge/bridge/EngineBridge.cpp
+ M Native/TorrentinoEngineBridge/bridge/EngineBridge.h
+ M Native/TorrentinoEngineBridge/harness/bridge_swift_test.swift
+ M Native/TorrentinoEngineBridge/scripts/build_bridge_debug.sh
+ M Native/TorrentinoEngineBridge/scripts/build_harness.sh
+ M Native/TorrentinoEngineBridge/scripts/qa/COVERAGE.md
+ M Native/TorrentinoEngineBridge/scripts/qa/test_security_redactor_negative.sh
+ D Native/TorrentinoEngineBridge/scripts/qa/test_wp01_fallback_2013.sh
+ M Native/TorrentinoEngineBridge/scripts/qa/test_wp01_no_homebrew_positive.sh
+ M Native/TorrentinoEngineBridge/scripts/qa/test_wp12_02_benchmarks.sh
+ M Native/TorrentinoEngineBridge/scripts/qa/test_wp12_03_fallback.sh
+ M Native/TorrentinoEngineBridge/scripts/qa/test_wp12_04_verifier.sh
+ M Native/TorrentinoEngineBridge/scripts/run_tests.sh
+ M Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh
+ M Native/TorrentinoEngineBridge/scripts/test_bridge_swift.sh
+ M Native/TorrentinoIPC/Commands.swift
+?? Native/TorrentinoApp/Features/Settings/SettingsApplyFlow.swift
+?? Native/TorrentinoEngineBridge/scripts/qa/test_wp01_fallback_2014.sh
+```
+
+| Metric | Value |
+|---|---|
+| ` M` modified | 33 |
+| ` D` deleted (renamed) | 1 (`test_wp01_fallback_2013.sh` → `test_wp01_fallback_2014.sh`) |
+| `??` untracked | 2 (`SettingsApplyFlow.swift`, `test_wp01_fallback_2014.sh`) |
+| total Native | **36** |
+| matches known cumulative set (Coder005 11+2 plus WP13 SEC-HARDEN hardening) | **MATCH** |
+| any unexpected `Native/` path outside the known set | **none** |
+| HEAD | d308f90 (docs close lane; uncommitted tree above is the verified artifact) |
+| outside-`Native` status (e.g. `.omp/`, `AI_Workflow_Kit/`) | not counted per lane scope; lane definition is `Native` only and is clean |
+
+`git diff --stat HEAD -- Native`: 34 files, +2039 -296 — exactly the hardening delta (versions.lock LT_2_1_1/LT_2_0_14, TransferCoordinator sentinel + `deliveredLive`, PersistenceStore redactor + marker, SBOM/LICENSES, bridge/harness guards).
+
+### 7. KNOWN RESIDUAL — CONFIRMED (not a new finding)
+
+**Command:**
+```bash
+bash Native/TorrentinoEngineBridge/scripts/build_harness.sh --lt-version 2.1.1 --flavor release
+# FAILED: CMakeFiles/torrentino-harness.dir/src/hash_bench.cpp.o — vendor header change libtorrent 2.1.1
+# /harness/src/hash_bench.cpp:214:51: error: no viable conversion from 'boost::string_view' to 'string_view'
+#   layers.dict_find(boost::string_view(...32))
+#   note: bdecode.hpp:343 dict_find(string_view key) — libtorrent 2.1.1 now takes std::string_view, not boost::string_view
+# ninja: build stopped: subcommand failed.  EXIT:2  (harness binary not produced)
+```
+
+`harness/src/hash_bench.cpp:214` (`Native/TorrentinoEngineBridge/harness/src/hash_bench.cpp:214` at `layers.dict_find(boost::string_view(...))`) does **NOT** compile against libtorrent **2.1.1** headers — `libtorrent 2.1.1` changed `bdecode_node::dict_find` to `std::string_view` while 2.0.14 accepted `boost::string_view`. This matches the disclosed Known Residual: `build_harness --lt-version 2.1.1 rebuild is blocked until a follow-up fix`. Verified that `harness-2.0.14-release` remains green (§4) and that the failure is confined to the 2.1.1 `hash_bench.cpp` VERIFY path, not to engine or bridge code. Scope: **do not count as a new finding**, but confirmed and noted.
+
+### 8. VERDICT — `qa_green` (with disclosed residual)
+
+Seven checks all pass on fresh runs:
+
+- ✅ 1. Full regression 382/0/0 + two sentinel tests executed
+- ✅ 2. Redactor negative 32/32, exit 0, 0 GAP/CLAIM-MISMATCH
+- ✅ 3. QA guard both directions (0 and non-zero filter)
+- ✅ 4. Harness runtime: WP01 fallback 11/11 on 2.0.14; WP12 retargeted 4/4 PASS on harness-2.0.14
+- ✅ 5. Version guards fail-closed on removed pins 2.0.13 and 2.1.0
+- ✅ 6. Scope recheck 36 Native paths matches known cumulative set, no surprise paths
+- ✅ 7. Known residual re-confirmed (hash_bench.cpp 2.1.1 compile, follow-up lane)
+
+**Re-runnable commands (exact):**
+```bash
+# 1 — full regression (fresh)
+TORRENTINO_LOG_DIRECTORY=$(mktemp -d /tmp/torrentino-logs-WP13FinalSentinel-XXXXXX) \
+  xcodebuild test -project Native/Torrentino.xcodeproj -scheme Torrentino \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/WP13FinalSentinelDerivedData \
+  -resultBundlePath artifacts/tests/WP13FinalSentinel.xcresult 2>&1 | tee artifacts/tests/WP13FinalSentinel.xcodebuild.log
+xcrun xcresulttool get test-results summary --path artifacts/tests/WP13FinalSentinel.xcresult
+xcrun xcresulttool get test-results tests --path artifacts/tests/WP13FinalSentinel.xcresult | grep -E "testFailedApplyRollback"
+
+# 2 — redactor
+bash Native/TorrentinoEngineBridge/scripts/qa/test_security_redactor_negative.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_redactor.log; echo EXIT:$?
+
+# 3 — QA guard
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_qa_guard_real.log; echo EXIT:$?
+WP13_TEST_FILTERS='TorrentinoEngineAgentTests/WP13NoSuchSuiteZeroCollectProbe' \
+  bash Native/TorrentinoEngineBridge/scripts/qa/test_wp13_diagnostics_security.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_qa_guard_zero.log; echo EXIT:$?
+
+# 4 — harness runtime
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp01_fallback_2014.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp01_fallback.log; echo EXIT:$?
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp12_01_correctness.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp12_01.log
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp12_02_benchmarks.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp12_02.log
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp12_03_fallback.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp12_03.log
+bash Native/TorrentinoEngineBridge/scripts/qa/test_wp12_04_verifier.sh 2>&1 | tee artifacts/tests/WP13FinalSentinel_wp12_04.log
+
+# 5 — version guards
+bash Native/TorrentinoEngineBridge/scripts/test_bridge_headless.sh --lt-version 2.0.13 2>&1 | tee artifacts/tests/WP13FinalSentinel_version_guard_2013.log; echo EXIT:$?
+bash Native/TorrentinoEngineBridge/scripts/run_tests.sh --lt-version 2.1.0 2>&1 | tee artifacts/tests/WP13FinalSentinel_version_guard_210.log; echo EXIT:$?
+
+# 6 — scope
+git status --short -- Native | tee artifacts/tests/WP13FinalSentinel_git_status.log
+
+# 7 — known residual scope recheck
+bash Native/TorrentinoEngineBridge/scripts/build_harness.sh --lt-version 2.1.1 --flavor release 2>&1 | tail -n 20; echo EXIT:$?
+```
+
+**Artifacts retained:** `build/WP13FinalSentinelDerivedData/`, `artifacts/tests/WP13FinalSentinel.xcresult` + `WP13FinalSentinel.xcodebuild.log`, `WP13FinalSentinel_redactor.log`, `WP13FinalSentinel_qa_guard_real.log`, `WP13FinalSentinel_qa_guard_zero.log`, `WP13FinalSentinel_wp01_fallback.log`, `WP13FinalSentinel_wp12_0{1,2,3,4}.log`, `WP13FinalSentinel_version_guard_2013/210.log`, `WP13FinalSentinel_git_status.log`, `Native/TorrentinoEngineBridge/runs/tests-2.0.14-release-20260822T091932Z/scenarios.log`, `Measurements/wp12/bench-20260822-145115.csv`.

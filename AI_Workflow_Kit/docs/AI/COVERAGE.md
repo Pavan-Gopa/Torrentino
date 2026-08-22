@@ -211,7 +211,7 @@ script below is **new this run** and becomes the regression base for WP-02+.
 | Build | build.sh static arm64 build; rebuild idempotent; artifact arm64; SHA-256 == lock | `test_wp01_build_idempotent.sh` | repeat build exits 0; object-content hash stable across rebuilds; arm64; cached-archive SHA-256 == lock; manifest valid JSON | new this run |
 | Deps | versions.lock pin file validity | `test_wp01_versions_lock_valid.sh` | valid shell fragment; all pins present; SHA-256=64hex, commit=40hex; default∈supported; arm64/13.0 contract; cached archives match pins; prefixes exist | new this run |
 | Harness | run_tests.sh — 11 scenarios | `test_wp01_harness_all_scenarios.sh` | all 11 PASS, 0 FAIL, "11 passed, 0 failed", each named scenario PASS | new this run |
-| Harness | fallback libtorrent 2.0.13 | `test_wp01_fallback_2013.sh` | binary reports 2.0.13; 11/11 PASS on 2.0.13 | new this run |
+| Harness | fallback libtorrent (2.0.13 then; 2.0.14 since SEC-2) | `test_wp01_fallback_2014.sh` (renamed from `test_wp01_fallback_2013.sh`) | binary reports the pinned fallback; 11/11 PASS on it | new this run |
 | Sanitizers | run_sanitizers.sh ASan+UBSan | `test_wp01_sanitizers_clean.sh` | exit 0; "sanitizer reports: 0"; clean banner; no ASan/UBSan diagnostics in log | new this run |
 | Soak | run_soak.sh status/start/stop + 30s smoke | `test_wp01_soak_smoke.sh` | `status` parses (RUNNING/NOT running); isolated 25s soak exits 0; report JSON valid; status=ok; iterations>0; error_alerts=0; no ERROR/FATAL | new this run |
 | Deps/Gate | verify_no_homebrew.sh positive | `test_wp01_no_homebrew_positive.sh` | default + fallback binaries CLEAN (arm64, 13.0, no Homebrew//usr/local links or rpaths) | new this run |

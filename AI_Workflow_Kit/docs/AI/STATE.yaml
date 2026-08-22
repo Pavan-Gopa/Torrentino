@@ -5,20 +5,23 @@ onboarding:
   model_pairs_confirmed: true
   completed_at: 2026-08-10T13:13:32Z
 
-current_step: WP-13
-current_work_item_id: WP13-SECURITY-AUDIT-001
+current_step: WP-14
+current_work_item_id: null
 step_description: >-
-  Active lane [WP13-SECURITY-AUDIT-001]: Human authorized the deferred
-  Security Engineer engagement («Зови секьюрити») with standing instruction
-  to continue remaining steps if it returns clean. Scope per plan §WP-13:
-  SBOM/licenses/CVE verdict on pinned dependencies, re-audit of XPC peer
-  verification, input-limit/parser/path handling, Keychain/redaction
-  (including the freshly landed diagnostics export), prior-finding sweep
-  (none exist — first engagement). Read-only role; deliverable is a dated
-  SECURITY_FINDINGS.md section plus optional test_*_sec_*.sh.
+  Step transitioned to WP-14 performance qualification after
+  [WP13-SEC-HARDEN-001] closed qa_green (five coder passes, three review
+  rounds; final independent regression 382/382). First lane prep fixes
+  harness/src/hash_bench.cpp against libtorrent 2.1.1 headers
+  (boost::string_view → dict_find conversion) so the headless reference
+  builds on the default pin; then the measurement campaign per plan §WP-14
+  (SLO §11): CPU/allocations/energy, fd/thread/XPC counts, 100 records /
+  10 active, large creator/recheck, UI 500 rows, alert/XPC overload harness,
+  headless comparison. CVE verdict stays closed clean.
 target_files:
-- Native/TorrentinoEngineBridge/scripts/qa/SECURITY_FINDINGS.md
-- Native/TorrentinoEngineBridge/scripts/qa/test_security_*.sh (optional)
+- Native/TorrentinoEngineBridge/harness/src/
+- Native/TorrentinoEngineBridge/scripts/
+- Measurements/
+- Native/Tests/TorrentinoEngineAgentTests/ (only if measurement seams require)
 completed_steps:
 - WP-00
 - WP-01
@@ -33,51 +36,48 @@ completed_steps:
 - WP-10
 - WP-11
 - WP-12
-skipped_steps: []
+- WP-13
 implementation:
-  status: done
-  attempts: 3
+  status: open
+  attempts: 0
   note: >-
-    [WP13-DIAGNOSTIC-EXPORT-FIX-001] verified complete end-to-end (Coder003
-    micro-fix closing the sole REVIEW-002 finding). Prior lanes
-    TRACKER-SHARING-IMPL-001 and WP13-RELEASE-INTEGRITY-QA-001 remain
-    verified records.
+    WP-14 opening. Prior release-track lanes remain verified records;
+    WP13-SEC-HARDEN-001 closed qa_green (382/382 final sentinel regression,
+    harness runtime green on retargeted pins).
 retry_guard:
   max_attempts_without_progress: 3
   repeated_failure_count: 0
   last_failure_signature: null
+  blocker: null
 omp:
-  active_agent: WP13SecurityAuditor001
-  active_role: security
-  last_result_artifact: agent://WP13DiagExportFinalTester001
-  dispatched_at: 2026-08-22T03:23:50Z
-  completed_at: null
+  active_agent: null
+  active_role: null
+  last_result_artifact: agent://WP13SecHardenFinalTester001
+  dispatched_at: 2026-08-22T09:17:20Z
+  completed_at: 2026-08-22T09:24:00Z
 review:
-  status: approved
+  status: pending
   last_feedback_file: AI_Workflow_Kit/docs/AI/FEEDBACK.md
-  verdict: approved
+  verdict: null
   note: >-
-    Two judgment rounds: REVIEW-002 passed six of seven gates; the sole
-    minor (mirror plain-text rule) was fixed via the reviewer's verbatim
-    suggested_fix and objectively verified by Main with a byte-parity
-    regression. Historical: TrackerSharingReviewer001 ADR-021 approval.
+    Awaiting first WP-14 judgment pass. Historical: three hardening review
+    rounds approved-in-progression; final sentinel edge fixed and objectively
+    verified.
   enabled: true
 qa:
-  status: green
-  last_report: artifacts/tests/WP13FinalRegression.xcresult
-  suite: WP13-DIAGNOSTIC-EXPORT-FIX-001
+  status: pending
+  last_report: artifacts/tests/WP13FinalSentinel.xcresult
+  suite: WP13-SEC-HARDEN-001
   bugs_open: 0
   note: >-
-    Final independent Tester regression 364/364/0 on fresh derived data;
-    focused WP13 suite 18/18 including lockstep parity and sink-isolation
-    sentinel; QA guard zero-collect exit 1 / real run exit 0; scope recheck
-    clean. B-1/B-2 resolved; BUG_REPORT.md cleared.
+    WP13-SEC-HARDEN-001 closed qa_green 382/382 including retargeted harness
+    runtime evidence; WP-14 measurement QA queued behind the harness fix.
 security:
-  next_run: WP13-SECURITY-AUDIT-001
+  next_run: none
   note: >-
-    Human authorization 2026-08-22: «Зови секьюрити.» Standing instruction:
-    «После проверки безопасности, если всё пройдёт гладко, продолжай
-    выполнять оставшиеся шаги.»
+    Engagement WP13-SECURITY-AUDIT-001 completed 2026-08-22: verdict
+    no_critical_high_relevant; all five findings remediated via
+    WP13-SEC-HARDEN-001 (three review rounds).
 next_actor: main
 
 track: RELEASE
@@ -87,9 +87,9 @@ working_roots:
 security_engineer: on_demand_only
 checkpoint:
   last_pre_tag: torrentino/pre-WP-13
-  last_post_tag: torrentino/WP-12-done
+  last_post_tag: torrentino/WP-13-done
   last_restore_tag: torrentino/wp13-engine-003-accepted
-  last_commit: 1167751
+  last_commit: d308f90
 plan_files:
 - TORRENTINO_NATIVE_MACOS_IMPLEMENTATION_PLAN.md
 - AI_Workflow_Kit/docs/TORRENTINO_STEPS.md
