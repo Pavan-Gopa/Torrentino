@@ -1445,6 +1445,7 @@
 				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
 				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
 				PRODUCT_NAME = TorrentinoEngineAgent;
+				SKIP_INSTALL = YES;
 				// WP-04 bridge integration (locked ThirdParty pins from versions.lock):
 				// adapter .mm + EngineBridge.cpp compile as ObjC++/C++17; the Swift
 				// actor sees only the adapter through the bridging header.
@@ -1495,6 +1496,7 @@
 				OTHER_CODE_SIGN_FLAGS = "--identifier=com.torrentino.app.engine-agent";
 				PRODUCT_BUNDLE_IDENTIFIER = com.torrentino.app.engine-agent;
 				PRODUCT_NAME = TorrentinoEngineAgent;
+				SKIP_INSTALL = YES;
 				// WP-04 bridge integration (locked ThirdParty pins from versions.lock):
 				// adapter .mm + EngineBridge.cpp compile as ObjC++/C++17; the Swift
 				// actor sees only the adapter through the bridging header.
