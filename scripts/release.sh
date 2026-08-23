@@ -198,6 +198,7 @@ cmd_archive_export() {
     [[ -d "$APP_PATH" ]] || fail "Export failed: $APP_PATH missing"
     log_info "Archive and export completed: $APP_PATH"
 
+    git rev-parse HEAD > "${RELEASE_DIR}/source_commit.txt"
     save_pre_staple_evidence "$APP_PATH"
 }
 
@@ -722,15 +723,33 @@ _collect_macho_evidence() {
     codesign -dvvv "$macho" 2>&1 >> "$sig_file"
 
     echo "=== $rel ===" >> "$ent_file"
-    codesign -d --entitlements :- "$macho" 2>&1 >> "$ent_file"
+    local ent_out
+    ent_out=$(codesign -d --entitlements :- "$macho" 2>&1 || true)
+    if echo "$ent_out" | grep -qE "<plist|<dict|<key"; then
+        echo "$ent_out" >> "$ent_file"
+    else
+        echo "(none)" >> "$ent_file"
+    fi
 
     echo "$rel: $(lipo -archs "$macho")" >> "$arch_file"
 
+    local otool_out
+    otool_out=$(otool -l "$macho")
+
     echo "=== $rel ===" >> "$minos_file"
-    otool -l "$macho" | grep -A4 -E "LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX" >> "$minos_file"
+    local minos_info
+    minos_info=$(echo "$otool_out" | grep -A4 -E "LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX" || true)
+    [[ -n "$minos_info" ]] || fail "Failed to extract minOS evidence for $rel"
+    echo "$minos_info" >> "$minos_file"
 
     echo "=== $rel ===" >> "$rpath_file"
-    otool -l "$macho" | grep -A2 "LC_RPATH" >> "$rpath_file"
+    local rpath_info
+    rpath_info=$(echo "$otool_out" | grep -A2 "LC_RPATH" || true)
+    if [[ -n "$rpath_info" ]]; then
+        echo "$rpath_info" >> "$rpath_file"
+    else
+        echo "(none)" >> "$rpath_file"
+    fi
 
     echo "=== $rel ===" >> "$dep_file"
     otool -L "$macho" >> "$dep_file"
@@ -764,8 +783,10 @@ cmd_collect_evidence() {
     local dsym_file="$EVIDENCE_DIR/dsyms.txt"
     local manifest_file="$EVIDENCE_DIR/manifest-evidence.json"
 
-    # Source commit (never fail with || true)
-    git rev-parse HEAD > "$commit_file"
+    # Source commit from candidate chain of custody
+    local candidate_commit_file="${RELEASE_DIR}/source_commit.txt"
+    [[ -f "$candidate_commit_file" ]] || fail "Candidate source commit file missing: $candidate_commit_file. Run archive-export first."
+    cp "$candidate_commit_file" "$commit_file"
 
     # Build settings & Xcode version
     xcodebuild -project Native/Torrentino.xcodeproj -scheme Torrentino -destination 'generic/platform=macOS' -showBuildSettings > "$build_settings_file"
