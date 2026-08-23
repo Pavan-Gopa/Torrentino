@@ -10,4 +10,5 @@ Native/test-results/
 Native/build/
 Native/.build/
 Native/TorrentinoHashing/.build/
+artifacts/release/
 default.profraw

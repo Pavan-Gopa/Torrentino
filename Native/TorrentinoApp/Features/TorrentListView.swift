@@ -476,13 +476,22 @@ struct TorrentListView: View {
             return String(format: NSLocalizedString("remove.result.failed", comment: ""), result.failedItems.count)
         }
     }
+    static func versionLabel(infoDictionary: [String: Any]? = Bundle.main.infoDictionary) -> String {
+        if let version = infoDictionary?["CFBundleShortVersionString"] as? String,
+           !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !version.contains("$") {
+            return "Torrentino v\(version)"
+        }
+        return "Torrentino (dev)"
+    }
+
 
     // MARK: - Status bar
 
     private var statusBar: some View {
         let stats = viewModel.statusBar
         return HStack(spacing: 14) {
-            Text("Torrentino v0.1")
+            Text(Self.versionLabel())
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Divider()
