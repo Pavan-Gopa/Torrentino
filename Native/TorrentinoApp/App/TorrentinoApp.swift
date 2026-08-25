@@ -26,12 +26,8 @@ struct TorrentinoApp: App {
         Window("Torrentino", id: "main") {
             ContentView()
                 .environmentObject(AppContext.shared)
-                .onOpenURL { url in
-                    handleIncomingURL(url)
-                }
         }
         .defaultSize(width: 900, height: 560)
-        .handlesExternalEvents(matching: Set(["main", "*"]))
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button(String(localized: "app.about")) {
@@ -131,17 +127,6 @@ struct TorrentinoApp: App {
         }
     }
 
-    private func handleIncomingURL(_ url: URL) {
-        if url.scheme == "magnet" {
-            Task { @MainActor in
-                await AppContext.transfers.addMagnet(url.absoluteString, startPaused: false)
-            }
-        } else if url.isFileURL && url.pathExtension.lowercased() == "torrent" {
-            Task { @MainActor in
-                AppContext.transfers.importIncomingTorrent(url)
-            }
-        }
-    }
 }
 
 @MainActor
@@ -151,15 +136,12 @@ enum AppContext {
     static let transfers = TorrentListViewModel(client: engineClient)
 }
 enum AppLogo {
+    /// Brand mark from the app's asset catalog. A fresh instance per call, because
+    /// callers (status item) set `size` on the returned image.
     static var image: NSImage {
-        let rootPath = "/Users/pavan/Documents/AI Projects/Torrentino/LOGO/Main LOGO.png"
-        if let img = NSImage(contentsOfFile: rootPath) {
-            return img
+        guard let logo = NSImage(named: "AppLogo") else {
+            return NSImage(named: NSImage.applicationIconName) ?? NSImage()
         }
-        if let bundlePath = Bundle.main.path(forResource: "AppLogo", ofType: "png"),
-           let img = NSImage(contentsOfFile: bundlePath) {
-            return img
-        }
-        return NSImage(named: NSImage.applicationIconName) ?? NSImage()
+        return logo.copy() as? NSImage ?? logo
     }
 }

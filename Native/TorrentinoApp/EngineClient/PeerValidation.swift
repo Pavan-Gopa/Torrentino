@@ -1,17 +1,15 @@
 // Layer: UI-side peer code-signing policy (plan §23, WP-05).
 // Role: the five frozen identities + validation helpers the UI enforces
-// BEFORE any payload decode or mutation over XPC: reject unsigned peers and
-// same-Team/wrong-ID peers. The transport-level
-// NSXPCConnection.setCodeSigningRequirement check stays in EngineClient; this
-// module adds the static designated-requirement check on the embedded agent
-// binary and owns the identity constants for the app-side control plane.
+// BEFORE any payload decode or mutation over XPC: static package preflight
+// + exact dynamic live-PID SecCode validation. Rejects unsigned peers and
+// same-Team/wrong-ID peers. Owns the identity constants for the app-side control plane.
 // Must-not: decode payloads, mutate state, or perform network I/O.
 // Invariants: identities are immutable and frozen; validation returns typed
 // PeerValidationError values; no raw C++/libtorrent text ever leaks.
-// Enforcement gate: Developer-ID (Release) builds enforce the binary +
-// transport checks. Debug builds are unsigned by design (no embedded agent,
-// ad-hoc agent binary), so the checks are skipped there — WP-02 QA and local
-// dev runs against the Debug app must keep working.
+// Enforcement gate: Developer-ID (Release) builds enforce static package preflight
+// + exact dynamic live-PID validation before trusting hello or sending health/payload/mutation.
+// Debug builds are unsigned by design (no embedded agent, ad-hoc agent binary),
+// so the checks are skipped there — WP-02 QA and local dev runs against the Debug app must keep working.
 
 import Foundation
 import Security
@@ -41,6 +39,9 @@ enum PeerValidation {
         machServiceName: "com.torrentino.app.engine-agent.mach",
         plistFilename: "com.torrentino.app.engine-agent.plist"
     )
+
+    /// Frozen agent executable name ("TorrentinoEngineAgent").
+    static let agentExecutableName = "TorrentinoEngineAgent"
 
     /// Developer ID team (frozen in Config/Shared.xcconfig).
     static let teamIdentifier = "438UQRF7JV"
@@ -73,7 +74,7 @@ enum PeerValidation {
         return requirement
     }
 
-    enum PeerValidationError: Error, Sendable, CustomStringConvertible {
+    enum PeerValidationError: Error, Sendable, CustomStringConvertible, Equatable {
         /// Binary is not signed at all.
         case unsignedPeer
         /// Signed, but the designated requirement does not match our team or
@@ -85,6 +86,14 @@ enum PeerValidation {
         case agentBinaryNotFound(String)
         /// The frozen requirement expression failed to compile.
         case requirementInvalid
+        /// Live process identifier is non-positive or invalid.
+        case invalidLivePID
+        /// Dynamic guest lookup via SecCodeCopyGuestWithAttributes failed.
+        case dynamicGuestLookupFailed(String)
+        /// Live agent process code-signing validity check against exact requirement failed.
+        case liveRequirementMismatch
+        /// Connection processIdentifier does not match the bootstrap hello PID.
+        case helloPIDMismatch(connectionPID: pid_t, helloPID: Int64)
 
         var description: String {
             switch self {
@@ -93,14 +102,82 @@ enum PeerValidation {
             case .codeSigningUnavailable(let detail): return "code signing unavailable: \(detail)"
             case .agentBinaryNotFound(let path): return "agent binary not found at \(path)"
             case .requirementInvalid: return "frozen requirement expression is invalid"
+            case .invalidLivePID: return "invalid live process identifier"
+            case .dynamicGuestLookupFailed(let detail): return "dynamic guest lookup failed: \(detail)"
+            case .liveRequirementMismatch: return "live agent requirement mismatch"
+            case .helloPIDMismatch(let conn, let hello): return "connection PID (\(conn)) does not match hello PID (\(hello))"
             }
         }
     }
 
+    /// Validates initial candidate PID against bootstrap hello PID.
+    static func validateCandidatePIDs(
+        connectionPID: pid_t,
+        helloPID: Int64
+    ) -> Result<pid_t, PeerValidationError> {
+        guard connectionPID > 0 else {
+            return .failure(.invalidLivePID)
+        }
+        guard Int64(connectionPID) == helloPID else {
+            return .failure(.helloPIDMismatch(connectionPID: connectionPID, helloPID: helloPID))
+        }
+        return .success(connectionPID)
+    }
+
+    /// Validates that processIdentifier re-read after code-signing validation matches the initial validated PID.
+    static func validatePostValidationPID(
+        initialPID: pid_t,
+        reReadPID: pid_t
+    ) -> Result<pid_t, PeerValidationError> {
+        guard reReadPID > 0, reReadPID == initialPID else {
+            return .failure(.invalidLivePID)
+        }
+        return .success(initialPID)
+    }
+
+    /// Validates dynamic PID consistency across connection PID, bootstrap hello PID, and re-read PID.
+    static func validateCandidatePIDs(
+        connectionPID: pid_t,
+        helloPID: Int64,
+        reReadPID: pid_t
+    ) -> Result<pid_t, PeerValidationError> {
+        switch validateCandidatePIDs(connectionPID: connectionPID, helloPID: helloPID) {
+        case .success(let pid):
+            return validatePostValidationPID(initialPID: pid, reReadPID: reReadPID)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// Validates the running agent process's dynamic code-signing requirement
+    /// using SecCodeCopyGuestWithAttributes and SecCodeCheckValidity.
+    static func validateRunningAgent(
+        processIdentifier pid: pid_t,
+        requirement: SecRequirement
+    ) -> Result<Void, PeerValidationError> {
+        switch TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: pid, requirement: requirement) {
+        case .success:
+            return .success(())
+        case .failure(let error):
+            switch error {
+            case .invalidProcessIdentifier:
+                return .failure(.invalidLivePID)
+            case .guestLookupFailed(let status):
+                return .failure(.dynamicGuestLookupFailed("SecCodeCopyGuestWithAttributes status=\(status)"))
+            case .validityCheckFailed:
+                return .failure(.liveRequirementMismatch)
+            }
+        }
+    }
+
+    /// Location of the agent binary embedded by the "Embed LaunchAgent" phase in a given bundle URL.
+    static func embeddedAgentURL(in bundleURL: URL) -> URL {
+        bundleURL.appendingPathComponent("Contents/Library/LaunchAgents/\(agentExecutableName)", isDirectory: false)
+    }
+
     /// Location of the agent binary embedded by the "Embed LaunchAgent" phase.
     static var embeddedAgentURL: URL {
-        Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Library/LaunchAgents/\(identity.agentSigningID)", isDirectory: false)
+        embeddedAgentURL(in: Bundle.main.bundleURL)
     }
 
     /// Validates the embedded agent binary's designated requirement BEFORE the

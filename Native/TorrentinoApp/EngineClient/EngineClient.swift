@@ -1,13 +1,12 @@
 // Layer: UI -> agent transport (Mach XPC client).
 // Role: owns the NSXPCConnection lifecycle, bounded reconnect, peer
-// code-signing validation (PeerValidation), and async wrappers over the ObjC
+// code-signing validation (PeerValidation static package preflight + exact dynamic live-PID validation), and async wrappers over the ObjC
 // reply-block protocol.
 // Must-not: cache engine state (the agent is authoritative), retry forever,
-// or decode payloads before the peer code-signing requirement is installed.
+// or decode payloads before static package preflight + exact dynamic live-PID validation pass.
 // Invariants: at most one live connection; reconnect attempts are bounded by
 // ClientReconnectPolicy; hello performs the §7.4 protocol negotiation; every
 // public call returns authoritative state or throws EngineClientError.
-
 import Foundation
 import OSLog
 import TorrentinoIPC
@@ -30,17 +29,16 @@ actor EngineClient {
 
     /// IPC command surface from TorrentinoIPC (schema identity; transport is still ObjC XPC).
     nonisolated var supportedCommands: [EngineCommandV1] { EngineCommandV1.allCases }
-    /// Non-nil only if the frozen requirement expression parses as a valid
-    /// requirement (validated once via SecRequirementCreateWithString). The
-    /// NSXPCConnection API takes the requirement-language string itself.
-    private let agentExpression: String?
+    /// Compiled exact agent SecRequirement used for dynamic PID code-signing validation.
+    private let compiledAgentRequirement: SecRequirement?
+    /// Active connection task under actor reentrancy guaranteeing single-flight
+    /// candidate connection acquisition.
+    private var connectionTask: Task<Void, Error>?
     private let log = Logger(subsystem: PeerValidation.identity.appSigningID, category: "engine-client")
 
     init() {
         let expression = PeerValidation.expectedAgentRequirement
-        self.agentExpression = PeerValidation.makeRequirement(expression) != nil
-            ? expression
-            : nil
+        self.compiledAgentRequirement = PeerValidation.makeRequirement(expression)
     }
 
     // MARK: - Public API (agent is the source of truth)
@@ -277,7 +275,7 @@ actor EngineClient {
                 try? await Task.sleep(nanoseconds: delay)
             }
             do {
-                let (connection, reconnected) = try currentOrNewConnection()
+                let (connection, reconnected) = try await currentOrNewConnection()
                 if reconnected {
                     try await restoreEventSubscription(on: connection)
                 }
@@ -323,17 +321,38 @@ actor EngineClient {
         }
     }
 
-    private func currentOrNewConnection() throws -> (connection: NSXPCConnection, reconnected: Bool) {
+    private func currentOrNewConnection() async throws -> (connection: NSXPCConnection, reconnected: Bool) {
         if let connection { return (connection, false) }
+        if let existingTask = connectionTask {
+            try await existingTask.value
+            if let connection {
+                let reconnected = hasEstablishedConnection
+                hasEstablishedConnection = true
+                return (connection, reconnected)
+            }
+            throw EngineClientError.unavailable(reason: "connection acquisition failed")
+        }
+        let task = Task<Void, Error> {
+            try await self.authenticateNewConnection()
+        }
+        self.connectionTask = task
+        defer { self.connectionTask = nil }
+        try await task.value
+        guard let connection else {
+            throw EngineClientError.unavailable(reason: "connection acquisition failed")
+        }
+        let reconnected = hasEstablishedConnection
+        hasEstablishedConnection = true
+        return (connection, reconnected)
+    }
 
-        guard let agentExpression else {
+    private func authenticateNewConnection() async throws {
+        guard let compiledAgentRequirement else {
             throw EngineClientError.unavailable(reason: "invalid agent code-signing requirement expression")
         }
 
         // Peer code-signing policy (plan §23): validate the embedded agent
         // binary's designated requirement BEFORE any payload is decoded.
-        // Debug builds skip both checks (unsigned dev binaries, no embedded
-        // agent); Developer-ID Release builds enforce them.
         if PeerValidation.isEnforcementActive {
             switch PeerValidation.validateAgentBinary() {
             case .success:
@@ -343,37 +362,70 @@ actor EngineClient {
             }
         }
 
-        let connection = NSXPCConnection(machServiceName: PeerValidation.identity.machServiceName, options: [])
-        // macOS 13+: refuse to talk to an agent that is not our Developer-ID
-        // signed bundle id — enforced before any payload decode (plan §23).
-        if PeerValidation.isEnforcementActive {
-            connection.setCodeSigningRequirement(agentExpression)
-        }
-
+        let candidate = NSXPCConnection(machServiceName: PeerValidation.identity.machServiceName, options: [])
         let interface = NSXPCInterface(with: TorrentinoEngineXPCProtocol.self)
         interface.setClasses(TorrentinoXPCSecurity.healthReplyClasses,
                              for: #selector(TorrentinoEngineXPCProtocol.health(reply:)),
                              argumentIndex: 0,
                              ofReply: true)
-        connection.remoteObjectInterface = interface
+        candidate.remoteObjectInterface = interface
         // WP-07: export the event sink so the agent can push batches into it.
         // The agent's listener binds the remote proxy on accept.
-        connection.exportedInterface = NSXPCInterface(with: TorrentinoEventSink.self)
-        connection.exportedObject = eventSink
+        candidate.exportedInterface = NSXPCInterface(with: TorrentinoEventSink.self)
+        candidate.exportedObject = eventSink
+        candidate.resume()
 
-        connection.interruptionHandler = { [weak self] in
-            Task { await self?.handleInterruption() }
+        do {
+            let bootstrapHello: (version: String, pid: Int64) = try await send(on: candidate) { proxy, deliver in
+                proxy.hello { version, pid in
+                    deliver(.success((version, pid)))
+                }
+            }
+
+            let initialPID = candidate.processIdentifier
+
+            switch PeerValidation.validateCandidatePIDs(connectionPID: initialPID, helloPID: bootstrapHello.pid) {
+            case .success:
+                break
+            case .failure(let error):
+                throw EngineClientError.peerValidationFailed(error)
+            }
+
+            if PeerValidation.isEnforcementActive {
+                switch PeerValidation.validateRunningAgent(processIdentifier: initialPID, requirement: compiledAgentRequirement) {
+                case .success:
+                    break
+                case .failure(let validationError):
+                    throw EngineClientError.peerValidationFailed(validationError)
+                }
+            }
+
+            let reReadPID = candidate.processIdentifier
+            switch PeerValidation.validatePostValidationPID(initialPID: initialPID, reReadPID: reReadPID) {
+            case .success:
+                break
+            case .failure(let error):
+                throw EngineClientError.peerValidationFailed(error)
+            }
+
+            candidate.interruptionHandler = { [weak self] in
+                Task { await self?.handleInterruption() }
+            }
+            candidate.invalidationHandler = { [weak self] in
+                Task { await self?.handleInvalidation() }
+            }
+
+            self.connection = candidate
+            log.notice("xpc connection resumed service=\(PeerValidation.identity.machServiceName, privacy: .public)")
+        } catch let validationError as PeerValidation.PeerValidationError {
+            candidate.invalidate()
+            throw EngineClientError.peerValidationFailed(validationError)
+        } catch {
+            candidate.invalidate()
+            throw error
         }
-        connection.invalidationHandler = { [weak self] in
-            Task { await self?.handleInvalidation() }
-        }
-        connection.resume()
-        self.connection = connection
-        let reconnected = hasEstablishedConnection
-        hasEstablishedConnection = true
-        log.notice("xpc connection resumed service=\(PeerValidation.identity.machServiceName, privacy: .public)")
-        return (connection, reconnected)
     }
+
 
     /// Re-registers the event bus sink before a recovered request is allowed
     /// to proceed. The event handler remains in ClientEventSink while XPC is

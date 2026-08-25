@@ -54,6 +54,12 @@ points there.
 | `ThrottleInterval` | `10` | A crash-looping agent is respawned at most once per 10 s. |
 | `AssociatedBundleIdentifiers` | `com.torrentino.app` | Shows the job under Torrentino in System Settings > Login Items. |
 
+
+### 2.1 Registration & Rebind Policy (WP22-D6-SERVICE-003)
+
+- **Normal GUI Startup (`EngineViewModel.prepareForLaunch`)**: Idempotent check (`AgentServiceRegistration.register(forceRebind: false)`). If `SMAppService.status == .enabled`, registration is a no-op so a running, healthy LaunchAgent is not un-registered or interrupted with a SIGTERM. If status is `.notRegistered` or `.notFound`, it performs initial registration.
+- **Explicit Register Action (Settings UI / `Torrentino --cli register`)**: Explicit rebind (`AgentServiceRegistration.register(forceRebind: true)`). If `status == .enabled`, it unregisters and re-registers the agent (`SMAppService.unregister` followed by `SMAppService.register`), forcing BackgroundTaskManagement to re-anchor against the current app bundle (useful when the app bundle was moved or replaced).
+- **Approval State (`.requiresApproval`)**: Registration never unregisters an agent requiring approval, ensuring user approval status is truthfully preserved and never bypassed.
 ## 3. Process exit codes
 
 | Code | Meaning | launchd consequence |
@@ -69,11 +75,7 @@ counter survives it because every increment persists before replying.
 
 ## 4. XPC protocol (frozen wire contract)
 
-`TorrentinoEngineXPCProtocol` (`@objc`, reply-block style). Both sides install
-a code-signing requirement on the `NSXPCConnection` via
-`setCodeSigningRequirement(_:)` BEFORE `resume()`, so an unsigned or
-wrong-identifier peer is rejected before any payload decode (plan §23).
-
+`TorrentinoEngineXPCProtocol` (`@objc`, reply-block style). The agent checks the exact live client `SecCode` (`SecCodeCopyGuestWithAttributes` + `SecCodeCheckValidity` via shared `TorrentinoXPCSecurity.validateDynamicPeer`) on each suspended accepted connection in `listener(_:shouldAcceptNewConnection:)` before configuring interfaces, exporting objects, acquiring remote proxy, attaching handlers, or resuming the connection. The UI performs static package preflight, resumes a candidate connection, sends one bounded identity-neutral `hello` bootstrap, verifies live PID equality + exact dynamic Security validation (`SecCodeCheckValidity` with cached requirement), and permits any other request only after authentication succeeds. Public `hello()` repeats normally; no payload or mutation is permitted before authentication. Foundation `setConnectionCodeSigningRequirement` and `setCodeSigningRequirement` setters false-reject valid peers on tested macOS 26.6.2 (and macOS 13+) and are not trust mechanisms; direct Security.framework dynamic code-signing evaluation is authoritative.
 | Selector | Reply | Semantics |
 | --- | --- | --- |
 | `helloWithReply:` | `(String agentVersion, Int64 pid)` | Handshake; used to detect respawns (pid change) and version (update test). |
@@ -88,9 +90,9 @@ Both products are signed `Developer ID Application` with the hardened runtime
 (`flags=0x10000(runtime)`), no `get-task-allow`, no App Sandbox.
 
 - Agent enforces on incoming UI connections:
-  `identifier "com.torrentino.app" and anchor apple generic and certificate leaf[subject.OU] = "438UQRF7JV"`
-- UI enforces on the agent connection:
-  `identifier "com.torrentino.app.engine-agent" and anchor apple generic and certificate leaf[subject.OU] = "438UQRF7JV"`
+  On each suspended accepted connection in `shouldAcceptNewConnection`, before any interface setup or resume, the agent evaluates the live client PID against the cached exact requirement `identifier "com.torrentino.app" and anchor apple generic and certificate leaf[subject.OU] = "438UQRF7JV"` via `TorrentinoXPCSecurity.validateDynamicPeer` (`SecCodeCopyGuestWithAttributes` + `SecCodeCheckValidity`). Foundation setter `setConnectionCodeSigningRequirement` is removed because Foundation setters false-reject valid peers on tested macOS 26.6.2 and are not trust mechanisms.
+- UI enforces on the agent candidate connection:
+  Static embedded binary preflight (`validateAgentBinary`), followed by dynamic live-PID SecCode requirement validation (`validateRunningAgent` via `TorrentinoXPCSecurity.validateDynamicPeer` using `SecCodeCopyGuestWithAttributes` and `SecCodeCheckValidity` with cached exact requirement `identifier "com.torrentino.app.engine-agent" and anchor apple generic and certificate leaf[subject.OU] = "438UQRF7JV"`). Foundation setter `setCodeSigningRequirement` is not used because Foundation setters false-reject valid peers on tested macOS 26.6.2 and are not trust mechanisms.
 
 The agent tool gets its identifier via
 `OTHER_CODE_SIGN_FLAGS = --identifier=com.torrentino.app.engine-agent`
@@ -181,5 +183,9 @@ Denial never triggers an in-process engine fallback (plan §6).
 | Downgrade block | `update_test.sh` | v1 binary exits `78` on v2 file (direct run; exits before Mach check-in) |
 | Checksum corruption detection | `update_test.sh` | v2 binary exits `1` on flipped byte (direct run; exits before Mach check-in) |
 
+
+### 11.1 Open Limitation (WP22-D6-CLI-004)
+
+On tested macOS 26.6.2, direct `Torrentino --cli` app-binary invocation does not reach fresh SMAppService Mach listener (WP22-D6-CLI-004); CLI matrix rows are pending dedicated helper/LaunchServices architecture and are not current Release evidence.
 Evidence lands in `Native/test-results/<test>-<timestamp>/` (`evidence.log` +
 `EVIDENCE.md`).

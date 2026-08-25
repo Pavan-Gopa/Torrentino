@@ -36,8 +36,11 @@ enum AgentMain {
             exit(AgentRuntime.exitCodeFault)
         }
 
-        runtime.beginServing()
-        // Never returns: XPC listener + signal sources keep the GCD runtime busy.
-        dispatchMain()
+        // `dispatchMain()` never returns; keeping this local alive through it makes
+        // AgentRuntime's listener, strong delegate, and signal sources process-scoped.
+        withExtendedLifetime(runtime) {
+            runtime.beginServing()
+            dispatchMain()
+        }
     }
 }

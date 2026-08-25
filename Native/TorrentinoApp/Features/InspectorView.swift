@@ -91,7 +91,6 @@ struct InspectorView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(torrent?.displayName ?? String(localized: "inspector.no_selection"))

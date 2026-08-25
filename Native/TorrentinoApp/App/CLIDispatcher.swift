@@ -104,7 +104,7 @@ enum CLIDispatcher {
 
         case "register":
             do {
-                try await AgentServiceRegistration.register()
+                try await AgentServiceRegistration.register(forceRebind: true)
                 let snapshot = await AgentServiceRegistration.status()
                 print("OK register status=\(snapshot)")
                 return snapshot.isEnabled ? 0 : 3

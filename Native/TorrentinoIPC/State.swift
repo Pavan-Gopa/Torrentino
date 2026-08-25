@@ -193,6 +193,13 @@ public enum AddSource: Codable, Sendable, Equatable {
     case torrentFileURL(String)
 }
 
+/// The metadata retrieval and preflight confirmation phase of an add source.
+public enum AddInspectionPhase: String, Codable, Sendable, Equatable, CaseIterable {
+    case retrievingMetadata
+    case readyToCommit
+    case failed
+}
+
 /// Proxy settings for testProxy and (in later WPs) the session config.
 public struct ProxyConfiguration: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable, Equatable, CaseIterable {

@@ -163,6 +163,12 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
     public let magnetURI: String?
     public let savePath: String
     public let paused: Bool
+    /// WP22.D7 (ADR-022): true adds the torrent as metadata-only — the native
+    /// handle is created with upload_mode | default_dont_download and
+    /// auto_managed/paused cleared, so metainfo may be fetched but no payload
+    /// is requested until a guarded commit releases the guard. Default false
+    /// keeps every existing caller byte-for-byte identical on the wire.
+    public let metadataOnly: Bool
     /// Per-task DHT/PEX/LSD policy (WP-11 private-torrent invariant). nil
     /// leaves the engine default; false explicitly disables the feature for
     /// this torrent (required for private torrents: no tracker-independent
@@ -176,6 +182,7 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         magnetURI: String? = nil,
         savePath: String,
         paused: Bool = false,
+        metadataOnly: Bool = false,
         enableDHT: Bool? = nil,
         enablePEX: Bool? = nil,
         enableLSD: Bool? = nil
@@ -184,6 +191,7 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         self.magnetURI = magnetURI
         self.savePath = savePath
         self.paused = paused
+        self.metadataOnly = metadataOnly
         self.enableDHT = enableDHT
         self.enablePEX = enablePEX
         self.enableLSD = enableLSD
@@ -194,6 +202,7 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         case magnetURI = "magnet-uri"
         case savePath = "save-path"
         case paused = "paused"
+        case metadataOnly = "metadata-only"
         case enableDHT = "enable-dht"
         case enablePEX = "enable-pex"
         case enableLSD = "enable-lsd"
@@ -282,6 +291,10 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
     public let error: String?
     public let message: String?
     public let downloadRate: Int64
+    /// Raw native torrent flag bitmask from the same status sample (WP22.D7):
+    /// lets callers observe upload_mode/paused/auto_managed without a new
+    /// handle API. -1 retains the unknown sentinel.
+    public let flags: Int64
     public let uploadRate: Int64
     public let downloadedBytes: Int64
     public let uploadedBytes: Int64
@@ -306,7 +319,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         peersConnected: Int = -1,
         seedsTotal: Int = -1,
         name: String? = nil,
-        totalSize: Int64 = -1
+        totalSize: Int64 = -1,
+        flags: Int64 = -1
     ) {
         self.kind = kind
         self.torrentID = torrentID
@@ -322,6 +336,7 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         self.seedsTotal = seedsTotal
         self.name = name
         self.totalSize = totalSize
+        self.flags = flags
     }
 
     enum CodingKeys: String, CodingKey {
@@ -339,6 +354,7 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         case seedsTotal = "seeds-total"
         case name = "name"
         case totalSize = "total-size"
+        case flags = "flags"
     }
 
     public init(from decoder: Decoder) throws {
@@ -358,6 +374,7 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         let decodedName = try container.decodeIfPresent(String.self, forKey: .name)
         name = decodedName?.isEmpty == true ? nil : decodedName
         totalSize = try container.decodeIfPresent(Int64.self, forKey: .totalSize) ?? -1
+        flags = try container.decodeIfPresent(Int64.self, forKey: .flags) ?? -1
     }
 }
 
@@ -444,8 +461,50 @@ public struct MoveStorageRequestDTO: Codable, Sendable, Equatable {
     }
 }
 
+/// WP22.D5 full file-priority vector request (`setFilePriorities(id,
+/// priorities)`). The vector is complete and in metainfo file order; the
+/// bridge performs a bounded exact read-back before reporting success
+/// (ADR-022 commit barrier).
+public struct FilePrioritiesRequestDTO: Codable, Sendable, Equatable {
+    public let torrentID: String
+    public let priorities: [UInt8]
+
+    public init(torrentID: String, priorities: [UInt8]) {
+        self.torrentID = torrentID
+        self.priorities = priorities
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case torrentID = "torrent-id"
+        case priorities = "priorities"
+    }
+}
+
 /// Parsed result of decoding an adapter DTO envelope.
 public enum DTODecodeResult<T: Codable & Sendable>: Sendable {
     case success(T)
     case malformed(String)
+}
+
+/// WP22.D7 guarded metadata-only commit (`commitMetadataOnly(id, priorities,
+/// paused)`). The id must still be tracked as a temporary metadata-only
+/// torrent; the vector is complete and in metainfo file order. The bridge
+/// applies the exact priority read-back, the paused state, and clears
+/// upload_mode last (ADR-022 guard-last ordering).
+public struct CommitMetadataOnlyRequestDTO: Codable, Sendable, Equatable {
+    public let torrentID: String
+    public let priorities: [UInt8]
+    public let paused: Bool
+
+    public init(torrentID: String, priorities: [UInt8], paused: Bool) {
+        self.torrentID = torrentID
+        self.priorities = priorities
+        self.paused = paused
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case torrentID = "torrent-id"
+        case priorities = "priorities"
+        case paused = "paused"
+    }
 }

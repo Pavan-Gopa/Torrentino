@@ -38,26 +38,26 @@ final class EngineViewModel: ObservableObject {
 
     // MARK: - Service registration
 
-    /// Rebinds the LaunchAgent once during normal GUI startup, then records
-    /// the resulting SMAppService state before the transfer client connects.
-    /// This belongs to the app lifecycle rather than a view task: SwiftUI
-    /// views can be recreated, while BTM must be re-anchored only once per
-    /// process launch.
+    /// Checks and registers the LaunchAgent during normal GUI startup (idempotent;
+    /// no rebind if already enabled), then records the resulting SMAppService state
+    /// before the transfer client connects. This belongs to the app lifecycle rather
+    /// than a view task: SwiftUI views can be recreated, while BTM registration
+    /// check must run once per process launch.
     func prepareForLaunch() async {
         let bundleIdentifier = Bundle.main.bundleIdentifier ?? "unknown"
-        appendLog("SMAppService launch rebind started (bundle=\(bundleIdentifier))")
+        appendLog("SMAppService launch registration check started (bundle=\(bundleIdentifier))")
         do {
             try await AgentServiceRegistration.register()
-            appendLog("SMAppService launch rebind completed (bundle=\(bundleIdentifier))")
+            appendLog("SMAppService launch registration check completed (bundle=\(bundleIdentifier))")
         } catch {
             // Keep lifecycle diagnostics useful without exposing paths or
             // system-service details that can contain user data.
             let errorType = String(reflecting: type(of: error))
-            appendLog("SMAppService launch rebind failed (bundle=\(bundleIdentifier), errorType=\(errorType))")
+            appendLog("SMAppService launch registration check failed (bundle=\(bundleIdentifier), errorType=\(errorType))")
         }
 
         let snapshot = await AgentServiceRegistration.status()
-        applyStatus(snapshot, note: "after launch rebind")
+        applyStatus(snapshot, note: "after launch registration check")
     }
 
     func refreshServiceStatus() {
@@ -70,7 +70,7 @@ final class EngineViewModel: ObservableObject {
     func register() {
         Task {
             await run("register") {
-                try await AgentServiceRegistration.register()
+                try await AgentServiceRegistration.register(forceRebind: true)
                 return "SMAppService.register() returned"
             }
             let snapshot = await AgentServiceRegistration.status()

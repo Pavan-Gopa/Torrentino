@@ -215,7 +215,7 @@ final class TorrentinoIPCTests: TestProfileCase {
         let expectedNames = [
             "hello", "fetchSnapshot", "fetchFiles", "fetchPeers", "fetchTrackers",
             "fetchActivity", "fetchRemovalManifestPage", "fetchCreatorManifestPage",
-            "inspectAddSource", "commitAdd", "cancelAdd", "pause", "resume",
+            "inspectAddSource", "commitAdd", "cancelAdd", "pollAddOperation", "pause", "resume",
             "setFileSelection", "setLimits", "fetchSettings", "validateSettings",
             "applySettings", "testProxy", "testIncomingPort", "editTrackers",
             "reannounce", "requestRecheck", "moveStorage", "prepareRemoval",
@@ -223,7 +223,7 @@ final class TorrentinoIPCTests: TestProfileCase {
             "commitCreate", "prepareForQuit", "restartEngineSafely", "exportDiagnostics",
         ]
         XCTAssertEqual(EngineCommandV1.allCases.map(\.name), expectedNames)
-        XCTAssertEqual(EngineCommandV1.allCases.count, 33)
+        XCTAssertEqual(EngineCommandV1.allCases.count, 34)
     }
 
     func testEngineCommandV1RoundTripAllCases() throws {
@@ -282,6 +282,36 @@ final class TorrentinoIPCTests: TestProfileCase {
         XCTAssertEqual(decoded.kind, .request)
         XCTAssertEqual(decoded.command, command)
         XCTAssertEqual(decoded.requestID, command.requestID)
+    }
+    func testPollAddOperationEnvelopeRoundTrip() throws {
+        let requestID = RequestID()
+        let opID = AddOperationID()
+        let command = EngineCommandV1.pollAddOperation(PollAddOperationRequest(requestID: requestID, operationID: opID))
+        let envelope = IPCEnvelope.request(command)
+        XCTAssertNil(envelope.validate())
+        let data = try JSONEncoder().encode(envelope)
+        let decoded = try JSONDecoder().decode(IPCEnvelope.self, from: data)
+        XCTAssertEqual(decoded, envelope)
+
+        let inspection = AddSourceInspection(
+            operationID: opID,
+            contentIdentity: ContentIdentity(infoHashV1: Data(repeating: 0x01, count: 20), infoHashV2: nil),
+            displayName: "Test Magnet",
+            sizeBytes: 1024,
+            warnings: [],
+            phase: .readyToCommit,
+            files: [InspectedFileEntry(path: "a.txt", sizeBytes: 1024, priority: .normal)]
+        )
+        let result = EngineCommandResult.success(.pollAddOperation(PollAddOperationResult(
+            phase: .readyToCommit,
+            inspection: inspection,
+            failure: nil
+        )))
+        let resultEnvelope = IPCEnvelope.result(requestID: requestID, result: result)
+        XCTAssertNil(resultEnvelope.validate())
+        let resultData = try JSONEncoder().encode(resultEnvelope)
+        let decodedResult = try JSONDecoder().decode(IPCEnvelope.self, from: resultData)
+        XCTAssertEqual(decodedResult, resultEnvelope)
     }
 
     /// SEC-1 credential delivery (WP13-SEC-HARDEN-001): applySettings

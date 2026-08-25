@@ -9,11 +9,11 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qa_common.sh"
 
 LIST="${NATIVE_DIR}/TorrentinoApp/Features/TorrentListView.swift"
-APP="${NATIVE_DIR}/TorrentinoApp/App/TorrentinoApp.swift"
+APP="${NATIVE_DIR}/TorrentinoApp/App/AppDelegate.swift"
 PBXPROJ="${NATIVE_DIR}/Torrentino.xcodeproj/project.pbxproj"
 
 [[ -f "${LIST}" ]] || qa_die "TorrentListView.swift is missing"
-[[ -f "${APP}" ]] || qa_die "TorrentinoApp.swift is missing"
+[[ -f "${APP}" ]] || qa_die "AppDelegate.swift is missing"
 [[ -f "${PBXPROJ}" ]] || qa_die "project.pbxproj is missing"
 
 INFO_FILES=()
@@ -61,8 +61,18 @@ require_text() {
 require_text "${LIST}" '.onDrop(of: [.fileURL, .url, .item, .data, .plainText]' "drop accepts Finder URLs, promised data, and text"
 require_text "${LIST}" 'TorrentDropRouting.isTorrentDropURL(url)' "drop routes every decoded URL through the torrent gate"
 require_text "${LIST}" 'guard text.hasPrefix("magnet:") else { return }' "drop rejects non-magnet text"
-require_text "${APP}" '.onOpenURL { url in' "open URL handler"
-require_text "${APP}" 'url.scheme == "magnet"' "magnet URL association handler"
-require_text "${APP}" 'url.pathExtension.lowercased() == "torrent"' "torrent URL association handler"
+require_text "${APP}" 'enum InboundURL: Equatable {' "inbound URL classifier"
+require_text "${APP}" 'self = .magnet(url.absoluteString)' "magnet URL classification"
+require_text "${APP}" 'self = .torrent(url)' "torrent URL classification"
+require_text "${APP}" 'func application(_ sender: NSApplication, open urls: [URL]) {' "AppDelegate open URL owner"
+require_text "${APP}" '_ = handleIncomingURLs(urls)' "open URL routes through AppDelegate"
+ENTRY="${NATIVE_DIR}/TorrentinoApp/App/TorrentinoApp.swift"
+[[ -f "${ENTRY}" ]] || qa_die "TorrentinoApp.swift is missing"
+assert_not_contains \
+	"$(cat "${ENTRY}")" '.onOpenURL' \
+	"sole owner: TorrentinoApp.swift has no .onOpenURL"
+assert_not_contains \
+	"$(cat "${ENTRY}")" 'handlesExternalEvents' \
+	"sole owner: TorrentinoApp.swift has no handlesExternalEvents"
 
 qa_pass

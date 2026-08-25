@@ -70,8 +70,6 @@ struct ContentView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 80, height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .accessibilityHidden(true)
             Text(String(localized: "empty.no_torrents"))
                 .font(.title3.weight(.semibold))

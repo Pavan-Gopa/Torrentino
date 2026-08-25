@@ -1820,23 +1820,6 @@
         }
       }
     },
-    "fixture.note": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Engine unreachable — showing demo data"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Движок недоступен — показаны демо-данные"
-          }
-        }
-      }
-    },
     "menu.file": {
       "extractionState": "manual",
       "localizations": {

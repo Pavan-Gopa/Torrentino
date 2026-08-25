@@ -220,12 +220,24 @@ public protocol TransferEngine: Sendable {
     /// `destinationPath` (destination files are adopted, never overwritten).
     func moveStorage(torrentID: String, destinationPath: String) async throws
     func setLimits(torrentID: String, limits: TorrentinoIPC.TransferLimits) async throws
+    /// WP22.D5 (ADR-022): applies the complete selected/skipped priority
+    /// vector in metainfo file order (.normal -> 4, .skip -> 0). Production
+    /// bridges perform a bounded native read-back before reporting success.
+    func setFileSelection(torrentID: String, priorities: [UInt8]) async throws
+    /// WP22.D7 (ADR-022): guarded promotion of a temporary metadata-only
+    /// torrent: applies the full priority vector behind the native upload_mode
+    /// guard, applies the paused state, then releases the guard last.
+    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws
     /// Accepted live edits are complete nested replacements. The scalar
     /// overload below remains only as a reject-only compatibility surface.
     func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws
     func editTrackers(torrentID: String, trackers: [String]) async throws
     func reannounce(torrentID: String) async throws
-    /// Live per-torrent status (progress/rates/peers). Called by the pump.
+    /// Requests the engine's exact bencoded resume buffer, including the
+    /// resolved info dictionary for magnet-added torrents.
+    func requestResumeData(torrentID: String) async throws -> Data
+    /// Drains the alert queue, folds the latest per-torrent progress/state
+    /// into the cache, and reports one status per known torrent.
     func statusUpdate() async throws -> [TransferTorrentStatus]
     /// Bounded alert drain variant. The default keeps test engines and older
     /// adapters source-compatible while production bridges honor the budget.
@@ -233,6 +245,12 @@ public protocol TransferEngine: Sendable {
     /// Engine-wide aggregate health (used when per-torrent rates are
     /// unavailable from the underlying engine).
     func aggregateHealth() async throws -> TransferAggregateStats
+}
+
+public extension TransferEngine {
+    func requestResumeData(torrentID: String) async throws -> Data {
+        throw EngineCoordinatorError.unsupportedOperation("resume data")
+    }
 }
 
 public extension TransferEngine {
@@ -244,6 +262,14 @@ public extension TransferEngine {
 
     func statusUpdate(maxAlerts: Int) async throws -> [TransferTorrentStatus] {
         try await statusUpdate()
+    }
+
+    func setFileSelection(torrentID: String, priorities: [UInt8]) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("file selection")
+    }
+
+    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
+        throw EngineCoordinatorError.unsupportedOperation("metadata-only commit")
     }
 
     func moveStorage(torrentID: String, destinationPath: String) async throws {

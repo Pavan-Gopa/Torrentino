@@ -277,6 +277,44 @@ final class TorrentinoAppTests: TestProfileCase {
         XCTAssertNil(PeerValidation.makeRequirement(""))
         XCTAssertNil(PeerValidation.makeRequirement("anchor apple garbage &&("))
     }
+    func testSharedEvaluatorInvalidOrNonexistentPIDFailClosed() throws {
+        let reqString = TorrentinoXPCSecurity.expectedUIAppExpression
+        let requirement = try XCTUnwrap(TorrentinoXPCSecurity.makeRequirement(reqString))
+
+        guard case .failure(let err0) = TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: 0, requirement: requirement),
+              case .invalidProcessIdentifier = err0 else {
+            return XCTFail("expected invalidProcessIdentifier for pid=0")
+        }
+        guard case .failure(let errNeg) = TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: -1, requirement: requirement),
+              case .invalidProcessIdentifier = errNeg else {
+            return XCTFail("expected invalidProcessIdentifier for pid=-1")
+        }
+
+        let result = TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: 99999, requirement: requirement)
+        guard case .failure(let error) = result, case .guestLookupFailed = error else {
+            return XCTFail("expected guestLookupFailed for nonexistent PID 99999, got \(result)")
+        }
+    }
+
+    func testSharedEvaluatorCurrentTestProcessFailsExactUIRequirement() throws {
+        let reqString = TorrentinoXPCSecurity.expectedUIAppExpression
+        let requirement = try XCTUnwrap(TorrentinoXPCSecurity.makeRequirement(reqString))
+        let testProcessPID = ProcessInfo.processInfo.processIdentifier
+        let result = TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: testProcessPID, requirement: requirement)
+        guard case .failure(let error) = result, case .validityCheckFailed = error else {
+            return XCTFail("expected validityCheckFailed for current test-host process against exact UI requirement, got \(result)")
+        }
+    }
+
+    func testSharedEvaluatorRequirementExpressionsCompile() {
+        XCTAssertNotNil(TorrentinoXPCSecurity.makeRequirement(TorrentinoXPCSecurity.expectedUIAppExpression))
+        XCTAssertNotNil(TorrentinoXPCSecurity.makeRequirement(TorrentinoXPCSecurity.expectedAgentExpression))
+        XCTAssertTrue(TorrentinoXPCSecurity.expectedUIAppExpression.contains(TorrentinoXPCSecurity.uiAppBundleIdentifier))
+        XCTAssertTrue(TorrentinoXPCSecurity.expectedAgentExpression.contains(TorrentinoXPCSecurity.agentBundleIdentifier))
+        XCTAssertTrue(TorrentinoXPCSecurity.expectedUIAppExpression.contains(TorrentinoXPCSecurity.teamIdentifier))
+        XCTAssertTrue(TorrentinoXPCSecurity.expectedAgentExpression.contains(TorrentinoXPCSecurity.teamIdentifier))
+    }
+
 
     func testPeerValidationEnforcementGate() {
         // Developer-ID (Release) builds enforce the checks; Debug builds are
@@ -286,6 +324,104 @@ final class TorrentinoAppTests: TestProfileCase {
 #else
         XCTAssertTrue(PeerValidation.isEnforcementActive)
 #endif
+    }
+    func testPeerValidationCurrentTestProcessFailsExactAgentRequirement() throws {
+        let reqString = PeerValidation.expectedAgentRequirement
+        let requirement = try XCTUnwrap(PeerValidation.makeRequirement(reqString))
+        let testProcessPID = ProcessInfo.processInfo.processIdentifier
+        let result = PeerValidation.validateRunningAgent(processIdentifier: testProcessPID, requirement: requirement)
+        guard case .failure(let error) = result else {
+            return XCTFail("test process running xctest must fail exact engine-agent requirement")
+        }
+        guard case .liveRequirementMismatch = error else {
+            return XCTFail("expected liveRequirementMismatch, got \(error)")
+        }
+    }
+
+    func testPeerValidationInvalidLivePIDRejected() throws {
+        let reqString = PeerValidation.expectedAgentRequirement
+        let requirement = try XCTUnwrap(PeerValidation.makeRequirement(reqString))
+        guard case .failure(let err0) = PeerValidation.validateRunningAgent(processIdentifier: 0, requirement: requirement),
+              case .invalidLivePID = err0 else {
+            return XCTFail("expected invalidLivePID for pid=0")
+        }
+        guard case .failure(let errNeg) = PeerValidation.validateRunningAgent(processIdentifier: -1, requirement: requirement),
+              case .invalidLivePID = errNeg else {
+            return XCTFail("expected invalidLivePID for pid=-1")
+        }
+    }
+
+    func testPeerValidationPIDConsistencyValid() {
+        let result = PeerValidation.validateCandidatePIDs(connectionPID: 42, helloPID: 42, reReadPID: 42)
+        XCTAssertEqual(result, .success(42))
+    }
+
+    func testPeerValidationPIDConsistencyZeroOrNegative() {
+        XCTAssertEqual(PeerValidation.validateCandidatePIDs(connectionPID: 0, helloPID: 0, reReadPID: 0), .failure(.invalidLivePID))
+        XCTAssertEqual(PeerValidation.validateCandidatePIDs(connectionPID: -1, helloPID: -1, reReadPID: -1), .failure(.invalidLivePID))
+    }
+
+    func testPeerValidationPIDConsistencyHelloMismatch() {
+        let result = PeerValidation.validateCandidatePIDs(connectionPID: 100, helloPID: 200, reReadPID: 100)
+        XCTAssertEqual(result, .failure(.helloPIDMismatch(connectionPID: 100, helloPID: 200)))
+    }
+
+    func testPeerValidationPIDConsistencyReReadMismatch() {
+        let result = PeerValidation.validateCandidatePIDs(connectionPID: 100, helloPID: 100, reReadPID: 200)
+        XCTAssertEqual(result, .failure(.invalidLivePID))
+    }
+    func testPeerValidationPostValidationPIDMatching() {
+        let result = PeerValidation.validatePostValidationPID(initialPID: 42, reReadPID: 42)
+        XCTAssertEqual(result, .success(42))
+    }
+
+    func testPeerValidationPostValidationPIDMismatch() {
+        let result = PeerValidation.validatePostValidationPID(initialPID: 42, reReadPID: 99)
+        XCTAssertEqual(result, .failure(.invalidLivePID))
+    }
+
+    func testPeerValidationPostValidationPIDZeroOrNegative() {
+        XCTAssertEqual(PeerValidation.validatePostValidationPID(initialPID: 0, reReadPID: 0), .failure(.invalidLivePID))
+        XCTAssertEqual(PeerValidation.validatePostValidationPID(initialPID: 42, reReadPID: -1), .failure(.invalidLivePID))
+    }
+
+    func testPeerValidationPackagedLayout() throws {
+        let productsURL = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+        let appBundleURL = productsURL.appendingPathComponent("Torrentino.app")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: appBundleURL.path),
+            "Torrentino.app must exist in built products at \(appBundleURL.path)"
+        )
+
+        let helperURL = PeerValidation.embeddedAgentURL(in: appBundleURL)
+
+        XCTAssertEqual(helperURL.lastPathComponent, PeerValidation.agentExecutableName)
+        XCTAssertEqual(
+            helperURL.path,
+            appBundleURL.appendingPathComponent("Contents/Library/LaunchAgents/\(PeerValidation.agentExecutableName)").path
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: helperURL.path),
+            "embedded agent binary must exist at \(helperURL.path)"
+        )
+
+        let plistURL = appBundleURL.appendingPathComponent("Contents/Library/LaunchAgents/\(PeerValidation.identity.plistFilename)")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: plistURL.path),
+            "bundled LaunchAgent plist must exist at \(plistURL.path)"
+        )
+        let plistData = try Data(contentsOf: plistURL)
+        let plistObj = try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
+        let plistDict = try XCTUnwrap(plistObj as? [String: Any], "plist must deserialize to dictionary")
+
+        let bundleProgramRelativePath = try XCTUnwrap(plistDict["BundleProgram"] as? String, "BundleProgram key missing from plist")
+        let resolvedBundleProgramURL = appBundleURL.appendingPathComponent(bundleProgramRelativePath)
+
+        XCTAssertEqual(
+            resolvedBundleProgramURL.standardizedFileURL,
+            helperURL.standardizedFileURL,
+            "resolved BundleProgram URL must equal helper embeddedAgentURL"
+        )
     }
 
     /// Resolve Localizable.xcstrings from the source tree.
@@ -744,6 +880,109 @@ final class TorrentinoAppTests: TestProfileCase {
             _ = TorrentListProjection.project(rows100, query: "Archive", filter: .all, sortOrder: sortOrder)
             _ = TorrentListProjection.project(rows500, query: "Archive", filter: .all, sortOrder: sortOrder)
         }
+    }
+
+    /// WP-22.D10 (+ review WP22-D10-REVIEW-001): the transport-unavailable
+    /// transition publishes a truthful empty library — zero rows, zero status
+    /// totals, empty selection, reset authoritative identity — with the
+    /// localized engine-unavailable error. It never synthesizes demo data,
+    /// and batches that raced past the dead transport (delayed adds, stale
+    /// deltas, lifecycle flips scheduled by the client sink before the
+    /// reconnect snapshot) cannot repopulate any of it until an accepted
+    /// authoritative snapshot re-enables event application.
+    @MainActor
+    func testTransportUnavailableStateNeverSynthesizesRows() {
+        let viewModel = TorrentListViewModel(client: EngineClient())
+        let seeded = authoritativeTorrentSnapshot()
+
+        // Seed one authoritative row and a ready agent before the failure.
+        // The row uses the model's own upsert and the lifecycle flows through
+        // the real event sink: torrent events end in NotificationManager,
+        // whose UNUserNotificationCenter init cannot run in this standalone
+        // xctest runner. Latched batches below still use apply() — the exact
+        // delivery path production events take.
+        viewModel.upsert(seeded)
+        viewModel.apply([
+            .engineLifecycleChanged(EngineLifecycleChangedEvent(
+                from: .unregistered, to: .ready, degradedReason: nil, revision: 7
+            )),
+        ])
+        viewModel.enterDirectory("stale")
+        viewModel.selection = [seeded.id]
+        XCTAssertEqual(viewModel.torrents.map(\.id), [seeded.id])
+        XCTAssertEqual(viewModel.engineRevision, 0)
+        XCTAssertEqual(viewModel.lifecyclePhase, .ready)
+        XCTAssertNil(viewModel.connectionNote)
+        XCTAssertEqual(viewModel.directoryStack, ["stale"])
+
+        viewModel.enterEngineUnavailableState()
+
+        XCTAssertTrue(viewModel.torrents.isEmpty)
+        let status = viewModel.statusBar
+        XCTAssertEqual(status.total, 0)
+        XCTAssertEqual(status.downloading, 0)
+        XCTAssertEqual(status.seeding, 0)
+        XCTAssertEqual(status.paused, 0)
+        XCTAssertTrue(viewModel.selection.isEmpty)
+        XCTAssertNil(viewModel.selectedTorrent)
+        XCTAssertTrue(viewModel.directoryStack.isEmpty)
+        XCTAssertNil(viewModel.instanceID)
+        XCTAssertEqual(viewModel.engineRevision, 0)
+        XCTAssertNil(viewModel.lifecyclePhase)
+        XCTAssertNil(viewModel.lifecycleDegradedReason)
+        XCTAssertEqual(
+            viewModel.connectionNote,
+            String(localized: "error.xpc_unavailable"),
+            "an unreachable engine must surface the truthful localized error"
+        )
+
+        // Replay each delayed delivery separately so every event would mutate
+        // observable state absent the latch. In particular, the revision-1
+        // delta runs while engineRevision is still zero and therefore cannot
+        // hide behind the gap guard.
+        viewModel.apply([
+            .torrentDelta(TorrentDeltaEvent(delta: TorrentDelta(
+                added: [], updated: [seeded], removed: [], engineRevision: 1
+            ))),
+        ])
+        XCTAssertTrue(
+            viewModel.torrents.isEmpty,
+            "a contiguous delayed delta must not restore the authoritative row"
+        )
+        XCTAssertEqual(viewModel.engineRevision, 0)
+
+        viewModel.apply([
+            .torrentAdded(TorrentAddedEvent(
+                snapshot: FixtureLibrary.snapshot(count: 1)[0],
+                engineRevision: 8
+            )),
+        ])
+        XCTAssertTrue(
+            viewModel.torrents.isEmpty,
+            "a delayed add must not synthesize a demo row"
+        )
+        XCTAssertEqual(viewModel.statusBar.total, 0)
+
+        viewModel.apply([
+            .engineLifecycleChanged(EngineLifecycleChangedEvent(
+                from: .degraded, to: .ready, degradedReason: nil, revision: 9
+            )),
+        ])
+
+        XCTAssertTrue(
+            viewModel.torrents.isEmpty,
+            "latched events must not synthesize or restore rows"
+        )
+        XCTAssertEqual(viewModel.statusBar.total, 0)
+        XCTAssertTrue(viewModel.selection.isEmpty)
+        XCTAssertEqual(viewModel.engineRevision, 0)
+        XCTAssertNil(viewModel.lifecyclePhase)
+        XCTAssertNil(viewModel.lifecycleDegradedReason)
+        XCTAssertEqual(
+            viewModel.connectionNote,
+            String(localized: "error.xpc_unavailable"),
+            "a latched lifecycle-ready event must not clear the unavailable note"
+        )
     }
 
     // MARK: - WP13-LIVE-DND-UI-001 / WP13-LIVE-PANE-UX-001
@@ -1289,5 +1528,711 @@ final class TorrentinoAppTests: TestProfileCase {
             saveLocation: PersistedLocation(path: "/tmp"),
             revision: 0
         )
+    }
+
+    // MARK: - WP22.D9 magnet preflight routing and lifecycle
+
+    /// Builds a view model whose entire add lane (inspect/poll/cancel/commit
+    /// plus the post-commit snapshot refetch) is served by the script, so no
+    /// test can touch the real XPC transport.
+    @MainActor
+    private func makeMagnetPreflightViewModel(
+        script: MagnetCommandScript
+    ) -> TorrentListViewModel {
+        TorrentListViewModel(
+            client: EngineClient(),
+            sendAddCommand: { command in try await script.send(command) }
+        )
+    }
+
+    @MainActor
+    private func magnetInspection(
+        _ operationID: AddOperationID,
+        phase: AddInspectionPhase,
+        files: [InspectedFileEntry]? = nil,
+        sizeBytes: Int64 = 300
+    ) -> AddSourceInspection {
+        AddSourceInspection(
+            operationID: operationID,
+            contentIdentity: nil,
+            displayName: "Magnet fixture",
+            sizeBytes: sizeBytes,
+            warnings: [],
+            phase: phase,
+            files: files
+        )
+    }
+
+    @MainActor
+    private func magnetFiles() -> [InspectedFileEntry] {
+        [
+            InspectedFileEntry(path: "Movie/movie.mkv", sizeBytes: 200),
+            InspectedFileEntry(path: "Movie/sample.avi", sizeBytes: 100, priority: .skip),
+        ]
+    }
+
+    @MainActor
+    private func cancelAddCount(in script: MagnetCommandScript) -> Int {
+        script.commands.filter {
+            if case .cancelAdd = $0 { return true }
+            return false
+        }.count
+    }
+
+    /// Bounded wait for an asynchronous milestone (the agent-assigned
+    /// operation identity or an async cancel landing in the script). The
+    /// deterministic assertions run afterwards; this only removes scheduling
+    /// nondeterminism from the wait itself.
+    @MainActor
+    private func waitForMagnetCondition(
+        timeoutSeconds: Double = 2,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while !condition() && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+    }
+
+    @MainActor
+    func testBrowserDeliveryPresentsPendingMagnetWithoutEngineCommit() {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))"
+
+        viewModel.presentIncomingMagnet(uri)
+
+        XCTAssertEqual(viewModel.pendingAddMagnetURI, uri)
+        XCTAssertTrue(viewModel.showAddSheet)
+        XCTAssertNil(viewModel.magnetInspection, "presentation alone starts no inspection")
+        XCTAssertTrue(script.commands.isEmpty, "delivery must not reach the engine commit lane")
+    }
+
+    @MainActor
+    func testPlainTextMagnetRoutesThroughSamePresentationAndIsConsumedOnce() {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let pasted = "  \n magnet:?xt=urn:btih:\(String(repeating: "e", count: 40))\n "
+        let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        viewModel.presentIncomingMagnet(pasted)
+
+        XCTAssertEqual(viewModel.pendingAddMagnetURI, trimmed, "plain-text drops share the browser route")
+        XCTAssertEqual(viewModel.consumePendingMagnetURI(), trimmed)
+        XCTAssertNil(viewModel.pendingAddMagnetURI)
+        XCTAssertNil(viewModel.consumePendingMagnetURI(), "the pending URI is consumed exactly once")
+    }
+
+    @MainActor
+    func testDuplicatePresentationsKeepSingleToken() {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))"
+
+        viewModel.presentIncomingMagnet(uri)
+        viewModel.presentIncomingMagnet(uri)
+
+        XCTAssertEqual(viewModel.consumePendingMagnetURI(), uri, "duplicate delivery keeps one token")
+        XCTAssertNil(viewModel.consumePendingMagnetURI())
+        XCTAssertTrue(script.commands.isEmpty)
+    }
+
+    @MainActor
+    func testRetrievingMetadataBlocksCommitUntilReady() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        viewModel.magnetPollInterval = 0.01
+        let operationID = AddOperationID()
+        script.enqueueReply(.addSourceInspection(magnetInspection(operationID, phase: .retrievingMetadata)))
+        script.enqueueReply(.pollAddOperation(PollAddOperationResult(
+            phase: .readyToCommit,
+            inspection: magnetInspection(operationID, phase: .readyToCommit, files: magnetFiles()),
+            failure: nil
+        )))
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "1", count: 40))"
+
+        let task = viewModel.beginMagnetInspection(uri)
+
+        // The preflight is presented synchronously; while the D8 metadata is
+        // still retrieving, confirmation cannot reach the commit lane.
+        XCTAssertEqual(viewModel.magnetInspection?.phase, .retrievingMetadata)
+        let premature = await viewModel.commitReadyMagnet(
+            saveLocation: PersistedLocation(path: "/tmp/wp22-d9"),
+            fileSelection: [],
+            startPaused: false
+        )
+        XCTAssertFalse(premature)
+        XCTAssertFalse(script.commands.contains { command in
+            if case .commitAdd = command { return true }
+            return false
+        })
+
+        await task.value
+        XCTAssertEqual(viewModel.magnetInspection?.phase, .readyToCommit)
+        XCTAssertNotNil(viewModel.magnetInspection?.preview, "ready metadata supplies the existing preview")
+    }
+
+    @MainActor
+    func testReadyMetadataProjectsFilesAndCommitsExactSelectionOnConfirmation() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let operationID = AddOperationID()
+        let recordID = TorrentRecordID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-0000000000d9")!)
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            operationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        script.enqueueReply(.commitAdd(CommitAddResult(recordID: recordID, engineRevision: 1)))
+        // The post-commit snapshot refetch may degrade without invalidating
+        // the commit; keep the fixture off NotificationManager (xctest host).
+        script.enqueue { _ in throw CancellationError() }
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "2", count: 40))"
+
+        await viewModel.beginMagnetInspection(uri).value
+
+        let preview = try XCTUnwrap(viewModel.magnetInspection?.preview)
+        XCTAssertEqual(preview.files.map(\.relativePath), ["Movie/movie.mkv", "Movie/sample.avi"])
+        XCTAssertEqual(preview.inspection.operationID, operationID)
+
+        let selection = [
+            FileSelectionItem(relativePath: "Movie/movie.mkv", priority: .normal),
+            FileSelectionItem(relativePath: "Movie/sample.avi", priority: .skip),
+        ]
+        let confirmed = await viewModel.commitReadyMagnet(
+            saveLocation: PersistedLocation(path: "/tmp/wp22-d9-dest"),
+            fileSelection: selection,
+            startPaused: true
+        )
+
+        XCTAssertTrue(confirmed)
+        XCTAssertNil(viewModel.magnetInspection, "a committed preflight is promoted and cleared")
+        let commits = script.commands.compactMap { command -> CommitAddRequest? in
+            if case .commitAdd(let request) = command { return request }
+            return nil
+        }
+        XCTAssertEqual(commits.count, 1)
+        XCTAssertEqual(commits.first?.operationID, operationID)
+        XCTAssertEqual(commits.first?.saveLocation?.path, "/tmp/wp22-d9-dest")
+        XCTAssertEqual(commits.first?.fileSelection, selection)
+        XCTAssertEqual(commits.first?.startPaused, true)
+    }
+
+    @MainActor
+    func testCancelSendsExactlyOneCancellationPerOperation() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        viewModel.magnetPollInterval = 0.01
+        let operationID = AddOperationID()
+        let parkedPoll = MagnetScriptGate(payload: {
+            .success(.pollAddOperation(PollAddOperationResult(
+                phase: .retrievingMetadata,
+                inspection: nil,
+                failure: nil
+            )))
+        })
+        script.enqueueReply(.addSourceInspection(magnetInspection(operationID, phase: .retrievingMetadata)))
+        script.enqueue { _ in try await parkedPoll.wait() }
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "3", count: 40))"
+
+        _ = viewModel.beginMagnetInspection(uri)
+        await waitForMagnetCondition { viewModel.magnetInspection?.operationID == operationID }
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, operationID)
+
+        viewModel.abandonMagnetInspection()
+        viewModel.abandonMagnetInspection()
+        await waitForMagnetCondition { self.cancelAddCount(in: script) >= 1 }
+
+        XCTAssertEqual(cancelAddCount(in: script), 1, "abandoning cancels the current operation at most once")
+        XCTAssertNil(viewModel.magnetInspection)
+
+        // Releasing the abandoned poll proves a stale reply cannot resurrect
+        // or replace anything after cancellation ownership moved on.
+        parkedPoll.open()
+        await waitForMagnetCondition(timeoutSeconds: 0.2) { false }
+        XCTAssertNil(viewModel.magnetInspection)
+        XCTAssertEqual(cancelAddCount(in: script), 1)
+    }
+
+    @MainActor
+    func testStaleLifecycleCannotReplaceCurrentMagnetState() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let staleOperationID = AddOperationID()
+        let currentOperationID = AddOperationID()
+        let lateStaleInspect = MagnetScriptGate(payload: {
+            .success(.addSourceInspection(AddSourceInspection(
+                operationID: staleOperationID,
+                contentIdentity: nil,
+                displayName: "Late A",
+                sizeBytes: 9,
+                warnings: [],
+                phase: .readyToCommit,
+                files: [InspectedFileEntry(path: "stale.bin", sizeBytes: 9)]
+            )))
+        })
+        script.enqueue { _ in try await lateStaleInspect.wait() }
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            currentOperationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        let staleURI = "magnet:?xt=urn:btih:\(String(repeating: "4", count: 40))"
+        let currentURI = "magnet:?xt=urn:btih:\(String(repeating: "5", count: 40))"
+
+        let staleTask = viewModel.beginMagnetInspection(staleURI)
+        let currentTask = viewModel.beginMagnetInspection(currentURI)
+        await currentTask.value
+
+        XCTAssertEqual(viewModel.magnetInspection?.uri, currentURI)
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, currentOperationID)
+
+        lateStaleInspect.open()
+        await staleTask.value
+
+        XCTAssertEqual(viewModel.magnetInspection?.uri, currentURI, "a late stale inspect is dropped")
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, currentOperationID)
+        XCTAssertEqual(viewModel.magnetInspection?.preview?.files.map(\.relativePath), ["Movie/movie.mkv", "Movie/sample.avi"])
+    }
+
+    @MainActor
+    func testFailedPollSurfacesErrorWithoutCancellingOrCommitting() async {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        viewModel.magnetPollInterval = 0.01
+        script.enqueueReply(.addSourceInspection(magnetInspection(AddOperationID(), phase: .retrievingMetadata)))
+        script.enqueueReply(.pollAddOperation(PollAddOperationResult(
+            phase: .failed,
+            inspection: nil,
+            failure: EngineFault(code: .operationNotFound, severity: .error)
+        )))
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "6", count: 40))"
+
+        await viewModel.beginMagnetInspection(uri).value
+
+        XCTAssertEqual(viewModel.magnetInspection?.phase, .failed)
+        XCTAssertNotNil(viewModel.magnetInspection?.errorMessage)
+        XCTAssertNil(viewModel.magnetInspection?.preview)
+        let refused = await viewModel.commitReadyMagnet(
+            saveLocation: nil,
+            fileSelection: [],
+            startPaused: false
+        )
+        XCTAssertFalse(refused)
+        XCTAssertFalse(script.commands.contains { command in
+            if case .commitAdd = command { return true }
+            return false
+        }, "failed metadata never commits")
+        XCTAssertEqual(cancelAddCount(in: script), 0, "failure cleanup belongs to the agent, not the UI lane")
+    }
+
+    @MainActor
+    func testCommittedPreflightIsNeverCancelledByAbandon() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let operationID = AddOperationID()
+        let recordID = TorrentRecordID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-0000000000da")!)
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            operationID,
+            phase: .readyToCommit,
+            files: [InspectedFileEntry(path: "single.bin", sizeBytes: 10)]
+        )))
+        script.enqueueReply(.commitAdd(CommitAddResult(recordID: recordID, engineRevision: 1)))
+        // The post-commit snapshot refetch may degrade without invalidating
+        // the commit; keep the fixture off NotificationManager (xctest host).
+        script.enqueue { _ in throw CancellationError() }
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "7", count: 40))"
+
+        await viewModel.beginMagnetInspection(uri).value
+        let committed = await viewModel.commitReadyMagnet(
+            saveLocation: PersistedLocation(path: "/tmp/wp22-d9-promote"),
+            fileSelection: [FileSelectionItem(relativePath: "single.bin", priority: .normal)],
+            startPaused: false
+        )
+
+        XCTAssertTrue(committed)
+        viewModel.abandonMagnetInspection()
+        XCTAssertEqual(cancelAddCount(in: script), 0, "dismissal after commit never cancels the promoted handle")
+    }
+
+    @MainActor
+    func testUppercaseBrowserTokenPresentsPendingMagnetWithoutEngineCommit() {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let uri = "MAGNET:?xt=urn:btih:\(String(repeating: "A", count: 40))"
+
+        viewModel.presentIncomingMagnet(uri)
+
+        XCTAssertEqual(viewModel.pendingAddMagnetURI, uri, "an uppercase scheme routes exactly like magnet:")
+        XCTAssertTrue(viewModel.showAddSheet)
+        XCTAssertNil(viewModel.magnetInspection, "presentation alone starts no inspection")
+        XCTAssertTrue(script.commands.isEmpty, "zero engine traffic on presentation")
+    }
+
+    @MainActor
+    func testMixedCasePlainTextMagnetRoutesThroughCaseInsensitiveGate() {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let pasted = "  \n MaGnEt:?xt=urn:btih:\(String(repeating: "B", count: 40))\n "
+        let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        viewModel.presentIncomingMagnet(pasted)
+
+        XCTAssertEqual(viewModel.pendingAddMagnetURI, trimmed, "mixed-case drop/paste text passes the shared gate")
+        XCTAssertTrue(MagnetURIRouting.isMagnetURI("MAGNET:?xt=urn:btih:\(String(repeating: "C", count: 40))"))
+        XCTAssertFalse(MagnetURIRouting.isMagnetURI("https://example.com/file.torrent"), "non-magnet input never routes")
+        XCTAssertFalse(MagnetURIRouting.isMagnetURI("magnetx:?xt=urn:btih:\(String(repeating: "D", count: 40))"), "a different scheme never routes")
+        XCTAssertTrue(script.commands.isEmpty, "zero engine commits on routing alone")
+    }
+
+    @MainActor
+    func testReusedOperationIDStillReceivesCancelOnLaterAbandon() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let reusedOperationID = AddOperationID()
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            reusedOperationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        let firstURI = "magnet:?xt=urn:btih:\(String(repeating: "8", count: 40))"
+
+        await viewModel.beginMagnetInspection(firstURI).value
+        viewModel.abandonMagnetInspection()
+        await waitForMagnetCondition { self.cancelAddCount(in: script) >= 1 }
+        XCTAssertEqual(cancelAddCount(in: script), 1)
+
+        // The agent reuses the very same operation identity for the next
+        // magnet; the second lifecycle must still be cancellable.
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            reusedOperationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        let secondURI = "magnet:?xt=urn:btih:\(String(repeating: "9", count: 40))"
+        await viewModel.beginMagnetInspection(secondURI).value
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, reusedOperationID)
+
+        viewModel.abandonMagnetInspection()
+        viewModel.abandonMagnetInspection()
+        await waitForMagnetCondition { self.cancelAddCount(in: script) >= 2 }
+
+        XCTAssertEqual(cancelAddCount(in: script), 2, "a reused agent operation ID is never deduplicated away")
+        XCTAssertNil(viewModel.magnetInspection)
+    }
+
+    @MainActor
+    func testStaleInspectWithDistinctOperationIDIsCancelledExactlyOnce() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let staleOperationID = AddOperationID()
+        let currentOperationID = AddOperationID()
+        let lateStaleInspect = MagnetScriptGate(payload: {
+            .success(.addSourceInspection(AddSourceInspection(
+                operationID: staleOperationID,
+                contentIdentity: nil,
+                displayName: "Late Orphan",
+                sizeBytes: 9,
+                warnings: [],
+                phase: .readyToCommit,
+                files: [InspectedFileEntry(path: "orphan.bin", sizeBytes: 9)]
+            )))
+        })
+        script.enqueue { _ in try await lateStaleInspect.wait() }
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            currentOperationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        let staleURI = "magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))"
+        let currentURI = "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))"
+
+        let staleTask = viewModel.beginMagnetInspection(staleURI)
+        let currentTask = viewModel.beginMagnetInspection(currentURI)
+        await currentTask.value
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, currentOperationID)
+
+        lateStaleInspect.open()
+        await staleTask.value
+        await waitForMagnetCondition { self.cancelAddCount(in: script) >= 1 }
+
+        let cancelledIDs = script.commands.compactMap { command -> AddOperationID? in
+            if case .cancelAdd(let request) = command { return request.operationID }
+            return nil
+        }
+        XCTAssertEqual(cancelledIDs, [staleOperationID], "the orphaned stale handle is cancelled exactly once")
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, currentOperationID, "the current preflight is untouched")
+    }
+
+    @MainActor
+    func testStaleInspectSharingCurrentOperationIDNeverCancelsCurrentOwner() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        let sharedOperationID = AddOperationID()
+        let lateSharedInspect = MagnetScriptGate(payload: {
+            .success(.addSourceInspection(AddSourceInspection(
+                operationID: sharedOperationID,
+                contentIdentity: nil,
+                displayName: "Late Same",
+                sizeBytes: 9,
+                warnings: [],
+                phase: .readyToCommit,
+                files: [InspectedFileEntry(path: "same.bin", sizeBytes: 9)]
+            )))
+        })
+        script.enqueue { _ in try await lateSharedInspect.wait() }
+        script.enqueueReply(.addSourceInspection(magnetInspection(
+            sharedOperationID,
+            phase: .readyToCommit,
+            files: magnetFiles()
+        )))
+        let staleURI = "magnet:?xt=urn:btih:\(String(repeating: "e", count: 40))"
+        let currentURI = "magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))"
+
+        let staleTask = viewModel.beginMagnetInspection(staleURI)
+        let currentTask = viewModel.beginMagnetInspection(currentURI)
+        await currentTask.value
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, sharedOperationID)
+
+        lateSharedInspect.open()
+        await staleTask.value
+        await waitForMagnetCondition(timeoutSeconds: 0.2) { false }
+
+        XCTAssertEqual(cancelAddCount(in: script), 0, "a same-ID stale reply never cancels the current owner")
+        XCTAssertEqual(viewModel.magnetInspection?.uri, currentURI)
+        XCTAssertEqual(viewModel.magnetInspection?.operationID, sharedOperationID)
+    }
+
+    @MainActor
+    func testLateLocalInspectionResultIsRejectedAfterGenerationAdvance() {
+        var state = LatestInspectionState<AddTorrentPreview>()
+        var presentation = AddTorrentInspectionPresentation(inspecting: true)
+        let supersededGeneration = state.begin()
+        _ = state.begin()
+
+        // beginMagnetInspection invalidates the local generation before it
+        // takes preview ownership; a late local transport result carrying the
+        // superseded generation must be rejected wholesale.
+        let outcome = LatestInspectionState<AddTorrentPreview>.Result.success(
+            AddTorrentPreview(
+                inspection: magnetInspection(AddOperationID(), phase: .readyToCommit, files: magnetFiles()),
+                files: []
+            )
+        )
+
+        XCTAssertFalse(AddTorrentInspectionResultApplication.apply(
+            outcome,
+            for: supersededGeneration,
+            to: &state,
+            presentation: &presentation
+        ), "a late local result never replaces magnet preview ownership")
+        XCTAssertNil(presentation.preview)
+        XCTAssertNil(state.result)
+        XCTAssertTrue(state.generation > supersededGeneration)
+    }
+
+    @MainActor
+    func testLocalReplacementAbandonCancelsPresentedMagnetExactlyOnce() async throws {
+        let script = MagnetCommandScript()
+        let viewModel = makeMagnetPreflightViewModel(script: script)
+        viewModel.magnetPollInterval = 0.01
+        let operationID = AddOperationID()
+        let parkedPoll = MagnetScriptGate(payload: {
+            .success(.pollAddOperation(PollAddOperationResult(
+                phase: .retrievingMetadata,
+                inspection: nil,
+                failure: nil
+            )))
+        })
+        script.enqueueReply(.addSourceInspection(magnetInspection(operationID, phase: .retrievingMetadata)))
+        script.enqueue { _ in try await parkedPoll.wait() }
+        let uri = "magnet:?xt=urn:btih:\(String(repeating: "b", count: 40))"
+
+        _ = viewModel.beginMagnetInspection(uri)
+        await waitForMagnetCondition { viewModel.magnetInspection?.operationID == operationID }
+
+        // beginInspection(for:) hands preview ownership to a picked local
+        // .torrent by abandoning the presented magnet first: exactly one
+        // cancel, no resurrecting poll, no second cancel.
+        viewModel.abandonMagnetInspection()
+
+        XCTAssertNil(viewModel.magnetInspection)
+        await waitForMagnetCondition { self.cancelAddCount(in: script) >= 1 }
+        XCTAssertEqual(cancelAddCount(in: script), 1)
+
+        parkedPoll.open()
+        await waitForMagnetCondition(timeoutSeconds: 0.2) { false }
+        XCTAssertEqual(cancelAddCount(in: script), 1, "the replaced lifecycle never cancels twice")
+        XCTAssertNil(viewModel.magnetInspection)
+    }
+    // MARK: - Registration Policy Tests (WP22-D6-SERVICE-003)
+
+    func testRegistrationPolicyActionEnabledNoForceReturnsNoOp() {
+        let action = AgentServiceRegistration.registrationAction(status: .enabled, forceRebind: false)
+        XCTAssertEqual(action, .noOp)
+    }
+
+    func testRegistrationPolicyActionEnabledForcedRebindReturnsRebind() {
+        let action = AgentServiceRegistration.registrationAction(status: .enabled, forceRebind: true)
+        XCTAssertEqual(action, .rebind)
+    }
+
+    func testRegistrationPolicyActionNotRegisteredReturnsRegister() {
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .notRegistered, forceRebind: false), .register)
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .notRegistered, forceRebind: true), .register)
+    }
+
+    func testRegistrationPolicyActionNotFoundReturnsRegister() {
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .notFound, forceRebind: false), .register)
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .notFound, forceRebind: true), .register)
+    }
+
+    func testRegistrationPolicyActionRequiresApprovalPreservesTruthfulRegisterAction() {
+        // requiresApproval must map to .register (not .rebind) regardless of forceRebind flag
+        // so that approval requirement is never bypassed by an unregister call.
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .requiresApproval, forceRebind: false), .register)
+        XCTAssertEqual(AgentServiceRegistration.registrationAction(status: .requiresApproval, forceRebind: true), .register)
+    }
+}
+
+/// Test/measurement-only row generator (moved out of the app target when the
+/// demo mode was removed). Deterministic 100/500-row snapshots for projection
+/// and performance tests; production UI must never reference it.
+enum FixtureLibrary {
+    static func snapshot(count: Int = 100) -> [TorrentSnapshot] {
+        guard count > 0 else { return [] }
+        return (1...count).map { index in
+            let cycle = index % 8
+            let activity: TorrentActivity
+            let desired: DesiredTorrentState
+            let fraction: Double
+            switch cycle {
+            case 0: activity = .downloading; desired = .running; fraction = 0.05 + 0.9 * Double(index) / Double(count)
+            case 1: activity = .seeding; desired = .running; fraction = 1.0
+            case 2: activity = .checking; desired = .running; fraction = 0.5
+            case 3: activity = .idle; desired = .paused; fraction = Double(index % 90) / 100.0
+            case 4: activity = .downloading; desired = .running; fraction = Double(index % 70) / 100.0
+            case 5: activity = .fetchingMetadata; desired = .running; fraction = 0.0
+            case 6: activity = .queued; desired = .running; fraction = 0.0
+            default: activity = .seeding; desired = .running; fraction = 1.0
+            }
+            let totalBytes = Int64(1_500_000_000 + index * 37_000_000)
+            let downloaded = Int64(Double(totalBytes) * fraction)
+            let recordID = TorrentRecordID(rawValue: UUID())
+            let name = String(format: "Demo Archive %03d - %@", index, Self.suffixes[index % Self.suffixes.count])
+            return TorrentSnapshot(
+                id: recordID,
+                contentIdentity: ContentIdentity(infoHashV1: Data([UInt8(index & 0xFF)]), infoHashV2: nil),
+                displayName: name,
+                desiredState: desired,
+                activity: activity,
+                health: .healthy,
+                progress: TransferProgress(
+                    fraction: fraction,
+                    totalBytes: totalBytes,
+                    downloadedBytes: downloaded,
+                    uploadedBytes: activity == .seeding ? downloaded / 2 : downloaded / 10
+                ),
+                rates: TransferRates(
+                    downloadBytesPerSec: activity == .downloading ? Int64(400_000 + index * 7_000) : 0,
+                    uploadBytesPerSec: activity == .seeding ? Int64(120_000 + index * 3_000) : 0
+                ),
+                peers: PeerSummary(
+                    connected: activity == .downloading || activity == .seeding ? 4 + index % 40 : 0,
+                    halfOpen: activity == .downloading ? index % 12 : 0,
+                    total: activity == .downloading || activity == .seeding ? 20 + index % 200 : 0
+                ),
+                saveLocation: PersistedLocation(path: "/Users/Shared/Demo"),
+                revision: UInt64(index)
+            )
+        }
+        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private static let suffixes = [
+        "Source", "Assets", "Backup", "Pack", "Bundle", "Collection",
+        "Dataset", "Release", "Build", "Episode",
+    ]
+}
+
+/// FIFO reply script for the injected WP22.D9 add-lane seam. Every sent
+/// command consumes the next step; an unscripted command fails fast so a
+/// test can never hang on the real XPC transport.
+private final class MagnetCommandScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var steps: [(EngineCommandV1) async throws -> SuccessPayload] = []
+    private var sent: [EngineCommandV1] = []
+
+    func enqueue(_ step: @escaping (EngineCommandV1) async throws -> SuccessPayload) {
+        lock.lock()
+        defer { lock.unlock() }
+        steps.append(step)
+    }
+
+    func enqueueReply(_ payload: SuccessPayload) {
+        enqueue { _ in payload }
+    }
+
+    var commands: [EngineCommandV1] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sent
+    }
+
+    /// Sync dequeue step so the lock is never held across an await.
+    private func takeStep(for command: EngineCommandV1) throws -> (EngineCommandV1) async throws -> SuccessPayload {
+        lock.lock()
+        defer { lock.unlock() }
+        sent.append(command)
+        guard let step = steps.first else {
+            throw CancellationError()
+        }
+        steps.removeFirst()
+        return step
+    }
+
+    func send(_ command: EngineCommandV1) async throws -> SuccessPayload {
+        let step = try takeStep(for: command)
+        return try await step(command)
+    }
+}
+
+/// One-shot latch that parks callers until opened; used to interleave stale
+/// replies deterministically without real timing.
+private final class MagnetScriptGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [CheckedContinuation<SuccessPayload, Error>] = []
+    private var result: Result<SuccessPayload, Error>?
+    private let payload: @Sendable () -> Result<SuccessPayload, Error>
+
+    init(payload: @escaping @Sendable () -> Result<SuccessPayload, Error>) {
+        self.payload = payload
+    }
+
+    func wait() async throws -> SuccessPayload {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let ready = result {
+                lock.unlock()
+                continuation.resume(with: ready)
+            } else {
+                continuations.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func open() {
+        lock.lock()
+        if result == nil {
+            result = payload()
+        }
+        let resumees = continuations
+        continuations.removeAll()
+        let ready = result!
+        lock.unlock()
+        for continuation in resumees {
+            continuation.resume(with: ready)
+        }
     }
 }

@@ -35,6 +35,7 @@ public enum SuccessPayload: Codable, Sendable, Equatable {
     case creatorManifestPage(Page<CreatorManifestEntry>)
     case addSourceInspection(AddSourceInspection)
     case commitAdd(CommitAddResult)
+    case pollAddOperation(PollAddOperationResult)
     case settingsFetch(SettingsFetchResult)
     case settingsValidation(SettingsValidationResult)
     case settingsApply(SettingsApplyResult)

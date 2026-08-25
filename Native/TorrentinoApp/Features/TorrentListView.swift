@@ -65,7 +65,6 @@ struct TorrentListView: View {
                     } label: {
                         Label(String(localized: "recovery.restart_engine"), systemImage: "arrow.clockwise.circle")
                     }
-                    .disabled(viewModel.usingFixture)
                     .help(String(localized: "recovery.restart_engine.help"))
                 }
             }
@@ -517,10 +516,6 @@ struct TorrentListView: View {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.red)
-            } else if viewModel.usingFixture, let note = viewModel.connectionNote {
-                Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             } else if let note = viewModel.connectionNote {
                 Text(note)
                     .font(.caption)
@@ -545,8 +540,6 @@ struct TorrentListView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 80, height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .accessibilityHidden(true)
             Text(String(localized: "empty.no_torrents"))
                 .font(.title3.weight(.semibold))
@@ -597,9 +590,11 @@ struct TorrentListView: View {
                 provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
                     guard let rawText = Self.text(from: item) else { return }
                     let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard text.hasPrefix("magnet:") else { return }
+                    guard MagnetURIRouting.isMagnetURI(text) else { return }
                     Task { @MainActor in
-                        await viewModel.addMagnet(text, startPaused: false)
+                        // WP22.D9: plain-text drops share the browser route —
+                        // present once, inspect, then commit only on confirm.
+                        viewModel.presentIncomingMagnet(text)
                     }
                 }
             }

@@ -97,7 +97,39 @@ public actor TransferCoordinator {
     /// with revision > publishedRevision and carries publishedRevision + 1.
     private var publishedRevision: UInt64 = 0
     private var engineRevision: UInt64 = 0
-    private var pendingOperations: [AddOperationID: TorrentAdder.Inspection] = [:]
+    private struct ActiveAddOperation: Sendable {
+        let operationID: AddOperationID
+        var engineID: String?
+        let source: AddSource
+        let contentIdentity: ContentIdentity
+        var displayName: String
+        var sizeBytes: Int64?
+        var warnings: [String]
+        let createdTime: Date
+        var lastPolledTime: Date
+        var phase: AddInspectionPhase
+        var metainfo: Metainfo?
+        var magnet: MagnetLink?
+        var sourceData: Data?
+        var files: [InspectedFileEntry]?
+        var failure: EngineFault?
+        var generation: UInt64 = 1
+        var isInFlight: Bool = false
+
+        func toInspection() -> AddSourceInspection {
+            AddSourceInspection(
+                operationID: operationID,
+                contentIdentity: contentIdentity,
+                displayName: displayName,
+                sizeBytes: sizeBytes,
+                warnings: warnings,
+                phase: phase,
+                files: files
+            )
+        }
+    }
+
+    private var pendingOperations: [AddOperationID: ActiveAddOperation] = [:]
     private var pendingInspectionBytes = 0
     private var idempotencyResults: [IdempotencyKey: CommitAddResult] = [:]
     private var idempotencyOrder: [IdempotencyKey] = []
@@ -124,6 +156,7 @@ public actor TransferCoordinator {
     private var nextNetworkRecoveryAt = Date.distantPast
     private var readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
     private var pendingAdmissionReasons: [TorrentRecordID: AdmissionReason] = [:]
+    private var metadataPromotionBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
     private var restartInFlight = false
     private let creatorPlanStore = CreatorPlanStore()
     /// The actor owns the active-operation set; the lock-backed cancellation
@@ -144,6 +177,7 @@ public actor TransferCoordinator {
     private static let idempotencyResultsLimit = 1024
     private static let pendingRemovalTokenLimit = 256
     private static let diagnosticsExportLogLineLimit = 2_000
+    private static let pendingOperationTTL: TimeInterval = 300
 
     // MARK: - Init
 
@@ -314,7 +348,26 @@ public actor TransferCoordinator {
                 recordHealth = recordHealth ?? .recoverableError(.invalidPayload)
             }
 
+            let restoredDisplayName: String
+            if let metainfo, torrent.name.hasPrefix("magnet:") {
+                restoredDisplayName = metainfo.name
+                do {
+                    try await persistence.updateTorrentName(
+                        torrentID: torrent.id,
+                        name: metainfo.name
+                    )
+                } catch {
+                    // A stale placeholder is presentation-only once valid
+                    // metainfo is available; keep the healthy record visible
+                    // even if the durable label repair cannot complete.
+                    log.warning("restore: name self-heal failed for \(torrent.id): \(TorrentinoLog.redactedDescription(error))")
+                }
+            } else {
+                restoredDisplayName = torrent.name
+            }
+
             let desired = DesiredTorrentState(rawValue: torrent.state) ?? .paused
+
             let limits: TorrentinoIPC.TransferLimits
             do {
                 limits = try await persistence.torrentLimits(torrentID: torrent.id) ?? TorrentinoIPC.TransferLimits()
@@ -374,7 +427,7 @@ public actor TransferCoordinator {
             let record = TransferRecord(
                 id: recordID,
                 contentIdentity: identity,
-                displayName: torrent.name,
+                displayName: restoredDisplayName,
                 desiredState: desired,
                 activity: initialActivity,
                 health: restoredHealth,
@@ -717,8 +770,10 @@ public actor TransferCoordinator {
             return await handleInspect(request)
         case .commitAdd(let request):
             return await handleCommitAdd(request)
+        case .pollAddOperation(let request):
+            return await handlePollAddOperation(request)
         case .cancelAdd(let request):
-            removePendingInspection(request.operationID)
+            await removePendingInspection(request.operationID)
             return .success(.ack)
         case .pause(let request):
             return await handlePauseResume(request.recordID, desired: .paused)
@@ -1011,6 +1066,47 @@ public actor TransferCoordinator {
             return .failure(EngineFault.invalidPayload(details: "inspect failed"))
         }
 
+        // 1. Live active operation with same content identity -> reuse same AddOperationID and current phase
+        if let existing = pendingOperations.values.first(where: { $0.contentIdentity == inspection.contentIdentity }) {
+            var updated = existing
+            updated.lastPolledTime = Date()
+            pendingOperations[existing.operationID] = updated
+            return .success(.addSourceInspection(updated.toInspection()))
+        }
+
+        // 2. Duplicate durable record already in library -> return Show Existing before any engine.add/engineID storage
+        if let existingRecord = record(matching: inspection.contentIdentity) {
+            let files: [InspectedFileEntry]?
+            let metainfo: Metainfo?
+            if let data = existingRecord.metainfoData,
+               let parsed = try? Preflight.validateTorrentData(data) {
+                metainfo = parsed
+                files = parsed.files.map { InspectedFileEntry(path: $0.path, sizeBytes: $0.sizeBytes, priority: .normal) }
+            } else {
+                metainfo = inspection.metainfo
+                files = inspection.metainfo?.files.map { InspectedFileEntry(path: $0.path, sizeBytes: $0.sizeBytes, priority: .normal) }
+            }
+            let activeOp = ActiveAddOperation(
+                operationID: inspection.operationID,
+                engineID: nil,
+                source: request.source,
+                contentIdentity: inspection.contentIdentity,
+                displayName: existingRecord.displayName,
+                sizeBytes: existingRecord.totalBytes > 0 ? existingRecord.totalBytes : inspection.sizeBytes,
+                warnings: inspection.warnings,
+                createdTime: Date(),
+                lastPolledTime: Date(),
+                phase: .readyToCommit,
+                metainfo: metainfo,
+                magnet: inspection.magnet,
+                sourceData: existingRecord.metainfoData ?? inspection.sourceData,
+                files: files,
+                failure: nil
+            )
+            pendingOperations[inspection.operationID] = activeOp
+            return .success(.addSourceInspection(activeOp.toInspection()))
+        }
+
         let retainedBytes = inspection.sourceData?.count ?? 0
         guard Int64(pendingInspectionBytes) + Int64(retainedBytes) <= Self.pendingInspectionBytesLimit else {
             return .failure(.resourceLimitExceeded(
@@ -1018,46 +1114,178 @@ public actor TransferCoordinator {
                 limit: Int(Self.pendingInspectionBytesLimit)
             ))
         }
-        pendingOperations[inspection.operationID] = inspection
+
+        let now = Date()
+        var activeOp: ActiveAddOperation
+
+        if case .magnet(let uri) = request.source {
+            let spec = AddSpecificationDTO(
+                torrentFile: nil,
+                magnetURI: uri,
+                savePath: configuredSaveLocation().path,
+                paused: false,
+                metadataOnly: true
+            )
+
+            let addResult: AddResultDTO
+            do {
+                addResult = try await engine.add(specification: spec)
+            } catch {
+                log.error("inspect magnet add failed: \(TorrentinoLog.redactedDescription(error))")
+                return .failure(EngineFault.engineNotReady(details: "addMagnetMetadataOnly failed: \(error)"))
+            }
+
+            activeOp = ActiveAddOperation(
+                operationID: inspection.operationID,
+                engineID: addResult.torrentID,
+                source: request.source,
+                contentIdentity: inspection.contentIdentity,
+                displayName: inspection.displayName,
+                sizeBytes: nil,
+                warnings: inspection.warnings,
+                createdTime: now,
+                lastPolledTime: now,
+                phase: .retrievingMetadata,
+                metainfo: nil,
+                magnet: inspection.magnet,
+                sourceData: nil,
+                files: nil,
+                failure: nil
+            )
+        } else {
+            let files: [InspectedFileEntry]? = inspection.metainfo?.files.map {
+                InspectedFileEntry(path: $0.path, sizeBytes: $0.sizeBytes, priority: .normal)
+            }
+            activeOp = ActiveAddOperation(
+                operationID: inspection.operationID,
+                engineID: nil,
+                source: request.source,
+                contentIdentity: inspection.contentIdentity,
+                displayName: inspection.displayName,
+                sizeBytes: inspection.sizeBytes,
+                warnings: inspection.warnings,
+                createdTime: now,
+                lastPolledTime: now,
+                phase: .readyToCommit,
+                metainfo: inspection.metainfo,
+                magnet: inspection.magnet,
+                sourceData: inspection.sourceData,
+                files: files,
+                failure: nil
+            )
+        }
+
+        pendingOperations[inspection.operationID] = activeOp
         pendingInspectionBytes += retainedBytes
-        return .success(.addSourceInspection(AddSourceInspection(
-            operationID: inspection.operationID,
-            contentIdentity: inspection.contentIdentity,
-            displayName: inspection.displayName,
-            sizeBytes: inspection.sizeBytes,
-            warnings: inspection.warnings
+        return .success(.addSourceInspection(activeOp.toInspection()))
+    }
+
+    private func handlePollAddOperation(_ request: PollAddOperationRequest) async -> EngineCommandResult {
+        guard let currentOp = pendingOperations[request.operationID] else {
+            return .failure(EngineFault.operationNotFound(details: "operationID=\(request.operationID)"))
+        }
+
+        var op = currentOp
+        let currentGen = op.generation + 1
+        op.generation = currentGen
+        op.isInFlight = true
+        op.lastPolledTime = Date()
+        pendingOperations[request.operationID] = op
+
+        if op.phase == .retrievingMetadata, op.engineID != nil {
+            await checkMetadataResolution(for: &op)
+        }
+
+        guard var latestOp = pendingOperations[request.operationID],
+              latestOp.generation == currentGen else {
+            return .failure(EngineFault.operationNotFound(details: "operationID=\(request.operationID)"))
+        }
+
+        latestOp.phase = op.phase
+        latestOp.metainfo = op.metainfo
+        latestOp.sourceData = op.sourceData
+        latestOp.displayName = op.displayName
+        latestOp.sizeBytes = op.sizeBytes
+        latestOp.files = op.files
+        latestOp.failure = op.failure
+        latestOp.lastPolledTime = op.lastPolledTime
+        latestOp.isInFlight = false
+        pendingOperations[request.operationID] = latestOp
+
+        return .success(.pollAddOperation(PollAddOperationResult(
+            phase: latestOp.phase,
+            inspection: latestOp.toInspection(),
+            failure: latestOp.failure
         )))
+    }
+
+    private func checkMetadataResolution(for op: inout ActiveAddOperation) async {
+        guard let engineID = op.engineID else { return }
+        do {
+            let resumeData = try await engine.requestResumeData(torrentID: engineID)
+            let trackerTiers: [[String]]
+            if let metainfoTiers = op.metainfo?.trackerTiers {
+                trackerTiers = metainfoTiers
+            } else if let magnetTrackers = op.magnet?.trackers {
+                trackerTiers = magnetTrackers.isEmpty ? [] : [magnetTrackers]
+            } else {
+                trackerTiers = []
+            }
+            let parsed = try Self.parseResumeMetainfo(resumeData, trackerTiers: trackerTiers)
+            guard Self.matchesExpectedIdentity(op.contentIdentity, against: parsed.metainfo) else {
+                return
+            }
+            op.metainfo = parsed.metainfo
+            op.sourceData = parsed.data
+            op.displayName = parsed.metainfo.name
+            op.sizeBytes = parsed.metainfo.totalSize
+            op.files = parsed.metainfo.files.map { InspectedFileEntry(path: $0.path, sizeBytes: $0.sizeBytes, priority: .normal) }
+            op.phase = .readyToCommit
+        } catch {
+            // Not ready yet, parse failure, or error reading resume data; keep phase retrievingMetadata
+        }
     }
 
     private func handleCommitAdd(_ request: CommitAddRequest) async -> EngineCommandResult {
         if let replayed = idempotencyResults[request.idempotencyKey] {
             return .success(.commitAdd(replayed))
         }
-        guard let inspection = pendingOperations[request.operationID] else {
+        guard let activeOp = pendingOperations[request.operationID] else {
             return .failure(EngineFault.operationNotFound(details: "operationID=\(request.operationID)"))
         }
 
-        // Duplicate detection by content identity — never by name or path.
-        if let existing = record(matching: inspection.contentIdentity) {
+        // Duplicate detection by content identity — check before readyToCommit phase guard so duplicate commit returns Show Existing
+        if let existing = record(matching: activeOp.contentIdentity) {
             let result = CommitAddResult(recordID: existing.id, engineRevision: engineRevision)
-            removePendingInspection(request.operationID)
+            await removePendingInspection(request.operationID, force: true)
             rememberIdempotency(request.idempotencyKey, result: result)
             return .success(.commitAdd(result))
         }
 
+        guard activeOp.phase == .readyToCommit else {
+            return .failure(EngineFault.invalidPayload(details: "operation is not ready to commit (phase: \(activeOp.phase.rawValue))"))
+        }
+
+        var opToCommit = activeOp
+        let commitGen = opToCommit.generation + 1
+        opToCommit.generation = commitGen
+        opToCommit.isInFlight = true
+        pendingOperations[request.operationID] = opToCommit
+
         let now = Int64(Date().timeIntervalSince1970)
         let recordID = TorrentRecordID(rawValue: UUID())
         let desiredState: DesiredTorrentState = (request.startPaused ?? false) ? .paused : .running
-        // The persisted settings candidate is authoritative for new torrents;
-        // the constructor location is only a bootstrap fallback before settings
-        // have been restored.
         let saveLocation = Self.normalizedSaveLocation(request.saveLocation ?? configuredSaveLocation())
-        let displayName = request.desiredName ?? inspection.displayName
+        let displayName = request.desiredName ?? activeOp.displayName
         let selection: [RecordFileSelection]
-        if let metainfo = inspection.metainfo {
+        if let metainfo = activeOp.metainfo {
             do {
                 selection = try TorrentAdder.validateSelection(request.fileSelection, against: metainfo)
             } catch {
+                if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
+                    failedOp.isInFlight = false
+                    pendingOperations[request.operationID] = failedOp
+                }
                 return .failure(EngineFault.invalidPayload(details: "fileSelection: \(error.localizedDescription)"))
             }
         } else {
@@ -1066,22 +1294,44 @@ public actor TransferCoordinator {
             }
         }
 
-        // Magnet input is the pre-existing scalar compatibility path. Creator
-        // and durable .torrent records always arrive with structured tiers;
-        // only a magnet without announce-list semantics is grouped here.
         let trackerTiers: [[String]]
-        if let metainfoTiers = inspection.metainfo?.trackerTiers {
+        if let metainfoTiers = activeOp.metainfo?.trackerTiers {
             trackerTiers = metainfoTiers
-        } else if let magnetTrackers = inspection.magnet?.trackers {
+        } else if let magnetTrackers = activeOp.magnet?.trackers {
             trackerTiers = magnetTrackers.isEmpty ? [] : [magnetTrackers]
         } else {
             trackerTiers = []
         }
-        let privateTorrent = inspection.metainfo?.isPrivate == true
+        let privateTorrent = activeOp.metainfo?.isPrivate == true
         do {
             try MetainfoParser.validateTrackerTiers(trackerTiers, isPrivate: privateTorrent)
         } catch {
+            if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
+                failedOp.isInFlight = false
+                pendingOperations[request.operationID] = failedOp
+            }
             return .failure(.invalidPayload(details: "tracker topology is invalid"))
+        }
+
+        if let engineID = activeOp.engineID, let metainfo = activeOp.metainfo {
+            let mergedPriorities = Dictionary(uniqueKeysWithValues: selection.map { ($0.relativePath, $0.priority) })
+            let priorities: [UInt8] = metainfo.files.map { file in
+                mergedPriorities[file.path] == .skip ? UInt8(0) : UInt8(4)
+            }
+            do {
+                try await engine.commitMetadataOnly(
+                    torrentID: engineID,
+                    priorities: priorities,
+                    paused: request.startPaused ?? false
+                )
+            } catch {
+                if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
+                    failedOp.isInFlight = false
+                    pendingOperations[request.operationID] = failedOp
+                }
+                log.error("commitAdd: commitMetadataOnly failed for operation \(request.operationID): \(String(describing: error))")
+                return .failure(EngineFault.engineNotReady(details: "commitMetadataOnly failed: \(error)"))
+            }
         }
 
         // 1. Durable first (journal + row + metainfo) — only then visible.
@@ -1089,8 +1339,8 @@ public actor TransferCoordinator {
         do {
             try await persistence.addTorrent(StoredTorrent(
                 id: recordID.rawValue.uuidString,
-                infoHashV1: inspection.contentIdentity.infoHashV1.map { TorrentAdder.hexString($0) },
-                infoHashV2: inspection.contentIdentity.infoHashV2.map { TorrentAdder.hexString($0) },
+                infoHashV1: activeOp.contentIdentity.infoHashV1.map { TorrentAdder.hexString($0) },
+                infoHashV2: activeOp.contentIdentity.infoHashV2.map { TorrentAdder.hexString($0) },
                 name: displayName,
                 state: desiredState.rawValue,
                 addedAt: now,
@@ -1102,7 +1352,7 @@ public actor TransferCoordinator {
                 location: saveLocation
             )
             let seq = try await persistence.journalAppend(command: "commitAdd", torrentID: recordID.rawValue.uuidString, timestamp: now)
-            if let sourceData = inspection.sourceData {
+            if let sourceData = activeOp.sourceData {
                 _ = try await persistence.storeMetainfo(torrentID: recordID.rawValue.uuidString, data: sourceData)
             }
             try await persistence.setTorrentTrackerTiers(
@@ -1117,30 +1367,30 @@ public actor TransferCoordinator {
                     try await persistence.removeTorrent(torrentID: recordID.rawValue.uuidString)
                 } catch {
                     log.error("commitAdd: durable rollback failed for \(recordID): \(String(describing: error))")
-                    return .failure(Self.persistenceFault(
-                        error,
-                        recordID: recordID,
-                        volumeIdentifier: saveLocation.volumeIdentifier
-                    ))
                 }
+            }
+            if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
+                failedOp.isInFlight = false
+                pendingOperations[request.operationID] = failedOp
             }
             log.error("commitAdd persistence failed: \(String(describing: error))")
             return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: saveLocation.volumeIdentifier))
         }
 
         let effectiveBytes: Int64
-        if let metainfo = inspection.metainfo {
+        if let metainfo = activeOp.metainfo {
             effectiveBytes = Self.effectiveTotalBytes(for: metainfo, selection: selection)
         } else {
-            effectiveBytes = inspection.metainfo?.totalSize ?? 0
+            effectiveBytes = activeOp.metainfo?.totalSize ?? 0
         }
 
+        let initialActivity: TorrentActivity = desiredState == .running ? (effectiveBytes > 0 ? .downloading : .fetchingMetadata) : .idle
         let record = TransferRecord(
             id: recordID,
-            contentIdentity: inspection.contentIdentity,
+            contentIdentity: activeOp.contentIdentity,
             displayName: displayName,
             desiredState: desiredState,
-            activity: .idle,
+            activity: initialActivity,
             health: .healthy,
             totalBytes: effectiveBytes,
             downloadedBytes: 0,
@@ -1149,8 +1399,8 @@ public actor TransferCoordinator {
             uploadBytesPerSec: 0,
             peersConnected: 0,
             seedsTotal: 0,
-            engineID: nil,
-            metainfoData: inspection.sourceData,
+            engineID: activeOp.engineID,
+            metainfoData: activeOp.sourceData,
             trackerTiers: trackerTiers,
             fileSelection: selection,
             saveLocation: saveLocation,
@@ -1159,9 +1409,15 @@ public actor TransferCoordinator {
         )
         records[recordID] = record
         recordRevisions[recordID] = 0
-        let admission = await admit(recordID, reason: .commitAdd)
-        applyAdmissionOutcome(admission, to: recordID, reason: .commitAdd)
-        removePendingInspection(request.operationID)
+
+        if activeOp.engineID != nil {
+            // Already in engine (promoted from temporary metadata-only handle)
+        } else {
+            let admission = await admit(recordID, reason: .commitAdd)
+            applyAdmissionOutcome(admission, to: recordID, reason: .commitAdd)
+        }
+
+        await removePendingInspection(request.operationID, force: true)
 
         bumpEngineRevision(change: .added(recordID))
         let result = CommitAddResult(recordID: recordID, engineRevision: engineRevision)
@@ -1269,6 +1525,9 @@ public actor TransferCoordinator {
         case .admitted(let engineID, let activity):
             records[recordID] = record.with(engineID: engineID, activity: activity, health: .healthy)
             readdBackoff.removeValue(forKey: recordID)
+            if record.engineID != engineID {
+                metadataPromotionBackoff.removeValue(forKey: recordID)
+            }
             TorrentinoLog.record(
                 category: "transfer",
                 level: "notice",
@@ -1388,13 +1647,37 @@ public actor TransferCoordinator {
         } catch {
             return .failure(EngineFault.invalidPayload(details: "fileSelection: \(error.localizedDescription)"))
         }
+        // WP22.D5 (ADR-022): the engine must adopt the selection BEFORE the
+        // durable record moves. Build the complete vector in metainfo file
+        // order (.normal -> 4, .skip -> 0); a partial or sparse payload can
+        // never reach libtorrent.
         var updatedMap = Dictionary(uniqueKeysWithValues: record.fileSelection.map { ($0.relativePath, $0) })
         for item in selection {
             updatedMap[item.relativePath] = item
         }
         let updatedSelection = Array(updatedMap.values)
+        let mergedPriorities = Dictionary(uniqueKeysWithValues: updatedSelection.map { ($0.relativePath, $0.priority) })
+        let priorities: [UInt8] = metainfo.files.map { file in
+            mergedPriorities[file.path] == .skip ? UInt8(0) : UInt8(4)
+        }
+        guard let engineID = await liveEngineID(for: request.recordID) else {
+            return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
+        }
+        do {
+            try await engine.setFileSelection(torrentID: engineID, priorities: priorities)
+        } catch {
+            // The record's selection, totalBytes, revision and events stay
+            // untouched: the requested selection was never applied.
+            return .failure(Self.engineFault(
+                error,
+                operation: "setFileSelection",
+                recordID: request.recordID,
+                fallback: "file selection rejected by engine"
+            ))
+        }
         let effectiveBytes = Self.effectiveTotalBytes(for: metainfo, selection: updatedSelection)
         records[request.recordID] = record.with(totalBytes: effectiveBytes, fileSelection: updatedSelection)
+        bumpRecordRevision(request.recordID)
         bumpEngineRevision(change: .updated(request.recordID))
         await publishInspectionInvalidated(recordID: request.recordID, scope: .files)
         return .success(.ack)
@@ -1633,6 +1916,42 @@ public actor TransferCoordinator {
             return
         }
         let statusByEngineID = Dictionary(statuses.map { ($0.engineID, $0) }, uniquingKeysWith: { first, _ in first })
+        // Clean expired pending operations (5-minute TTL window)
+        let expiredIDs = pendingOperations.compactMap { (id, op) -> AddOperationID? in
+            if now.timeIntervalSince(op.lastPolledTime) > Self.pendingOperationTTL {
+                return id
+            }
+            return nil
+        }
+        for id in expiredIDs {
+            await removePendingInspection(id)
+        }
+
+        // Metadata resolution probe for pending magnet operations
+        for (opID, op) in pendingOperations {
+            guard op.phase == .retrievingMetadata, let engineID = op.engineID, !op.isInFlight else { continue }
+            if let status = statusByEngineID[engineID], Self.hasResolvedMetadata(status) {
+                var inFlightOp = op
+                let currentGen = inFlightOp.generation + 1
+                inFlightOp.generation = currentGen
+                inFlightOp.isInFlight = true
+                pendingOperations[opID] = inFlightOp
+
+                await checkMetadataResolution(for: &inFlightOp)
+
+                if var latestOp = pendingOperations[opID], latestOp.generation == currentGen {
+                    latestOp.phase = inFlightOp.phase
+                    latestOp.metainfo = inFlightOp.metainfo
+                    latestOp.sourceData = inFlightOp.sourceData
+                    latestOp.displayName = inFlightOp.displayName
+                    latestOp.sizeBytes = inFlightOp.sizeBytes
+                    latestOp.files = inFlightOp.files
+                    latestOp.isInFlight = false
+                    pendingOperations[opID] = latestOp
+                }
+            }
+        }
+
         var changed = Set<TorrentRecordID>()
 
         // Re-add records the engine does not know yet (restart + failed adds).
@@ -1657,6 +1976,14 @@ public actor TransferCoordinator {
                 changed.insert(recordID)
             }
         }
+        // Restart & pump reconciliation: remove engine handles lacking durable records or pending operations
+        let knownEngineIDs = Set(records.values.compactMap(\.engineID)).union(pendingOperations.values.compactMap(\.engineID))
+        for status in statuses {
+            if !knownEngineIDs.contains(status.engineID) {
+                log.notice("pump: removing orphan engine handle \(status.engineID)")
+                try? await engine.remove(torrentID: status.engineID)
+            }
+        }
 
         // Apply live engine status per record (records snapshot copy again).
         let currentRecords = records
@@ -1674,6 +2001,28 @@ public actor TransferCoordinator {
                     )
                 }
             }
+        }
+
+        // A resolved magnet has enough live metadata to request the exact
+        // resume buffer. Keep this lane independent from admission backoff:
+        // at most one request is started per pump, and failures are retried
+        // only after the same capped delay used by the engine lanes.
+        for (recordID, record) in records {
+            guard record.metainfoData == nil,
+                  let engineID = record.engineID,
+                  let status = statusByEngineID[engineID],
+                  Self.hasResolvedMetadata(status),
+                  metadataPromotionBackoff[recordID].map({ now < $0.nextAttemptAt }) != true else {
+                continue
+            }
+            if await promoteResolvedMagnet(
+                recordID: recordID,
+                engineID: engineID,
+                status: status
+            ) {
+                changed.insert(recordID)
+            }
+            break
         }
 
         // P4: a healthy running record with no activity is never a valid
@@ -1703,6 +2052,164 @@ public actor TransferCoordinator {
             appendEngineChange(.updated(recordID))
         }
         await publishDelta()
+    }
+
+    private static func hasResolvedMetadata(_ status: TransferTorrentStatus) -> Bool {
+        guard status.activity != .fetchingMetadata, status.totalBytes > 0,
+              let rawName = status.metadataName else {
+            return false
+        }
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = name.lowercased()
+        return !name.isEmpty && normalized != "unknown" && normalized != "(unknown)"
+    }
+
+    private func promoteResolvedMagnet(
+        recordID: TorrentRecordID,
+        engineID: String,
+        status: TransferTorrentStatus
+    ) async -> Bool {
+        guard let record = records[recordID],
+              record.engineID == engineID,
+              record.metainfoData == nil,
+              Self.hasResolvedMetadata(status) else {
+            return false
+        }
+
+        do {
+            let resumeData = try await engine.requestResumeData(torrentID: engineID)
+            guard let initial = records[recordID],
+                  initial.engineID == engineID,
+                  initial.metainfoData == nil else {
+                return false
+            }
+
+            let parsed = try Self.parseResumeMetainfo(
+                resumeData,
+                trackerTiers: initial.trackerTiers
+            )
+            guard Self.matchesExpectedIdentity(
+                initial.contentIdentity,
+                against: parsed.metainfo
+            ) else {
+                throw EngineFault.invalidPayload(details: "resolved metadata identity mismatch")
+            }
+
+            _ = try await persistence.storeMetainfo(
+                torrentID: recordID.rawValue.uuidString,
+                data: parsed.data
+            )
+            guard let afterMetainfo = records[recordID],
+                  afterMetainfo.engineID == engineID,
+                  afterMetainfo.metainfoData == nil else {
+                return false
+            }
+
+            _ = try await persistence.storeResumeData(
+                torrentID: recordID.rawValue.uuidString,
+                data: resumeData
+            )
+            guard let afterResume = records[recordID],
+                  afterResume.engineID == engineID,
+                  afterResume.metainfoData == nil else {
+                return false
+            }
+
+            try await persistence.updateTorrentName(
+                torrentID: recordID.rawValue.uuidString,
+                name: parsed.metainfo.name
+            )
+            guard let current = records[recordID],
+                  current.engineID == engineID,
+                  current.metainfoData == nil else {
+                return false
+            }
+
+            let effectiveBytes = Self.effectiveTotalBytes(
+                for: parsed.metainfo,
+                selection: current.fileSelection
+            )
+            records[recordID] = current.with(
+                displayName: parsed.metainfo.name,
+                metainfoData: parsed.data,
+                totalBytes: effectiveBytes
+            )
+            metadataPromotionBackoff.removeValue(forKey: recordID)
+            TorrentinoLog.record(
+                category: "transfer",
+                level: "notice",
+                message: "metadata promotion succeeded record=\(recordID)"
+            )
+            return true
+        } catch {
+            guard let current = records[recordID],
+                  current.engineID == engineID,
+                  current.metainfoData == nil else {
+                return false
+            }
+            let failures = (metadataPromotionBackoff[recordID]?.failures ?? 0) + 1
+            metadataPromotionBackoff[recordID] = (
+                failures: failures,
+                nextAttemptAt: Date().addingTimeInterval(Self.backoffSeconds(forAttempt: failures))
+            )
+            log.warning(
+                "metadata promotion failed record=\(recordID): \(TorrentinoLog.redactedDescription(error))"
+            )
+            return false
+        }
+    }
+
+    private static func matchesExpectedIdentity(
+        _ expected: ContentIdentity,
+        against metainfo: Metainfo
+    ) -> Bool {
+        let hasExpectedV1 = expected.infoHashV1.map { !$0.isEmpty } ?? false
+        let hasExpectedV2 = expected.infoHashV2.map { !$0.isEmpty } ?? false
+        guard hasExpectedV1 || hasExpectedV2 else { return false }
+        if let expectedV1 = expected.infoHashV1,
+           metainfo.infoHashV1 != expectedV1 {
+            return false
+        }
+        if let expectedV2 = expected.infoHashV2,
+           metainfo.infoHashV2 != expectedV2 {
+            return false
+        }
+        return true
+    }
+
+    private static func parseResumeMetainfo(
+        _ data: Data,
+        trackerTiers: [[String]]
+    ) throws -> (data: Data, metainfo: Metainfo) {
+        let candidate: Data
+        do {
+            _ = try Preflight.validateTorrentData(data)
+            candidate = data
+        } catch {
+            // libtorrent resume buffers may carry harmless top-level keys
+            // around the exact info dictionary. Reuse the bounded parser's
+            // recorded span and wrap only that dictionary as canonical
+            // metainfo.
+            let root = try BencodeParser.parse(data)
+            guard case .dictionary(let top, _) = root,
+                  let info = top.value(for: "info") else {
+                throw error
+            }
+            var wrapped = Data([0x64]) // d
+            wrapped.append(BencodeEncoder.encode(.bytes(Data("info".utf8))))
+            wrapped.append(data.subdata(in: info.span))
+            wrapped.append(0x65) // e
+            candidate = wrapped
+        }
+
+        // The durable record's topology is authoritative. Rewriting only
+        // top-level tracker keys preserves the exact info dictionary/hash and
+        // any required resume fields while preventing restore mismatches.
+        let canonical = try MetainfoParser.replacingTrackerTiers(
+            in: candidate,
+            with: trackerTiers
+        )
+        return (canonical, try Preflight.validateTorrentData(canonical))
     }
 
     private func markDeferredAdmissions(_ health: TorrentHealth) {
@@ -2141,9 +2648,19 @@ public actor TransferCoordinator {
         }
     }
 
-    private func removePendingInspection(_ operationID: AddOperationID) {
-        guard let inspection = pendingOperations.removeValue(forKey: operationID) else { return }
-        pendingInspectionBytes = max(0, pendingInspectionBytes - (inspection.sourceData?.count ?? 0))
+    private func removePendingInspection(_ operationID: AddOperationID, force: Bool = false) async {
+        guard let activeOp = pendingOperations[operationID] else { return }
+        if activeOp.isInFlight && !force {
+            return
+        }
+        pendingOperations.removeValue(forKey: operationID)
+        pendingInspectionBytes = max(0, pendingInspectionBytes - (activeOp.sourceData?.count ?? 0))
+        if let engineID = activeOp.engineID {
+            let isOwnedByRecord = records.values.contains(where: { $0.engineID == engineID })
+            if !isOwnedByRecord {
+                try? await engine.remove(torrentID: engineID)
+            }
+        }
     }
 
     private static func backoffSeconds(forAttempt attempt: Int) -> TimeInterval {
@@ -2154,6 +2671,14 @@ public actor TransferCoordinator {
         return delay
     }
 
+    #if DEBUG
+    public func agePendingOperation(_ operationID: AddOperationID, bySeconds seconds: TimeInterval) {
+        if var op = pendingOperations[operationID] {
+            op.lastPolledTime = op.lastPolledTime.addingTimeInterval(-seconds)
+            pendingOperations[operationID] = op
+        }
+    }
+    #endif
     private func configuredSaveLocation() -> PersistedLocation {
         let path = activeSettings.downloadDirectory
         return path.isEmpty ? defaultSaveLocation : Self.normalizedSaveLocation(PersistedLocation(path: path))
@@ -2174,9 +2699,21 @@ public actor TransferCoordinator {
     ) -> EngineFault {
         // BridgeTransferEngine and test engines may already carry a typed IPC
         // fault. Preserve it instead of collapsing invalid arguments into a
-        // generic busy result.
+        // generic busy result. A record-scoped call must not lose attribution:
+        // when the fault names no record, stamp the caller's recordID while
+        // keeping every other field exactly as produced; a fault that already
+        // names its record passes through untouched.
         if let fault = error as? EngineFault {
-            return fault
+            guard fault.affectedRecord == nil, let recordID else { return fault }
+            return EngineFault(
+                code: fault.code,
+                severity: fault.severity,
+                affectedRecord: recordID,
+                affectedVolume: fault.affectedVolume,
+                localizationKey: fault.localizationKey,
+                recoveryActions: fault.recoveryActions,
+                redactedContext: fault.redactedContext
+            )
         }
         if let coordinatorError = error as? EngineCoordinatorError {
             switch coordinatorError {
@@ -2366,18 +2903,9 @@ extension TransferRecord {
         } else {
             downloaded = Int64(fraction * Double(effectiveTotal))
         }
-        let projectedDisplayName: String
-        if displayName.hasPrefix("magnet:"),
-           let metadataName = status.metadataName,
-           !metadataName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           metadataName != "(unknown)" {
-            projectedDisplayName = metadataName
-        } else {
-            projectedDisplayName = displayName
-        }
 
         let candidate = TransferRecord(
-            id: id, contentIdentity: contentIdentity, displayName: projectedDisplayName,
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
             desiredState: desiredState, activity: status.activity, health: health,
             totalBytes: effectiveTotal, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
             downloadBytesPerSec: status.downloadBytesPerSec, uploadBytesPerSec: status.uploadBytesPerSec,
@@ -2393,6 +2921,24 @@ extension TransferRecord {
     fileprivate func withTrackers(
         trackerTiers: [[String]],
         metainfoData: Data?
+    ) -> TransferRecord {
+        TransferRecord(
+            id: id, contentIdentity: contentIdentity, displayName: displayName,
+            desiredState: desiredState, activity: activity, health: health,
+            totalBytes: totalBytes, downloadedBytes: downloadedBytes, uploadedBytes: uploadedBytes,
+            downloadBytesPerSec: downloadBytesPerSec, uploadBytesPerSec: uploadBytesPerSec,
+            peersConnected: peersConnected, seedsTotal: seedsTotal,
+            engineID: engineID, metainfoData: metainfoData,
+            trackerTiers: trackerTiers,
+            fileSelection: fileSelection, saveLocation: saveLocation,
+            addedAt: addedAt, revision: revision, limits: limits
+        )
+    }
+
+    fileprivate func with(
+        displayName: String,
+        metainfoData: Data,
+        totalBytes: Int64
     ) -> TransferRecord {
         TransferRecord(
             id: id, contentIdentity: contentIdentity, displayName: displayName,
@@ -3199,6 +3745,7 @@ extension TransferCoordinator {
         records.removeValue(forKey: recordID)
         recordRevisions.removeValue(forKey: recordID)
         lastReannounceAt.removeValue(forKey: recordID)
+        metadataPromotionBackoff.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
 
         // Fail-closed evidence cleanup: the settled token/journal rows are
@@ -3238,6 +3785,7 @@ extension TransferCoordinator {
         records.removeValue(forKey: recordID)
         recordRevisions.removeValue(forKey: recordID)
         lastReannounceAt.removeValue(forKey: recordID)
+        metadataPromotionBackoff.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
     }
 
@@ -3544,15 +4092,6 @@ extension TransferCoordinator {
             throw EngineFault.internalError(details: "creator admission returned an unexpected inspection payload")
         }
 
-        defer {
-            // handleCommitAdd removes successful inspections. On a persistence
-            // or admission failure, do not retain creator metadata in the
-            // bounded pending-operation table.
-            if pendingOperations[addInspection.operationID] != nil {
-                removePendingInspection(addInspection.operationID)
-            }
-        }
-
         let commitResult = await handleCommitAdd(CommitAddRequest(
             requestID: RequestID(),
             idempotencyKey: idempotencyKey,
@@ -3560,6 +4099,9 @@ extension TransferCoordinator {
             saveLocation: PersistedLocation(path: savePath),
             startPaused: paused
         ))
+        if pendingOperations[addInspection.operationID] != nil {
+            await removePendingInspection(addInspection.operationID)
+        }
         switch commitResult {
         case .success(.commitAdd):
             return

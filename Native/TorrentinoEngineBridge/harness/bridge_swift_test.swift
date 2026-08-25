@@ -146,9 +146,11 @@ struct BridgeSwiftTest {
             // This keeps the unsupported and invalid mappings honest at the
             // command result boundary instead of proving them only in C++.
             let agentRoot = URL(fileURLWithPath: tmp).appendingPathComponent("agent-state", isDirectory: true)
+            try FileManager.default.createDirectory(at: agentRoot, withIntermediateDirectories: true)
             let store = PersistenceStore(dataDirectory: agentRoot)
             _ = try await store.open()
             let agentBridgeCoordinator = EngineCoordinator()
+            _ = try await agentBridgeCoordinator.start(configuration: config)
             let agentEngine = BridgeTransferEngine(coordinator: agentBridgeCoordinator)
             let agent = TransferCoordinator(
                 engine: agentEngine,
@@ -158,11 +160,11 @@ struct BridgeSwiftTest {
                 defaultSaveLocation: PersistedLocation(path: agentRoot.path),
                 pumpIntervalNanoseconds: nil
             )
-            let agentRecordID = try await Self.addMagnet(
+            let agentTorrentData = makeMultiFileSelectionTorrent(name: "agent-ipc-test")
+            let agentRecordID = try await Self.commitRecord(
                 to: agent,
-                uri: "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"
+                source: .torrentFileData(agentTorrentData)
             )
-
             let agentBandwidth = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
@@ -176,10 +178,11 @@ struct BridgeSwiftTest {
             let beforeNativeInvalid = try Self.snapshot(from: await agent.processCommand(Self.encode(.fetchSnapshot(
                 FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)
             ))))
-            guard let beforeNativeTorrent = beforeNativeInvalid.torrents.first else {
+            guard let beforeNativeTorrent = beforeNativeInvalid.torrents.first,
+                  let infoHashV1 = beforeNativeTorrent.contentIdentity?.infoHashV1 else {
                 fatalError("native invalid-limit test requires the added record in the snapshot")
             }
-            let nativeEngineID = String(repeating: "1", count: 40)
+            let nativeEngineID = infoHashV1.map { String(format: "%02x", $0) }.joined()
             let appliedBeforeNativeInvalid = try await agentBridgeCoordinator.currentLimits(torrentID: nativeEngineID)
             guard appliedBeforeNativeInvalid.maxDownloadBytesPerSec == 4096,
                   appliedBeforeNativeInvalid.maxUploadBytesPerSec == 0 else {
@@ -240,13 +243,24 @@ struct BridgeSwiftTest {
                 fatalError("native invalid limit must not change persisted limits")
             }
 
-            // The magnet fixture carries no metainfo, so ADR-017 admission
-            // fails closed at the IPC boundary: structured edits require a
-            // metainfo-backed record, and scalar delta fields are rejected.
+            // A record without metainfo bytes (e.g. magnet restored from store before metainfo download)
+            // fails closed at the IPC boundary for structured tracker edits.
+            let metainfoLessID = TorrentRecordID(rawValue: UUID())
+            try await store.addTorrent(StoredTorrent(
+                id: metainfoLessID.rawValue.uuidString,
+                infoHashV1: "1111111111111111111111111111111111111111",
+                infoHashV2: nil,
+                name: "metainfo-less-test",
+                state: "running",
+                addedAt: Int64(Date().timeIntervalSince1970),
+                quarantined: false
+            ))
+            _ = await agent.restoreFromPersistence()
+
             let agentTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
-                recordID: agentRecordID,
+                recordID: metainfoLessID,
                 addedURLs: [],
                 removedURLs: [],
                 trackerTiers: [["udp://127.0.0.1:1/announce"]]
@@ -258,7 +272,7 @@ struct BridgeSwiftTest {
             let agentEmptyTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
-                recordID: agentRecordID,
+                recordID: metainfoLessID,
                 addedURLs: [],
                 removedURLs: [],
                 trackerTiers: []
@@ -270,7 +284,7 @@ struct BridgeSwiftTest {
             let agentMixedTrackers = await agent.processCommand(Self.encode(.editTrackers(EditTrackersRequest(
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
-                recordID: agentRecordID,
+                recordID: metainfoLessID,
                 addedURLs: ["udp://127.0.0.1:1/announce"],
                 removedURLs: [],
                 trackerTiers: [["udp://127.0.0.1:1/announce"]]
@@ -287,6 +301,209 @@ struct BridgeSwiftTest {
             guard case .success(.ack) = Self.decode(agentReannounce).result else {
                 fatalError("real reannounce must succeed at IPC")
             }
+
+            // --- WP22.D5 / ADR-022: durable file selection reaches libtorrent
+            // through the full production chain: IPC command ->
+            // TransferCoordinator (engine-first barrier) -> BridgeTransferEngine
+            // -> EngineCoordinator.setFilePriorities -> ObjC++ adapter ->
+            // EngineBridge prioritize_files + bounded exact read-back.
+            let selectionTorrent = makeMultiFileSelectionTorrent()
+            let selectionRecordID = try await Self.commitRecord(
+                to: agent,
+                source: .torrentFileData(selectionTorrent)
+            )
+            let selectionReply = Self.decode(await agent.processCommand(Self.encode(.setFileSelection(
+                SetFileSelectionRequest(
+                    requestID: RequestID(),
+                    idempotencyKey: IdempotencyKey(),
+                    recordID: selectionRecordID,
+                    selection: [
+                        FileSelectionItem(relativePath: "dir/a.txt", priority: .normal),
+                        FileSelectionItem(relativePath: "dir/b.bin", priority: .skip),
+                        FileSelectionItem(relativePath: "dir/c.bin", priority: .normal),
+                    ],
+                    expectedRevision: 0
+                )
+            ))))
+            guard case .success(.ack) = selectionReply.result else {
+                fatalError("real file selection must pass the native priority barrier: \(String(describing: selectionReply.result))")
+            }
+
+            // An unknown engine id fails closed at the same native boundary.
+            do {
+                try await agentBridgeCoordinator.setFilePriorities(
+                    torrentID: String(repeating: "e", count: 40),
+                    priorities: [4, 0, 4]
+                )
+                fatalError("file priorities for an unknown engine id must throw notFound")
+            } catch EngineCoordinatorError.notFound {
+                // expected: the vector round-tripped to the engine and was rejected
+            }
+
+            // Malformed priority payloads are rejected at the ObjC++ boundary
+            // before any engine state can move.
+            let malformedPriorities: [(label: String, payload: String)] = [
+                ("non-array", #"{"torrent-id":"ignored","priorities":4}"#),
+                ("non-integer entry", #"{"torrent-id":"ignored","priorities":[4,"0"]}"#),
+                ("out-of-range entry", #"{"torrent-id":"ignored","priorities":[4,300]}"#),
+                ("empty vector", #"{"torrent-id":"ignored","priorities":[]}"#),
+            ]
+            for malformedPriority in malformedPriorities {
+                do {
+                    _ = try adapter.setFilePrioritiesWithPayloadData(Data(malformedPriority.payload.utf8))
+                    fatalError("\(malformedPriority.label) priorities payload must throw invalidArgument")
+                } catch let error as NSError {
+                    guard error.code == 5 else {
+                        fatalError("\(malformedPriority.label) priorities payload returned unexpected error: \(error.code)")
+                    }
+                }
+            }
+
+            // --- WP22.D7 / ADR-022: kebab-case metadata-only add and guarded
+            // commit across the real Swift -> ObjC++ -> C++ chain.
+            let uploadModeFlag: Int64 = 1 << 1   // torrent_flags::upload_mode
+            let pausedFlag: Int64 = 1 << 4       // torrent_flags::paused
+            let autoManagedFlag: Int64 = 1 << 5  // torrent_flags::auto_managed
+            func latestFlags(for id: String) async throws -> Int64? {
+                var flags: Int64?
+                for alert in try await coordinator.drainAlerts(maxCount: 200) where alert.torrentID == id {
+                    if alert.flags >= 0 { flags = alert.flags }
+                }
+                return flags
+            }
+
+            // The DTO must encode the frozen kebab-case wire key.
+            let metaWireJSON = String(decoding: try JSONEncoder().encode(
+                AddSpecificationDTO(magnetURI: "magnet:?xt=urn:btih:2222222222222222222222222222222222222222",
+                                    savePath: tmp, metadataOnly: true)
+            ), as: UTF8.self)
+            guard metaWireJSON.contains("\"metadata-only\":true") else {
+                fatalError("metadata-only must travel under the frozen kebab-case key: \(metaWireJSON)")
+            }
+
+            // A raw magnet with unknown metainfo: added UNPAUSED with the
+            // guard set; premature commit fails closed; removal cleans it up.
+            let metaAdded = try await coordinator.add(specification: AddSpecificationDTO(
+                magnetURI: "magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98&dn=wp22-d7-meta",
+                savePath: tmp, metadataOnly: true))
+            guard !metaAdded.torrentID.isEmpty else {
+                fatalError("metadata-only magnet add must return a torrent id")
+            }
+            guard let metaPreFlags = try await latestFlags(for: metaAdded.torrentID) else {
+                fatalError("alert sample must carry native flags")
+            }
+            guard metaPreFlags & uploadModeFlag != 0 else {
+                fatalError("upload_mode guard must be set before commit")
+            }
+            guard metaPreFlags & autoManagedFlag == 0, metaPreFlags & pausedFlag == 0 else {
+                fatalError("metadata retrieval must run unpaused and not auto-managed")
+            }
+
+            do {
+                try await coordinator.commitMetadataOnly(
+                    torrentID: metaAdded.torrentID, priorities: [4], paused: false)
+                fatalError("premature commit without metainfo must fail closed")
+            } catch EngineCoordinatorError.invalidArgument {
+                // expected: typed failure, guard kept
+            }
+            guard let metaKeptFlags = try await latestFlags(for: metaAdded.torrentID),
+                  metaKeptFlags & uploadModeFlag != 0 else {
+                fatalError("a failed commit must keep upload_mode set")
+            }
+            let metaToken = try await coordinator.prepareRemoval(torrentID: metaAdded.torrentID)
+            _ = try await coordinator.commitRemoval(token: metaToken)
+
+            // Multi-file metainfo added metadata-only, then the guarded
+            // [4,0,4] paused commit releases the guard last.
+            let metaMultiAdded = try await coordinator.add(specification: AddSpecificationDTO(
+                torrentFile: makeMultiFileSelectionTorrent(), savePath: tmp, metadataOnly: true))
+            guard let multiPreFlags = try await latestFlags(for: metaMultiAdded.torrentID),
+                  multiPreFlags & uploadModeFlag != 0 else {
+                fatalError("metadata-only .torrent add must carry the upload_mode guard")
+            }
+            try await coordinator.commitMetadataOnly(
+                torrentID: metaMultiAdded.torrentID, priorities: [4, 0, 4], paused: true)
+            guard let multiPostFlags = try await latestFlags(for: metaMultiAdded.torrentID) else {
+                fatalError("post-commit flag sample missing")
+            }
+            guard multiPostFlags & uploadModeFlag == 0 else {
+                fatalError("guarded commit must clear upload_mode only after the exact read-back")
+            }
+            guard multiPostFlags & pausedFlag != 0 else {
+                fatalError("guarded commit must apply the requested paused state")
+            }
+            guard !FileManager.default.fileExists(atPath: tmp.appending("/wp22-selection/dir/b.bin")) else {
+                fatalError("skipped file must remain unallocated after commit")
+            }
+
+            // The successful running branch is a distinct D7 contract: an
+            // add-time paused request is ignored while guarded, then paused=false
+            // is applied before upload_mode is released.
+            let runningFixtureName = "wp22-selection-running"
+            let metaRunningAdded = try await coordinator.add(specification: AddSpecificationDTO(
+                torrentFile: makeMultiFileSelectionTorrent(name: runningFixtureName),
+                savePath: tmp,
+                paused: true,
+                metadataOnly: true))
+            guard let runningPreFlags = try await latestFlags(for: metaRunningAdded.torrentID),
+                  runningPreFlags & uploadModeFlag != 0,
+                  runningPreFlags & autoManagedFlag == 0,
+                  runningPreFlags & pausedFlag == 0 else {
+                fatalError("guarded metadata retrieval must override add-time paused and auto-managed state")
+            }
+            try await coordinator.commitMetadataOnly(
+                torrentID: metaRunningAdded.torrentID, priorities: [4, 0, 4], paused: false)
+            guard let runningPostFlags = try await latestFlags(for: metaRunningAdded.torrentID),
+                  runningPostFlags & uploadModeFlag == 0,
+                  runningPostFlags & pausedFlag == 0 else {
+                fatalError("guarded commit must apply running state before releasing upload_mode")
+            }
+            guard !FileManager.default.fileExists(
+                atPath: tmp.appending("/\(runningFixtureName)/dir/b.bin")) else {
+                fatalError("running commit must not allocate the skipped file")
+            }
+            let metaRunningToken = try await coordinator.prepareRemoval(
+                torrentID: metaRunningAdded.torrentID)
+            _ = try await coordinator.commitRemoval(token: metaRunningToken)
+            do {
+                try await coordinator.commitMetadataOnly(
+                    torrentID: metaRunningAdded.torrentID, priorities: [4, 0, 4], paused: false)
+                fatalError("removed temporary handle must not remain committable")
+            } catch EngineCoordinatorError.notFound {
+                // expected: removal drops temporary metadata-only tracking
+            }
+
+            // A normal durable handle never passes the temporary-tracking check.
+            do {
+                try await coordinator.commitMetadataOnly(
+                    torrentID: torrentID, priorities: [4], paused: true)
+                fatalError("commit on a normal handle must be rejected")
+            } catch EngineCoordinatorError.notFound {
+                // expected
+            }
+
+            // Malformed commit payloads fail closed at the ObjC++ boundary.
+            let malformedCommits: [(label: String, payload: String)] = [
+                ("non-array", #"{"torrent-id":"ignored","priorities":4,"paused":true}"#),
+                ("non-integer entry", #"{"torrent-id":"ignored","priorities":[4,"0"],"paused":true}"#),
+                ("out-of-range entry", #"{"torrent-id":"ignored","priorities":[4,300],"paused":true}"#),
+                ("empty vector", #"{"torrent-id":"ignored","priorities":[],"paused":true}"#),
+            ]
+            for malformedCommit in malformedCommits {
+                do {
+                    _ = try adapter.commitMetadataOnly(withPayloadData: Data(malformedCommit.payload.utf8))
+                    fatalError("\(malformedCommit.label) commit payload must throw invalidArgument")
+                } catch let error as NSError {
+                    guard error.code == 5 else {
+                        fatalError("\(malformedCommit.label) commit payload returned unexpected error: \(error.code)")
+                    }
+                }
+            }
+
+            // Removing the promoted torrent keeps the final health invariant
+            // intact (one torrent left on this coordinator).
+            let metaMultiToken = try await coordinator.prepareRemoval(torrentID: metaMultiAdded.torrentID)
+            _ = try await coordinator.commitRemoval(token: metaMultiToken)
 
             // --- SEC-1 credential delivery (WP13-SEC-HARDEN-001): the full
             // real chain applySettings(proxyPassword) -> TransferCoordinator
@@ -375,21 +592,94 @@ struct BridgeSwiftTest {
     }
 
     private static func addMagnet(to coordinator: TransferCoordinator, uri: String) async throws -> TorrentRecordID {
+        try await Self.commitRecord(to: coordinator, source: .magnet(uri))
+    }
+
+    /// Inspects and commits any source (.torrent bytes or magnet URI),
+    /// returning the durable record id.
+    private static func commitRecord(to coordinator: TransferCoordinator, source: AddSource) async throws -> TorrentRecordID {
         let inspectionReply = await coordinator.processCommand(Self.encode(.inspectAddSource(
-            InspectAddSourceRequest(requestID: RequestID(), source: .magnet(uri))
+            InspectAddSourceRequest(requestID: RequestID(), source: source)
         )))
         guard case .success(.addSourceInspection(let inspection)) = Self.decode(inspectionReply).result else {
             throw NSError(domain: "torrentino.bridge.swift-test", code: 1)
         }
+        var opID = inspection.operationID
+        if inspection.phase == .retrievingMetadata {
+            let pollReply = await coordinator.processCommand(Self.encode(.pollAddOperation(
+                PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+            )))
+            guard case .success(.pollAddOperation(let pollResult)) = Self.decode(pollReply).result else {
+                throw NSError(domain: "torrentino.bridge.swift-test", code: 3)
+            }
+            opID = pollResult.inspection?.operationID ?? inspection.operationID
+        }
         let commitReply = await coordinator.processCommand(Self.encode(.commitAdd(CommitAddRequest(
             requestID: RequestID(),
             idempotencyKey: IdempotencyKey(),
-            operationID: inspection.operationID
+            operationID: opID
         ))))
-        guard case .success(.commitAdd(let result)) = Self.decode(commitReply).result else {
-            throw NSError(domain: "torrentino.bridge.swift-test", code: 2)
+        let commitResult = Self.decode(commitReply).result
+        guard case .success(.commitAdd(let result)) = commitResult else {
+            fatalError("commitAdd failed in commitRecord with \(String(describing: commitResult))")
         }
         return result.recordID
+    }
+
+    // ponytail: local fixture writer duplicates the test-target MetainfoBuilder
+    // because NegativeCorpus.swift is not part of this harness's compiled
+    // sources; upgrade when the harness build list includes it.
+    private enum FixtureBencode {
+        static func string(_ value: String) -> Data {
+            let utf8 = Data(value.utf8)
+            return Data("\(utf8.count):".utf8) + utf8
+        }
+
+        static func integer(_ value: Int64) -> Data {
+            Data("i\(value)e".utf8)
+        }
+
+        static func bytes(_ value: Data) -> Data {
+            Data("\(value.count):".utf8) + value
+        }
+
+        static func list(_ items: [Data]) -> Data {
+            Data("l".utf8) + items.reduce(Data(), +) + Data("e".utf8)
+        }
+
+        static func dictionary(_ entries: [(String, Data)]) -> Data {
+            var data = Data("d".utf8)
+            for (key, value) in entries.sorted(by: { $0.0 < $1.0 }) {
+                data += string(key)
+                data += value
+            }
+            return data + Data("e".utf8)
+        }
+    }
+
+    /// Deterministic three-file v1 metainfo (dir/a.txt, dir/b.bin, dir/c.bin)
+    /// with syntactically valid placeholder piece hashes; the priority barrier
+    /// never downloads payload, so no real hashing is required here.
+    private static func makeMultiFileSelectionTorrent(name: String = "wp22-selection") -> Data {
+        let files: [(path: String, size: Int64)] = [
+            ("dir/a.txt", 100), ("dir/b.bin", 200), ("dir/c.bin", 300),
+        ]
+        let entries = files.map { file in
+            FixtureBencode.dictionary([
+                ("length", FixtureBencode.integer(file.size)),
+                ("path", FixtureBencode.list(file.path.split(separator: "/").map { FixtureBencode.string(String($0)) })),
+            ])
+        }
+        let info = FixtureBencode.dictionary([
+            ("files", FixtureBencode.list(entries)),
+            ("name", FixtureBencode.string(name)),
+            ("piece length", FixtureBencode.integer(256)),
+            ("pieces", FixtureBencode.bytes(Data((0..<60).map { UInt8($0 % 251) }))),
+        ])
+        return FixtureBencode.dictionary([
+            ("announce", FixtureBencode.string("udp://tracker.example:80/announce")),
+            ("info", info),
+        ])
     }
 
     private static func encode(_ command: EngineCommandV1) -> Data {

@@ -114,6 +114,11 @@ struct AddSpecification {
 	int enable_dht = -1;
 	int enable_pex = -1;
 	int enable_lsd = -1;
+	// WP22.D7 (ADR-022): metadata-only add. The handle is created with
+	// upload_mode | default_dont_download and auto_managed/paused cleared, so
+	// metainfo may be fetched but no payload can be requested until a guarded
+	// commitMetadataOnly releases the upload_mode guard last.
+	bool metadata_only = false;
 };
 
 struct BootReport {
@@ -176,6 +181,10 @@ struct EngineAlertDTO {
 	// received its torrent info. Empty/-1 retain the previous sample.
 	std::string name;
 	std::int64_t total_size = -1;
+	// Raw torrent flag bitmask sampled by the same status() poll (WP22.D7):
+	// lets callers observe upload_mode/paused/auto_managed without a new
+	// handle API. -1 retains the unknown sentinel.
+	std::int64_t flags = -1;
 };
 
 struct HealthDTO {
@@ -310,6 +319,22 @@ public:
 	Result<void> moveStorage(const TorrentRecordID& id, const std::string& path) noexcept;
 	Result<void> setLimits(const TorrentRecordID& id, const TorrentLimits& limits) noexcept;
 	Result<AppliedTorrentLimits> currentLimits(const TorrentRecordID& id) noexcept;
+	// WP22.D5 (ADR-022): applies a complete file-priority vector in metainfo
+	// order to the live torrent handle. prioritize_files is asynchronous, so
+	// success REQUIRES a bounded exact get_file_priorities() read-back within
+	// the operation deadline; timeout or mismatch fails closed and never
+	// reports the requested selection as applied.
+	Result<void> setFilePriorities(const TorrentRecordID& id,
+		const std::vector<std::uint8_t>& priorities) noexcept;
+	// WP22.D7 (ADR-022): guarded promotion of a metadata-only handle. Under
+	// one critical section: the id must still be tracked as temporary and
+	// carry metainfo, the full priority vector is applied with an exact
+	// bounded get_file_priorities read-back, then the requested paused state
+	// is applied, then upload_mode is cleared LAST and temporary tracking is
+	// dropped. Any failure before the guard release leaves upload_mode set
+	// and returns a typed failure.
+	Result<void> commitMetadataOnly(const TorrentRecordID& id,
+		const std::vector<std::uint8_t>& priorities, bool paused) noexcept;
 	Result<void> editTrackers(const TorrentRecordID& id, const TrackerTiers& tracker_tiers) noexcept;
 	// Reject-only compatibility stub; accepted edits use TrackerTiers.
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;

@@ -632,7 +632,13 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
 
-        let inspection = try await inspect(coordinator, source: .magnet("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"))
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet(try Self.compatibleStubMagnetURI("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"))
+        )
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.pollAddOperation(
+            PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+        ))))
         let key = IdempotencyKey()
         let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
         let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
@@ -660,9 +666,14 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
 
-        let inspection = try await inspect(coordinator, source: .magnet("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"))
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet(try Self.compatibleStubMagnetURI("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"))
+        )
+        let ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
+        XCTAssertEqual(ready.phase, .readyToCommit)
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID)
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -679,6 +690,7 @@ final class TransferSmokeTests: TestProfileCase {
         let snapshot2 = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
         XCTAssertEqual(snapshot2.torrents.first?.desiredState, .running)
     }
+
 
     func testFilesPageWithDirectoryDrillDown() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
@@ -759,6 +771,201 @@ final class TransferSmokeTests: TestProfileCase {
         // The file lives inside the "dir" directory; its selection is .skip.
         let dir = try await filesPage(coordinator, recordID: addResult.recordID, cursor: FileCursor(directoryStack: ["dir"]))
         XCTAssertEqual(dir.items.first { $0.kind == .file }?.selection, .skip)
+    }
+
+    func testSetFileSelectionForwardsOrderedPriorityVectorToEngine() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let torrent = MetainfoBuilder.multiFile(
+            files: [("dir/a.txt", 100), ("dir/b.bin", 200), ("dir/c.bin", 300)],
+            pieceLength: 256, piecesCount: 1, name: "ordered"
+        )
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+
+        // Deliberately unordered request: the coordinator must still deliver
+        // ONE complete vector in metainfo file order (.normal -> 4, .skip -> 0).
+        let result = try resultPayload(from: await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: addResult.recordID,
+                selection: [
+                    FileSelectionItem(relativePath: "dir/c.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/b.bin", priority: .skip),
+                ],
+                expectedRevision: 0
+            )
+        ))))
+        XCTAssertEqual(result, .ack)
+
+        let call = await engineRef.lastFileSelectionCall()
+        let unwrappedCall = try XCTUnwrap(call)
+        XCTAssertEqual(unwrappedCall.torrentID, "stub-1")
+        XCTAssertEqual(unwrappedCall.priorities, [4, 0, 4], "engine must receive the full metainfo-ordered vector")
+        let callCount = await engineRef.fileSelectionCallCount()
+        XCTAssertEqual(callCount, 1)
+    }
+
+    func testSetFileSelectionMutatesRecordOnlyAfterEngineSuccess() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let torrent = MetainfoBuilder.multiFile(
+            files: [("dir/a.txt", 100), ("dir/b.bin", 200), ("dir/c.bin", 300)],
+            pieceLength: 256, piecesCount: 1, name: "barrier"
+        )
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+
+        // Observed from INSIDE the engine call (actor reentrancy): the record
+        // must still carry the previous selection while the engine runs.
+        let probe = SelectionProbe()
+        await engineRef.setFileSelectionHook { [probe, coordinator] in
+            guard let data = try? JSONEncoder().encode(IPCEnvelope.request(.fetchFiles(
+                FetchFilesRequest(requestID: RequestID(), recordID: addResult.recordID,
+                    cursor: FileCursor(directoryStack: ["dir"]), pageSize: 200, expectedRevision: 0)
+            ))),
+            let envelope = try? JSONDecoder().decode(IPCEnvelope.self, from: await coordinator.processCommand(data)),
+            case .success(.files(let page)) = envelope.result else {
+                return
+            }
+            probe.record(
+                revision: page.revision,
+                selection: Dictionary(uniqueKeysWithValues: page.items.map { ($0.relativePath, $0.selection) })
+            )
+        }
+
+        let deliveries = DeliveryCollector()
+        await bus.register(deliveries.sink())
+        let result = try resultPayload(from: await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: addResult.recordID,
+                selection: [FileSelectionItem(relativePath: "dir/b.bin", priority: .skip)],
+                expectedRevision: 0
+            )
+        ))))
+        XCTAssertEqual(result, .ack)
+
+        let observation = probe.observation
+        XCTAssertEqual(observation.selection?["dir/b.bin"], .normal, "record must be unchanged during the engine call")
+        XCTAssertEqual(observation.revision, 0, "revision must be unchanged during the engine call")
+
+        let events = await deliveries.events(timeoutNanoseconds: 500_000_000)
+        XCTAssertTrue(events.contains { event in
+            if case .inspectionInvalidated(let payload) = event {
+                return payload.recordID == addResult.recordID && payload.scope == .files && payload.revision == 1
+            }
+            return false
+        }, "invalidation must follow the successful engine call with the bumped revision")
+    }
+
+    func testSetFileSelectionEngineFailurePreservesRecordAndEmitsNoInvalidation() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let torrent = MetainfoBuilder.multiFile(
+            files: [("dir/a.txt", 100), ("dir/b.bin", 200), ("dir/c.bin", 300)],
+            pieceLength: 256, piecesCount: 1, name: "rollback"
+        )
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+
+        // Prior accepted state that must survive a later engine failure.
+        _ = try resultPayload(from: await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: addResult.recordID,
+                selection: [FileSelectionItem(relativePath: "dir/b.bin", priority: .skip)],
+                expectedRevision: 0
+            )
+        ))))
+
+        let before = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+
+        let deliveries = DeliveryCollector()
+        await bus.register(deliveries.sink())
+        let timeoutFault = EngineFault(
+            code: .operationTimeout,
+            severity: .warning,
+            affectedVolume: "qa-timeout-volume",
+            localizationKey: "qa.file_priority_timeout",
+            recoveryActions: ["retry_op", "export_diagnostics"],
+            redactedContext: "priority read-back barrier"
+        )
+        await engineRef.failNextFileSelection(with: timeoutFault)
+        let reply = await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: addResult.recordID,
+                selection: [FileSelectionItem(relativePath: "dir/c.bin", priority: .skip)],
+                expectedRevision: 1
+            )
+        )))
+        guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
+            return XCTFail("engine failure must surface as a typed fault, not a false ack")
+        }
+        XCTAssertEqual(fault.code, timeoutFault.code)
+        XCTAssertEqual(fault.severity, timeoutFault.severity)
+        XCTAssertEqual(fault.affectedRecord, addResult.recordID, "missing record attribution must be enriched")
+        XCTAssertEqual(fault.affectedVolume, timeoutFault.affectedVolume)
+        XCTAssertEqual(fault.localizationKey, timeoutFault.localizationKey)
+        XCTAssertEqual(fault.recoveryActions, timeoutFault.recoveryActions)
+        XCTAssertEqual(fault.redactedContext, timeoutFault.redactedContext)
+        let attemptCount = await engineRef.fileSelectionCallCount()
+        XCTAssertEqual(attemptCount, 2, "the failing attempt must have reached the engine")
+
+        // A typed fault that already carries attribution must pass through
+        // unchanged: enrichment fills gaps only and never overwrites.
+        let preAttributed = TorrentRecordID(rawValue: UUID())
+        let preAttributedFault = EngineFault(
+            code: .invalidArgument,
+            severity: .warning,
+            affectedRecord: preAttributed,
+            affectedVolume: "qa-pre-attributed-volume",
+            localizationKey: "qa.file_priority_pre_attributed",
+            recoveryActions: ["edit_limits", "export_diagnostics"],
+            redactedContext: "stub pre-attributed fault"
+        )
+        await engineRef.failNextFileSelection(with: preAttributedFault)
+        let attributedReply = await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(), idempotencyKey: IdempotencyKey(), recordID: addResult.recordID,
+                selection: [FileSelectionItem(relativePath: "dir/a.txt", priority: .skip)],
+                expectedRevision: 1
+            )
+        )))
+        guard case .failure(let attributedFault) = decode(IPCEnvelope.self, from: attributedReply).result else {
+            return XCTFail("second engine failure must surface as a typed fault")
+        }
+        XCTAssertEqual(attributedFault, preAttributedFault, "pre-attributed typed faults must pass through unchanged")
+        let attemptsAfterAttributedFailure = await engineRef.fileSelectionCallCount()
+        XCTAssertEqual(attemptsAfterAttributedFailure, 3, "the attributed-failure attempt must also reach the engine")
+        let after = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(after.torrents.first?.revision, before.torrents.first?.revision)
+        XCTAssertEqual(after.engineRevision, before.engineRevision, "engine revision must not advance on rejected selections")
+        XCTAssertEqual(after.torrents.first?.progress.totalBytes, before.torrents.first?.progress.totalBytes)
+
+        let dir = try await filesPage(coordinator, recordID: addResult.recordID, cursor: FileCursor(directoryStack: ["dir"]))
+        let selection = Dictionary(uniqueKeysWithValues: dir.items.map { ($0.relativePath, $0.selection) })
+        XCTAssertEqual(selection["dir/b.bin"], .skip, "prior selection must be preserved")
+        XCTAssertEqual(selection["dir/c.bin"], .normal, "rejected selection must not leak into the record")
+
+        let events = await deliveries.events(timeoutNanoseconds: 500_000_000)
+        XCTAssertFalse(events.contains { event in
+            if case .inspectionInvalidated = event { return true }
+            return false
+        }, "a failed engine call must not invalidate any inspection")
     }
 
     // MARK: - Duplicate detection across sources
@@ -1079,13 +1286,23 @@ final class TransferSmokeTests: TestProfileCase {
     
     func testMagnetLiveMetadataProjectsNameSizeAndActivity() async throws {
         let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _, engineRef) = try await makeCoordinator(
             engine: engine,
-            bus: TransferEventBus(flushIntervalMilliseconds: 0)
+            bus: bus
         )
+        let torrent = MetainfoBuilder.singleFile(
+            name: "Resolved metadata name",
+            size: 4_096,
+            pieceLength: 256,
+            piecesCount: 16
+        )
+        let parsed = try MetainfoParser.parse(torrent)
+        await engineRef.setResumeData(torrent, for: "stub-1")
         let recordID = try await addMagnet(
             coordinator,
-            uri: "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))"
+            uri: "magnet:?xt=urn:btih:\(parsed.infoHashHex)",
+            preserveURI: true
         )
 
         await engineRef.setStatuses([TransferTorrentStatus(
@@ -1108,13 +1325,451 @@ final class TransferSmokeTests: TestProfileCase {
         let snapshot = try snapshot(from: await coordinator.processCommand(encode(
             .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
         )))
-        let torrent = try XCTUnwrap(snapshot.torrents.first { $0.id == recordID })
-        XCTAssertEqual(torrent.displayName, "Resolved metadata name")
-        XCTAssertEqual(torrent.progress.totalBytes, 4_096)
-        XCTAssertEqual(torrent.progress.downloadedBytes, 1_024)
-        XCTAssertEqual(torrent.activity, .downloading)
-        XCTAssertEqual(torrent.rates.downloadBytesPerSec, 12_000)
+        let torrentSnapshot = try XCTUnwrap(snapshot.torrents.first { $0.id == recordID })
+        XCTAssertEqual(torrentSnapshot.displayName, "Resolved metadata name")
+        XCTAssertEqual(torrentSnapshot.progress.totalBytes, 4_096)
+        XCTAssertEqual(torrentSnapshot.progress.downloadedBytes, 1_024)
+        XCTAssertEqual(torrentSnapshot.activity, .downloading)
+        XCTAssertEqual(torrentSnapshot.rates.downloadBytesPerSec, 12_000)
     }
+
+    func testResolvedMagnetPromotionPersistsFilesSelectionAndRestore() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let trackerTiers = [["udp://tracker.example:80/announce"]]
+        let baseSource = MetainfoBuilder.multiFile(
+            files: [("dir/a.bin", 100), ("dir/b.bin", 200)],
+            pieceLength: 16,
+            piecesCount: 1,
+            name: "resolved",
+            trackers: []
+        )
+        let source = try MetainfoParser.replacingTrackerTiers(
+            in: baseSource,
+            with: trackerTiers
+        )
+        let parsed = try MetainfoParser.parse(source)
+        let resumeData = source
+        await engineRef.setResumeData(resumeData, for: "stub-1")
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet("magnet:?xt=urn:btih:\(parsed.infoHashHex)&tr=udp%3A%2F%2Ftracker.example%3A80%2Fannounce")
+        )
+        let ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
+        XCTAssertEqual(ready.displayName, "resolved")
+        XCTAssertEqual(ready.sizeBytes, parsed.totalSize)
+        XCTAssertEqual(ready.files?.count, 2)
+        XCTAssertEqual(ready.phase, .readyToCommit)
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+        let recordID = addResult.recordID
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 4,
+            seedsTotal: 1,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: "resolved",
+            totalBytes: parsed.totalSize
+        )])
+        let limitsBefore = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        ))).torrents.first?.limits
+        let globalBudgetApplicationsBefore = await engineRef.resourceBudgetApplications().count
+
+        await coordinator.pumpOnce()
+
+        let storedMetainfoPayload = try await store.metainfo(torrentID: recordID.rawValue.uuidString)
+        let storedResumePayload = try await store.resumeData(torrentID: recordID.rawValue.uuidString)
+        let storedMetainfo = try XCTUnwrap(storedMetainfoPayload)
+        let storedParsed = try Preflight.validateTorrentData(storedMetainfo.data)
+        XCTAssertEqual(storedParsed.infoHashV1, parsed.infoHashV1)
+        XCTAssertEqual(storedParsed.infoHashV2, parsed.infoHashV2)
+        XCTAssertEqual(storedParsed.trackerTiers, trackerTiers)
+        XCTAssertNil(storedResumePayload, "D8 commit persists canonical metainfo; resume sidecars are promotion-only")
+        let storedTrackerTiers = try await store.torrentTrackerTiers(torrentID: recordID.rawValue.uuidString)
+        XCTAssertEqual(
+            storedTrackerTiers,
+            trackerTiers
+        )
+        let storedTorrent = try await store.torrent(withID: recordID.rawValue.uuidString)
+        XCTAssertEqual(storedTorrent?.name, "resolved")
+
+        let files = try await filesPage(
+            coordinator,
+            recordID: recordID,
+            cursor: FileCursor(directoryStack: ["dir"]),
+            pageSize: 10
+        )
+        XCTAssertEqual(files.totalCount, 2)
+        XCTAssertEqual(files.items.map(\.relativePath), ["dir/a.bin", "dir/b.bin"])
+
+        let snapshotBeforeSelection = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snapshotBeforeSelection.torrents.count, 1)
+        XCTAssertEqual(snapshotBeforeSelection.torrents.first?.displayName, "resolved")
+        XCTAssertEqual(snapshotBeforeSelection.torrents.first?.progress.totalBytes, 300)
+        XCTAssertEqual(snapshotBeforeSelection.torrents.first?.limits, limitsBefore)
+
+        let selectionReply = await coordinator.processCommand(encode(.setFileSelection(
+            SetFileSelectionRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                recordID: recordID,
+                selection: [FileSelectionItem(relativePath: "dir/a.bin", priority: .skip)],
+                expectedRevision: 0
+            )
+        )))
+        XCTAssertEqual(try resultPayload(from: selectionReply), .ack)
+        let selectedFiles = try await filesPage(
+            coordinator,
+            recordID: recordID,
+            cursor: FileCursor(directoryStack: ["dir"]),
+            pageSize: 10
+        )
+        XCTAssertEqual(selectedFiles.items.first { $0.relativePath == "dir/a.bin" }?.selection, .skip)
+        XCTAssertEqual(selectedFiles.items.first { $0.relativePath == "dir/b.bin" }?.selection, .normal)
+
+        let requestsAfterPromotion = await engineRef.resumeDataRequestCount(for: "stub-1")
+        await coordinator.pumpOnce()
+        let requestsAfterSecondPump = await engineRef.resumeDataRequestCount(for: "stub-1")
+        let globalBudgetApplicationsAfter = await engineRef.resourceBudgetApplications().count
+        XCTAssertEqual(requestsAfterSecondPump, requestsAfterPromotion)
+        XCTAssertEqual(globalBudgetApplicationsAfter, globalBudgetApplicationsBefore)
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        await restarted.restoreFromPersistence()
+        let restoredSnapshot = try snapshot(from: await restarted.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(restoredSnapshot.torrents.count, 1)
+        XCTAssertEqual(restoredSnapshot.torrents.first?.displayName, "resolved")
+        XCTAssertEqual(restoredSnapshot.torrents.first?.health, .healthy)
+        let restoredTrackerTiers = try await store.torrentTrackerTiers(torrentID: recordID.rawValue.uuidString)
+        XCTAssertEqual(
+            restoredTrackerTiers,
+            trackerTiers
+        )
+        let restoredFiles = try await filesPage(
+            restarted,
+            recordID: recordID,
+            cursor: FileCursor(directoryStack: ["dir"]),
+            pageSize: 10
+        )
+        XCTAssertEqual(restoredFiles.items.map(\.relativePath), ["dir/a.bin", "dir/b.bin"])
+    }
+
+
+    func testResolvedMagnetPromotionAcceptsHybridInfoWithExpectedV1() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let source = Self.hybridSingleFile()
+        let parsed = try MetainfoParser.parse(source)
+        XCTAssertNotNil(parsed.infoHashV1)
+        XCTAssertNotNil(parsed.infoHashV2)
+        let v1Hex = try XCTUnwrap(parsed.infoHashV1)
+            .map { String(format: "%02x", $0) }
+            .joined()
+
+        await engineRef.setResumeData(source, for: "stub-1")
+        let recordID = try await addMagnet(
+            coordinator,
+            uri: "magnet:?xt=urn:btih:\(v1Hex)",
+            preserveURI: true
+        )
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 1,
+            seedsTotal: 0,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: parsed.name,
+            totalBytes: parsed.totalSize
+        )])
+
+        await coordinator.pumpOnce()
+
+        let storedMetainfoPayload = try await store.metainfo(torrentID: recordID.rawValue.uuidString)
+        let stored = try XCTUnwrap(storedMetainfoPayload)
+        let promoted = try Preflight.validateTorrentData(stored.data)
+        XCTAssertEqual(promoted.infoHashV1, parsed.infoHashV1)
+        XCTAssertEqual(promoted.infoHashV2, parsed.infoHashV2)
+        let snapshot = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snapshot.torrents.first?.displayName, parsed.name)
+    }
+
+    func testResolvedMagnetPromotionRejectsWrongIdentityWithBackoff() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let expected = MetainfoBuilder.singleFile(name: "expected.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let wrong = MetainfoBuilder.singleFile(name: "wrong.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let expectedParsed = try MetainfoParser.parse(expected)
+        let recordID = TorrentRecordID(rawValue: UUID())
+        let placeholder = "magnet:\(expectedParsed.infoHashHex.prefix(8))"
+        try await store.addTorrent(StoredTorrent(
+            id: recordID.rawValue.uuidString,
+            infoHashV1: expectedParsed.infoHashHex,
+            infoHashV2: nil,
+            name: placeholder,
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+        await engineRef.setResumeData(wrong, for: "stub-1")
+        await coordinator.restoreFromPersistence()
+        await coordinator.pumpOnce()
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 1,
+            seedsTotal: 0,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: "wrong.bin",
+            totalBytes: 512
+        )])
+
+        await coordinator.pumpOnce()
+        let failedRequestCount = await engineRef.resumeDataRequestCount(for: "stub-1")
+        XCTAssertEqual(failedRequestCount, 1)
+        let failedMetainfo = try await store.metainfo(torrentID: recordID.rawValue.uuidString)
+        let failedResume = try await store.resumeData(torrentID: recordID.rawValue.uuidString)
+        XCTAssertNil(failedMetainfo)
+        XCTAssertNil(failedResume)
+        let failedSnapshot = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(failedSnapshot.torrents.first?.displayName, placeholder)
+        let failedTorrent = try await store.torrent(withID: recordID.rawValue.uuidString)
+        XCTAssertEqual(failedTorrent?.name, placeholder)
+
+        await coordinator.pumpOnce()
+        let secondRequestCount = await engineRef.resumeDataRequestCount(for: "stub-1")
+        XCTAssertEqual(secondRequestCount, 1)
+    }
+
+
+    func testResolvedMagnetPromotionRejectsInvalidResumeWithBackoff() async throws {
+        let engine = StubTransferEngine()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let source = MetainfoBuilder.singleFile(name: "invalid.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let parsed = try MetainfoParser.parse(source)
+        let recordID = TorrentRecordID(rawValue: UUID())
+        let placeholder = "magnet:\(parsed.infoHashHex.prefix(8))"
+        try await store.addTorrent(StoredTorrent(
+            id: recordID.rawValue.uuidString,
+            infoHashV1: parsed.infoHashHex,
+            infoHashV2: nil,
+            name: placeholder,
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+        await engineRef.setResumeData(Data("not-bencode".utf8), for: "stub-1")
+        await coordinator.restoreFromPersistence()
+        await coordinator.pumpOnce()
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 1,
+            seedsTotal: 0,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: "invalid.bin",
+            totalBytes: 512
+        )])
+
+        await coordinator.pumpOnce()
+        let firstRequestCount = await engineRef.resumeDataRequestCount(for: "stub-1")
+        XCTAssertEqual(firstRequestCount, 1)
+        let storedMetainfo = try await store.metainfo(torrentID: recordID.rawValue.uuidString)
+        let storedResume = try await store.resumeData(torrentID: recordID.rawValue.uuidString)
+        XCTAssertNil(storedMetainfo)
+        XCTAssertNil(storedResume)
+
+        await coordinator.pumpOnce()
+        let secondRequestCount = await engineRef.resumeDataRequestCount(for: "stub-1")
+        XCTAssertEqual(secondRequestCount, 1)
+    }
+
+
+    func testResolvedMagnetPromotionAbortsWhenEngineIDChangesDuringRequest() async throws {
+        let engine = StubTransferEngine()
+        let gate = ResumeRequestGate()
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
+        let source = MetainfoBuilder.singleFile(name: "restart.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let parsed = try MetainfoParser.parse(source)
+        let storedID = UUID().uuidString
+        try await store.addTorrent(StoredTorrent(
+            id: storedID,
+            infoHashV1: parsed.infoHashHex,
+            infoHashV2: nil,
+            name: "magnet:\(parsed.infoHashHex.prefix(8))",
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+        await coordinator.restoreFromPersistence()
+
+        // First pump re-adds the restored metadata-only record. Install a
+        // matching resume payload before the next pump starts promotion.
+        await coordinator.pumpOnce()
+        await engineRef.setResumeData(source, for: "stub-1")
+        await engineRef.setResumeRequestGate(gate)
+        await engineRef.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 1,
+            seedsTotal: 0,
+            activity: .downloading,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: parsed.name,
+            totalBytes: parsed.totalSize
+        )])
+
+        let pumpTask = Task { await coordinator.pumpOnce() }
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ 5_000_000_000
+        while !(await gate.hasEntered()) && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard await gate.hasEntered() else {
+            pumpTask.cancel()
+            await gate.release()
+            _ = await pumpTask.value
+            let observed = try? snapshot(from: await coordinator.processCommand(encode(
+                .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+            )))
+            let observedActivity = observed.flatMap { snapshot in
+                snapshot.torrents.first.map { String(describing: $0.activity) }
+            } ?? "none"
+            let metainfoPresent = (try? await store.metainfo(torrentID: storedID)) != nil
+            return XCTFail("promotion gate was not entered; observed activity=\(observedActivity), metainfoPresent=\(metainfoPresent)")
+        }
+
+        let restartReply = await coordinator.processCommand(encode(
+            .restartEngineSafely(RestartEngineSafelyRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey()
+            ))
+        ))
+        XCTAssertEqual(try resultPayload(from: restartReply), .ack)
+        await gate.release()
+        await pumpTask.value
+
+        let storedMetainfo = try await store.metainfo(torrentID: storedID)
+        let storedResume = try await store.resumeData(torrentID: storedID)
+        XCTAssertNil(storedMetainfo)
+        XCTAssertNil(storedResume)
+        let snapshot = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snapshot.torrents.count, 1)
+        XCTAssertEqual(snapshot.torrents.first?.displayName, "magnet:\(parsed.infoHashHex.prefix(8))")
+        let addCallCount = await engineRef.addCallCount()
+        XCTAssertEqual(addCallCount, 2)
+    }
+    func testRestoreSelfHealsMetainfoNamePlaceholder() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (_, store, _) = try await makeCoordinator(
+            engine: StubTransferEngine(),
+            bus: bus
+        )
+        let source = MetainfoBuilder.singleFile(
+            name: "self-healed.bin",
+            size: 512,
+            pieceLength: 256,
+            piecesCount: 1,
+            trackers: []
+        )
+        let parsed = try MetainfoParser.parse(source)
+        let recordID = TorrentRecordID(rawValue: UUID())
+        let placeholder = "magnet:\(parsed.infoHashHex.prefix(8))"
+        try await store.addTorrent(StoredTorrent(
+            id: recordID.rawValue.uuidString,
+            infoHashV1: parsed.infoHashHex,
+            infoHashV2: nil,
+            name: placeholder,
+            state: "running",
+            addedAt: 1,
+            quarantined: false
+        ))
+        _ = try await store.storeMetainfo(
+            torrentID: recordID.rawValue.uuidString,
+            data: source
+        )
+
+        let restarted = TransferCoordinator(
+            engine: StubTransferEngine(),
+            persistence: store,
+            eventBus: TransferEventBus(flushIntervalMilliseconds: 0),
+            agentVersion: "test",
+            defaultSaveLocation: PersistedLocation(path: profile.rootURL.path)
+        )
+        let summary = await restarted.restoreFromPersistence()
+        XCTAssertEqual(summary.rebuilt, 1)
+        let snapshot = try snapshot(from: await restarted.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snapshot.torrents.first?.displayName, "self-healed.bin")
+        XCTAssertEqual(snapshot.torrents.first?.health, .healthy)
+        let storedTorrent = try await store.torrent(withID: recordID.rawValue.uuidString)
+        XCTAssertEqual(
+            storedTorrent?.name,
+            "self-healed.bin"
+        )
+        let files = try await filesPage(
+            restarted,
+            recordID: recordID,
+            cursor: nil,
+            pageSize: 10
+        )
+        XCTAssertEqual(files.items.map(\.relativePath), ["self-healed.bin"])
+    }
+
+
 
     func testEngineAlertDTOMarksMissingLiveScalarsUnknown() throws {
         let data = Data(#"{"kind":"state_changed","torrent-id":"hash","progress":0.5,"state":3}"#.utf8)
@@ -1128,6 +1783,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(alert.seedsTotal, -1)
         XCTAssertNil(alert.name)
         XCTAssertEqual(alert.totalSize, -1)
+        XCTAssertEqual(alert.flags, -1)
 
     }
     
@@ -1370,7 +2026,8 @@ final class TransferSmokeTests: TestProfileCase {
 
     func testFileSelectionRejectsUnknownPath() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let (coordinator, _) = try await makeCoordinator(bus: bus)
+        let engine = StubTransferEngine()
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
         let inspection = try await inspect(coordinator, source: .torrentFileData(
             MetainfoBuilder.multiFile(files: [("dir/a.txt", 10)], pieceLength: 16, piecesCount: 1)
         ))
@@ -1390,6 +2047,15 @@ final class TransferSmokeTests: TestProfileCase {
             return XCTFail("expected fault for unknown selection path")
         }
         XCTAssertEqual(fault.code, .invalidPayload)
+
+        // Validation fails BEFORE any engine call: the native handle never
+        // sees a partial or unknown-path vector.
+        let callCount = await engineRef.fileSelectionCallCount()
+        XCTAssertEqual(callCount, 0)
+        let snapshotAfterFault = try snapshot(from: await coordinator.processCommand(encode(
+            .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
+        )))
+        XCTAssertEqual(snapshotAfterFault.torrents.first?.revision, 0)
     }
 
     // MARK: - Session settings transaction and live apply
@@ -1875,14 +2541,20 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
 
-        let hashA = String(repeating: "a", count: 40)
-        let hashB = String(repeating: "b", count: 40)
-        let hashC = String(repeating: "c", count: 40)
+        let torrentA = MetainfoBuilder.singleFile(name: "fileA.bin", size: 1024, pieceLength: 256, piecesCount: 1)
+        let torrentB = MetainfoBuilder.singleFile(name: "fileB.bin", size: 1024, pieceLength: 256, piecesCount: 1)
+        let torrentC = MetainfoBuilder.singleFile(name: "fileC.bin", size: 1024, pieceLength: 256, piecesCount: 1)
 
-        let idA = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(hashA)")
-        await engineRef.failAdds(containing: hashB)
-        let idB = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(hashB)")
-        let idC = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(hashC)")
+        let inspA = try await inspect(coordinator, source: .torrentFileData(torrentA))
+        guard case .commitAdd(let resA) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspA.operationID))))) else { return XCTFail() }
+        let idA = resA.recordID
+        await engineRef.failAdds(containing: "fileB.bin")
+        let inspB = try await inspect(coordinator, source: .torrentFileData(torrentB))
+        guard case .commitAdd(let resB) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspB.operationID))))) else { return XCTFail() }
+        let idB = resB.recordID
+        let inspC = try await inspect(coordinator, source: .torrentFileData(torrentC))
+        guard case .commitAdd(let resC) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspC.operationID))))) else { return XCTFail() }
+        let idC = resC.recordID
 
         var snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
         var byID = Dictionary(uniqueKeysWithValues: snap.torrents.map { ($0.id, $0) })
@@ -2107,7 +2779,7 @@ final class TransferSmokeTests: TestProfileCase {
     func testWP09OfflinePreservesDesiredStateAndRecoversWithoutSpin() async throws {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
-        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
         await coordinator.applySystemConditions(SystemConditions(
             network: .unsatisfied,
             networkGeneration: 1,
@@ -2116,7 +2788,13 @@ final class TransferSmokeTests: TestProfileCase {
             lowPower: false,
             sleeping: false
         ))
-        let recordID = try await addMagnet(coordinator, uri: "magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))")
+        let torrent = MetainfoBuilder.singleFile(name: "offline.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+        let recordID = addResult.recordID
         let offline = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
         XCTAssertEqual(offline.torrents.first?.id, recordID)
         XCTAssertEqual(offline.torrents.first?.desiredState, .running)
@@ -2133,7 +2811,10 @@ final class TransferSmokeTests: TestProfileCase {
         let recovered = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
         XCTAssertEqual(recovered.torrents.first?.desiredState, .running)
         XCTAssertEqual(recovered.torrents.first?.health, .healthy)
+        let recoveredAddCalls = await engineRef.addCallCount()
+        XCTAssertGreaterThan(recoveredAddCalls, 0)
     }
+
 
     func testWP09PressureGateBlocksHeavyWorkUntilRecovery() async throws {
         let engine = StubTransferEngine()
@@ -2148,10 +2829,13 @@ final class TransferSmokeTests: TestProfileCase {
             sleeping: false
         ))
 
-        let recordID = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))"
-        )
+        let torrent = MetainfoBuilder.singleFile(name: "pressure.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+        let recordID = addResult.recordID
         let constrainedAddCalls = await engineRef.addCallCount()
         XCTAssertEqual(constrainedAddCalls, 0, "pressure must block engine add")
         let constrained = try snapshot(from: await coordinator.processCommand(encode(
@@ -2166,6 +2850,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertGreaterThan(recoveredAddCalls, 0, "recovery must re-admit the durable record")
         XCTAssertGreaterThan(recoveredStatusCalls, 0, "normal pressure must allow status polling")
     }
+
 
     func testWP09TypedEngineFailureIsNotCollapsedToBusy() async throws {
         let engine = StubTransferEngine()
@@ -2192,12 +2877,14 @@ final class TransferSmokeTests: TestProfileCase {
         let engine = StubTransferEngine()
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
-        let marker = String(repeating: "e", count: 40)
+        let marker = "readd-marker"
+        let torrent = MetainfoBuilder.singleFile(name: marker, size: 512, pieceLength: 256, piecesCount: 1)
         await engineRef.failAdds(containing: marker)
-        _ = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(marker)"
-        )
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd = commit else { return XCTFail() }
 
         await coordinator.pumpOnce()
         let afterFirstRetry = await engineRef.addCallCount()
@@ -2205,6 +2892,7 @@ final class TransferSmokeTests: TestProfileCase {
         let afterSecondPump = await engineRef.addCallCount()
         XCTAssertEqual(afterSecondPump, afterFirstRetry, "a failed re-add must not be attempted on every pump")
     }
+
 
     func testWP09PendingInspectionBytesAreBounded() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
@@ -2245,17 +2933,17 @@ final class TransferSmokeTests: TestProfileCase {
         let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
         let inspection = try await inspect(
             coordinator,
-            source: .magnet("magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))")
+            source: .magnet(try Self.compatibleStubMagnetURI("magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))"))
         )
+        let ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
+        XCTAssertEqual(ready.phase, .readyToCommit)
         let key = IdempotencyKey()
-        let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
-        ))))
-        let replay = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
-        ))))
+        let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: ready.operationID)
+        let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
+        let replay = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
         XCTAssertEqual(first, replay, "duplicate/replay must use the bounded idempotency store")
     }
+
 
     func testWP09VolumeIdentityAndUnknownFreeSpaceAreConservative() throws {
         let directory = profile.rootURL.appendingPathComponent("volume")
@@ -2320,10 +3008,12 @@ final class TransferSmokeTests: TestProfileCase {
             safeRecovery: true,
             clearSafeRecovery: { cleared.set() }
         )
-        _ = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(String(repeating: "1", count: 40))"
-        )
+        let torrent = MetainfoBuilder.singleFile(name: "safe-mode.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd = commit else { return XCTFail() }
         let safeModeAddCalls = await engineRef.addCallCount()
         XCTAssertEqual(safeModeAddCalls, 0, "safe mode must not auto-add")
         let reply = await coordinator.processCommand(encode(.restartEngineSafely(
@@ -2336,6 +3026,7 @@ final class TransferSmokeTests: TestProfileCase {
         let reconciledAddCalls = await engineRef.addCallCount()
         XCTAssertGreaterThan(reconciledAddCalls, 0, "successful restart must reconcile durable records")
     }
+
 
     func testWP09MonitorGenerationIncludesRouteIdentity() {
         let first = SystemConditionMonitor.pathSignature(
@@ -2429,7 +3120,6 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
 
-        // Apply Low Power Mode only (thermal=nominal, memoryPressure=normal).
         await coordinator.applySystemConditions(SystemConditions(
             network: .satisfied,
             networkGeneration: 1,
@@ -2439,10 +3129,13 @@ final class TransferSmokeTests: TestProfileCase {
             sleeping: false
         ))
 
-        let recordID = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(String(repeating: "b2", count: 20))"
-        )
+        let torrent = MetainfoBuilder.singleFile(name: "low-power.bin", size: 512, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
+        let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+        ))))
+        guard case .commitAdd(let addResult) = commit else { return XCTFail() }
+        let recordID = addResult.recordID
         let lpAddCalls = await engineRef.addCallCount()
         XCTAssertEqual(lpAddCalls, 0, "Low Power Mode alone must block engine add")
 
@@ -2455,7 +3148,6 @@ final class TransferSmokeTests: TestProfileCase {
             "Low Power must surface .resourceConstrained"
         )
 
-        // Verify budget policy also agrees.
         let budget = SystemConditionPolicy.budget(for: SystemConditions(
             network: .satisfied,
             networkGeneration: 1,
@@ -2466,6 +3158,7 @@ final class TransferSmokeTests: TestProfileCase {
         ))
         XCTAssertFalse(budget.acceptsHeavyWork, "Low Power alone must set acceptsHeavyWork=false")
     }
+
 
     /// Axis 1/10: pumpOnce is a no-op during safe recovery (no busy-loop).
     func testWP09PumpOnceNoOpDuringSafeRecovery() async throws {
@@ -2589,31 +3282,33 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _, engineRef) = try await makeCoordinator(engine: engine, bus: bus)
 
-        // Make the first magnet always fail on engine add.
-        let badHash = String(repeating: "d4", count: 20)
-        await engineRef.failAdds(containing: badHash)
+        let badMarker = "bad-engine-record"
+        let badTorrent = MetainfoBuilder.singleFile(name: badMarker, size: 512, pieceLength: 256, piecesCount: 1)
+        await engineRef.failAdds(containing: badMarker)
+        let badInspection = try await inspect(coordinator, source: .torrentFileData(badTorrent))
+        let badCommit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: badInspection.operationID)
+        ))))
+        guard case .commitAdd = badCommit else { return XCTFail() }
 
-        _ = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(badHash)"
-        )
-
-        // Clear the failure so the second add succeeds.
+        // Clear the failure so a sibling durable record can still be admitted.
         await engineRef.failAdds(containing: nil)
-        let goodHash = String(repeating: "e5", count: 20)
-        let goodID = try await addMagnet(
-            coordinator,
-            uri: "magnet:?xt=urn:btih:\(goodHash)"
-        )
+        let goodTorrent = MetainfoBuilder.singleFile(name: "good-engine-record", size: 512, pieceLength: 256, piecesCount: 1)
+        let goodInspection = try await inspect(coordinator, source: .torrentFileData(goodTorrent))
+        let goodCommit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: goodInspection.operationID)
+        ))))
+        guard case .commitAdd(let goodResult) = goodCommit else { return XCTFail() }
 
         let snap = try snapshot(from: await coordinator.processCommand(encode(
             .fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
         )))
         XCTAssertEqual(snap.torrents.count, 2, "both records must exist")
-        let goodRecord = snap.torrents.first(where: { $0.id == goodID })
+        let goodRecord = snap.torrents.first(where: { $0.id == goodResult.recordID })
         XCTAssertEqual(goodRecord?.health, .healthy,
                        "the good record must be healthy despite a sibling failing")
     }
+
 
     /// Axis 9 (budget): SystemConditionPolicy constrainedVsBalanced budget differences.
     func testWP09BudgetConstrainedVsBalancedLimitsApplied() {
@@ -2666,7 +3361,15 @@ final class TransferSmokeTests: TestProfileCase {
     func testConcurrentMixedCommandsAllResolve() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
-        let inspection = try await inspect(coordinator, source: .magnet("magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))"))
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet(try Self.compatibleStubMagnetURI("magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))"))
+        )
+        if inspection.phase == .retrievingMetadata {
+            _ = try resultPayload(from: await coordinator.processCommand(encode(.pollAddOperation(
+                PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+            ))))
+        }
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
             CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
         ))))
@@ -2996,15 +3699,99 @@ final class TransferSmokeTests: TestProfileCase {
         return (coordinator, store, engine)
     }
 
-    private func addMagnet(_ coordinator: TransferCoordinator, uri: String, startPaused: Bool? = nil) async throws -> TorrentRecordID {
-        let inspection = try await inspect(coordinator, source: .magnet(uri))
+    private func pollAddOperationUntilReady(
+        _ coordinator: TransferCoordinator,
+        inspection: AddSourceInspection,
+        maxPolls: Int = 8
+    ) async throws -> AddSourceInspection {
+        guard maxPolls > 0 else {
+            XCTFail("pollAddOperation requires a positive bounded poll cap")
+            throw NSError(domain: "TransferSmokeTests", code: 11)
+        }
+        var current = inspection
+        guard current.phase == .retrievingMetadata else {
+            return current
+        }
+        for attempt in 1...maxPolls {
+            let payload = try resultPayload(from: await coordinator.processCommand(encode(
+                .pollAddOperation(PollAddOperationRequest(
+                    requestID: RequestID(),
+                    operationID: current.operationID
+                ))
+            )))
+            guard case .pollAddOperation(let result) = payload else {
+                XCTFail("pollAddOperation returned an unexpected payload on attempt \(attempt)")
+                throw NSError(domain: "TransferSmokeTests", code: 12)
+            }
+            guard let updated = result.inspection else {
+                XCTFail("pollAddOperation omitted inspection on attempt \(attempt); phase=\(result.phase.rawValue)")
+                throw NSError(domain: "TransferSmokeTests", code: 13)
+            }
+            current = updated
+            switch result.phase {
+            case .readyToCommit:
+                return updated
+            case .failed:
+                XCTFail("pollAddOperation failed on attempt \(attempt); observed phase=failed failure=\(String(describing: result.failure))")
+                throw NSError(domain: "TransferSmokeTests", code: 14)
+            case .retrievingMetadata:
+                continue
+            }
+        }
+        XCTFail("pollAddOperation timed out after \(maxPolls) attempts; observed phase=\(current.phase.rawValue), operationID=\(current.operationID)")
+        throw NSError(domain: "TransferSmokeTests", code: 15)
+    }
+
+    private func addMagnet(
+        _ coordinator: TransferCoordinator,
+        uri: String,
+        startPaused: Bool? = nil,
+        preserveURI: Bool = false
+    ) async throws -> TorrentRecordID {
+        let sourceURI = preserveURI ? uri : try Self.compatibleStubMagnetURI(uri)
+        let inspection = try await inspect(coordinator, source: .magnet(sourceURI))
+        let ready: AddSourceInspection
+        if inspection.phase == .retrievingMetadata {
+            ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
+        } else {
+            ready = inspection
+        }
+        guard ready.phase == .readyToCommit else {
+            XCTFail("addMagnet must commit only after readyToCommit; observed phase=\(ready.phase.rawValue)")
+            throw NSError(domain: "TransferSmokeTests", code: 16)
+        }
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, startPaused: startPaused)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID, startPaused: startPaused)
         ))))
         guard case .commitAdd(let addResult) = commit else {
             throw NSError(domain: "test", code: 6, userInfo: [NSLocalizedDescriptionKey: "unexpected \(commit)"])
         }
         return addResult.recordID
+    }
+
+
+    /// The stub engine synthesizes a fixed single-file metainfo from a magnet's
+    /// display name. Generate a matching hash so D7/D9 identity validation is
+    /// exercised instead of rejecting an arbitrary placeholder hash.
+    private static func compatibleStubMagnetURI(_ uri: String) throws -> String {
+        let original = try MagnetParser.parse(uri)
+        let name = "stub-\(original.infoHashHex)"
+        let fixture = MetainfoBuilder.singleFile(
+            name: name,
+            size: 1_024,
+            pieceLength: 256,
+            piecesCount: 4,
+            trackers: original.trackers
+        )
+        let hash = try MetainfoParser.parse(fixture).infoHashHex
+        var components = URLComponents()
+        components.scheme = "magnet"
+        components.queryItems = [
+            URLQueryItem(name: "xt", value: "urn:btih:\(hash)"),
+            URLQueryItem(name: "dn", value: name),
+            URLQueryItem(name: "x-test-original", value: original.infoHashHex)
+        ] + original.trackers.map { URLQueryItem(name: "tr", value: $0) }
+        return try XCTUnwrap(components.string)
     }
 
     /// Launches a 127.0.0.1 loopback HTTP server (python3, ephemeral port)
@@ -3140,6 +3927,44 @@ final class TransferSmokeTests: TestProfileCase {
             ("info", info),
         ])
     }
+    private static func hybridSingleFile() -> Data {
+        let piecesRoot = Data(repeating: 0x42, count: 32)
+        let fileLeaf = BencodeBuilder.encode(dictionary: [
+            ("", BencodeBuilder.encode(dictionary: [
+                ("length", BencodeBuilder.encode(integer: 1_024)),
+                ("pieces root", BencodeBuilder.encode(bytes: piecesRoot)),
+            ])),
+        ])
+        let fileTree = BencodeBuilder.encode(dictionary: [
+            ("hybrid.bin", fileLeaf),
+        ])
+        let info = BencodeBuilder.encode(dictionary: [
+            ("file tree", fileTree),
+            ("length", BencodeBuilder.encode(integer: 1_024)),
+            ("meta version", BencodeBuilder.encode(integer: 2)),
+            ("name", BencodeBuilder.encode(string: "hybrid.bin")),
+            ("piece length", BencodeBuilder.encode(integer: 16 * 1024)),
+            ("pieces", BencodeBuilder.encode(bytes: BencodeBuilder.pieceHashes(count: 20))),
+        ])
+        return BencodeBuilder.encode(dictionary: [
+            ("info", info),
+            ("piece layers", BencodeBuilder.encode(dictionary: [String: Data]())),
+        ])
+    }
+
+    private static func resumeEnvelope(containing data: Data) throws -> Data {
+        let root = try BencodeParser.parse(data)
+        guard case .dictionary(let top, _) = root,
+              let info = top.value(for: "info") else {
+            throw MetainfoError.missingInfo
+        }
+        return BencodeBuilder.encode(dictionary: [
+            ("announce", BencodeBuilder.encode(string: "resume://metadata")),
+            ("info", data.subdata(in: info.span)),
+            ("resume", BencodeBuilder.encode(bytes: Data("state".utf8))),
+        ])
+    }
+
 
     private func encode(_ command: EngineCommandV1) -> Data {
         (try? JSONEncoder().encode(IPCEnvelope.request(command))) ?? Data()
@@ -3405,7 +4230,541 @@ final class TransferSmokeTests: TestProfileCase {
         let count = await bus.sinkCount()
         XCTAssertEqual(count, 0, "unregistering an unknown ID must be a no-op")
     }
+    // MARK: - WP22.D8 Ephemeral Magnet Metadata Preflight Tests
+
+    func testMagnetInspectReturnsRetrievingMetadataPhase() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, store, engineRef) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+
+        XCTAssertEqual(inspection.phase, AddInspectionPhase.retrievingMetadata)
+        XCTAssertNil(inspection.files)
+        XCTAssertEqual(inspection.displayName, "MagnetTest")
+        let durableTorrents = try await store.allTorrents()
+        XCTAssertTrue(durableTorrents.isEmpty, "Magnet preflight must not create a durable record before commit")
+
+        let addCalls = await engineRef.addCallCount()
+        XCTAssertEqual(addCalls, 1)
+        let spec = await engineRef.lastAddSpecification()
+        XCTAssertEqual(spec?.metadataOnly, true)
+    }
+
+    func testPollFlipsToReadyToCommitWithFileEntriesWhenMetadataIsResolved() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let torrentData = MetainfoBuilder.multiFile(
+            files: [("file1.bin", 512), ("sub/file2.bin", 1024)],
+            pieceLength: 256,
+            piecesCount: 6,
+            name: "ResolvedMagnet"
+        )
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let magnetURI = "magnet:?xt=urn:btih:\(v1Hex)&dn=ResolvedMagnet"
+
+        let initialInspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        XCTAssertEqual(initialInspection.phase, AddInspectionPhase.retrievingMetadata)
+
+        let engineID = "stub-1"
+        await engine.setResumeData(torrentData, for: engineID)
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: engineID,
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "ResolvedMagnet",
+                totalBytes: 1536
+            )
+        ])
+
+        let pollReply = await coordinator.processCommand(encode(.pollAddOperation(
+            PollAddOperationRequest(requestID: RequestID(), operationID: initialInspection.operationID)
+        )))
+        let payload = try resultPayload(from: pollReply)
+        guard case .pollAddOperation(let pollResult) = payload else {
+            return XCTFail("Expected pollAddOperation result")
+        }
+
+        XCTAssertEqual(pollResult.phase, AddInspectionPhase.readyToCommit)
+        XCTAssertNotNil(pollResult.inspection)
+        XCTAssertEqual(pollResult.inspection?.displayName, "ResolvedMagnet")
+        XCTAssertEqual(pollResult.inspection?.files?.count, 2)
+        XCTAssertEqual(pollResult.inspection?.files?.map(\.path), ["file1.bin", "sub/file2.bin"])
+    }
+
+    func testCommitAddAppliesGuardedCommitThenDurableRecord() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let torrentData = MetainfoBuilder.singleFile(name: "MagnetTest.bin", size: 2048, pieceLength: 256, piecesCount: 8)
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let magnetURI = "magnet:?xt=urn:btih:\(v1Hex)&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+
+        let engineID = "stub-1"
+        await engine.setResumeData(torrentData, for: engineID)
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: engineID,
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "MagnetTest.bin",
+                totalBytes: 2048
+            )
+        ])
+
+        _ = try resultPayload(from: await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID))
+        )))
+
+        let commitPayload = try resultPayload(from: await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                startPaused: true
+            ))
+        )))
+        guard case .commitAdd(let commitResult) = commitPayload else {
+            return XCTFail("Expected commitAdd result")
+        }
+
+        let lastCommit = await engine.lastCommitMetadataOnlyCall()
+        XCTAssertEqual(lastCommit?.torrentID, engineID)
+        XCTAssertEqual(lastCommit?.priorities, [4])
+        XCTAssertEqual(lastCommit?.paused, true)
+
+        let allTorrents = try await store.allTorrents()
+        XCTAssertEqual(allTorrents.count, 1)
+        XCTAssertEqual(allTorrents.first?.id, commitResult.recordID.rawValue.uuidString)
+
+        let removedCount = await engine.removedCount(for: engineID)
+        XCTAssertEqual(removedCount, 0, "Promoted engine handle must survive commit")
+    }
+
+    func testCancelAddRemovesHandleAndOperation() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+
+        let cancelReply = await coordinator.processCommand(encode(
+            .cancelAdd(CancelAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID
+            ))
+        ))
+        let ack = try resultPayload(from: cancelReply)
+        XCTAssertEqual(ack, SuccessPayload.ack)
+
+        let removedCount = await engine.removedCount(for: "stub-1")
+        XCTAssertEqual(removedCount, 1)
+
+        let pollReply = await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID))
+        ))
+        let envelope = decode(IPCEnvelope.self, from: pollReply)
+        guard case .failure(let fault) = envelope.result else {
+            return XCTFail("Expected failure fault for polling cancelled operation")
+        }
+        XCTAssertEqual(fault.code, .operationNotFound)
+    }
+
+    func testDuplicateLiveMagnetReturnsSameOperationID() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection1 = try await inspect(coordinator, source: .magnet(magnetURI))
+        let inspection2 = try await inspect(coordinator, source: .magnet(magnetURI))
+
+        XCTAssertEqual(inspection1.operationID, inspection2.operationID)
+        let addCalls = await engine.addCallCount()
+        XCTAssertEqual(addCalls, 1, "Duplicate live magnet must not spawn a second engine handle")
+    }
+    func testDuplicateDurableRecordReturnsExistingRecordIDOnCommit() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let torrentData = MetainfoBuilder.singleFile(name: "MagnetTest.bin", size: 2048, pieceLength: 256, piecesCount: 8)
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let magnetURI = "magnet:?xt=urn:btih:\(v1Hex)&dn=MagnetTest"
+
+        let inspection1 = try await inspect(coordinator, source: .magnet(magnetURI))
+
+        await engine.setResumeData(torrentData, for: "stub-1")
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: "stub-1",
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "MagnetTest.bin",
+                totalBytes: 2048
+            )
+        ])
+        _ = try resultPayload(from: await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection1.operationID))
+        )))
+        let commit1Payload = try resultPayload(from: await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection1.operationID))
+        )))
+        guard case .commitAdd(let firstCommitResult) = commit1Payload else {
+            return XCTFail("Expected commitAdd result")
+        }
+
+        let addCallsBefore = await engine.addCallCount()
+        let inspection2 = try await inspect(coordinator, source: .magnet(magnetURI))
+        XCTAssertEqual(inspection2.phase, AddInspectionPhase.readyToCommit, "Duplicate inspect must return readyToCommit immediately")
+        let addCallsAfter = await engine.addCallCount()
+        XCTAssertEqual(addCallsAfter, addCallsBefore, "Duplicate inspect must not invoke engine.add")
+
+        let commit2Payload = try resultPayload(from: await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection2.operationID))
+        )))
+        guard case .commitAdd(let secondCommitResult) = commit2Payload else {
+            return XCTFail("Expected commitAdd result for duplicate durable record")
+        }
+        XCTAssertEqual(secondCommitResult.recordID, firstCommitResult.recordID)
+    }
+    func testRestartReconciliationRemovesOrphanEngineHandle() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: "orphan-handle-99",
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 0,
+                seedsTotal: 0,
+                activity: .idle,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "Orphan",
+                totalBytes: 1024
+            )
+        ])
+
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        await coordinator.pumpOnce()
+
+        let removedCount = await engine.removedCount(for: "orphan-handle-99")
+        XCTAssertEqual(removedCount, 1, "Restart reconciliation must remove orphan engine handle lacking durable record")
+    }
+
+    func testCommitDuringRetrievingMetadataFailsTyped() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        XCTAssertEqual(inspection.phase, AddInspectionPhase.retrievingMetadata)
+
+        let commitReply = await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+        ))
+        let envelope = decode(IPCEnvelope.self, from: commitReply)
+        guard case .failure(let fault) = envelope.result else {
+            return XCTFail("Expected failure fault when committing during retrievingMetadata phase")
+        }
+        XCTAssertEqual(fault.code, .invalidPayload)
+    }
+
+    func testIdentityMismatchStaysRetrieving() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        XCTAssertEqual(inspection.phase, AddInspectionPhase.retrievingMetadata)
+
+        let mismatchedData = MetainfoBuilder.singleFile(name: "OtherTorrent.bin", size: 4096, pieceLength: 256, piecesCount: 16)
+        let engineID = "stub-1"
+        await engine.setResumeData(mismatchedData, for: engineID)
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: engineID,
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "OtherTorrent.bin",
+                totalBytes: 4096
+            )
+        ])
+
+        let pollReply = await coordinator.processCommand(encode(.pollAddOperation(
+            PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+        )))
+        let payload = try resultPayload(from: pollReply)
+        guard case .pollAddOperation(let pollResult) = payload else {
+            return XCTFail("Expected pollAddOperation result")
+        }
+
+        XCTAssertEqual(pollResult.phase, AddInspectionPhase.retrievingMetadata, "Identity mismatch must stay retrievingMetadata")
+    }
+
+    func testConcurrentPollRejectsStaleGenerationAndDefersCancelCleanup() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let torrentData = MetainfoBuilder.singleFile(
+            name: "MagnetTest.bin",
+            size: 2048,
+            pieceLength: 256,
+            piecesCount: 8
+        )
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let inspection = try await inspect(
+            coordinator,
+            source: .magnet("magnet:?xt=urn:btih:\(v1Hex)&dn=MagnetTest")
+        )
+        await engine.setResumeData(torrentData, for: "stub-1")
+
+        let gate = ResumeRequestGate()
+        await engine.setResumeRequestGate(gate)
+        let firstPoll = encode(.pollAddOperation(
+            PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+        ))
+        let secondPoll = encode(.pollAddOperation(
+            PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
+        ))
+
+        let firstTask = Task {
+            await coordinator.processCommand(firstPoll)
+        }
+        await gate.waitUntilEntered(count: 1)
+        let secondTask = Task {
+            await coordinator.processCommand(secondPoll)
+        }
+        await gate.waitUntilEntered(count: 2)
+
+        let cancelPayload = try resultPayload(from: await coordinator.processCommand(encode(
+            .cancelAdd(CancelAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID
+            ))
+        )))
+        XCTAssertEqual(cancelPayload, .ack)
+        let removedCount = await engine.removedCount(for: "stub-1")
+        XCTAssertEqual(
+            removedCount,
+            0,
+            "Cancel must not remove a handle while metadata polls are in flight"
+        )
+
+        await gate.release()
+        let replies = await [firstTask.value, secondTask.value]
+        var readyCount = 0
+        var staleCount = 0
+        for reply in replies {
+            let envelope = decode(IPCEnvelope.self, from: reply)
+            guard let result = envelope.result else {
+                XCTFail("Expected poll result")
+                continue
+            }
+            switch result {
+            case .success(.pollAddOperation(let pollResult)):
+                readyCount += 1
+                XCTAssertEqual(pollResult.phase, .readyToCommit)
+            case .failure(let fault):
+                staleCount += 1
+                XCTAssertEqual(fault.code, .operationNotFound)
+            default:
+                XCTFail("Expected pollAddOperation result or stale-generation fault")
+            }
+        }
+        XCTAssertEqual(readyCount, 1, "Only the newest poll generation may write back")
+        XCTAssertEqual(staleCount, 1, "The stale poll generation must be rejected")
+
+        await engine.setResumeRequestGate(nil)
+        let finalPayload = try resultPayload(from: await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(
+                requestID: RequestID(),
+                operationID: inspection.operationID
+            ))
+        )))
+        guard case .pollAddOperation(let finalResult) = finalPayload else {
+            return XCTFail("Expected final pollAddOperation result")
+        }
+        XCTAssertEqual(finalResult.phase, .readyToCommit)
+    }
+
+    func testCommitMetadataOnlyFailureLeavesOperationRetryable() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let torrentData = MetainfoBuilder.singleFile(name: "MagnetTest.bin", size: 2048, pieceLength: 256, piecesCount: 8)
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let magnetURI = "magnet:?xt=urn:btih:\(v1Hex)&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        let engineID = "stub-1"
+        await engine.setResumeData(torrentData, for: engineID)
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: engineID,
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "MagnetTest.bin",
+                totalBytes: 2048
+            )
+        ])
+
+        _ = try resultPayload(from: await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID))
+        )))
+
+        await engine.failNextCommitMetadataOnly(with: EngineFault.engineNotReady(details: "simulated failure"))
+
+        let failedCommitReply = await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+        ))
+        let failedEnvelope = decode(IPCEnvelope.self, from: failedCommitReply)
+        guard case .failure(let fault) = failedEnvelope.result else {
+            return XCTFail("Expected failure on failed commitMetadataOnly")
+        }
+        XCTAssertEqual(fault.code, .engineNotReady)
+
+        let retryCommitPayload = try resultPayload(from: await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+        )))
+        guard case .commitAdd(let commitResult) = retryCommitPayload else {
+            return XCTFail("Expected successful commitAdd on retry")
+        }
+        XCTAssertNotNil(commitResult.recordID)
+    }
+
+    func testTTLExpiryRemovesIdleOrphans() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, _, _) = try await makeCoordinator(engine: engine, bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        let engineID = "stub-1"
+
+        await coordinator.agePendingOperation(inspection.operationID, bySeconds: 301)
+
+        await coordinator.pumpOnce()
+        let removedCount = await engine.removedCount(for: engineID)
+        XCTAssertGreaterThanOrEqual(removedCount, 1, "TTL expiry must remove idle orphan engine handle")
+
+        let pollReply = await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID))
+        ))
+        let envelope = decode(IPCEnvelope.self, from: pollReply)
+        guard case .failure(let fault) = envelope.result else {
+            return XCTFail("Expected operationNotFound fault for expired operation")
+        }
+        XCTAssertEqual(fault.code, .operationNotFound)
+    }
+
+    func testCancelEmitsNoInspectionInvalidated() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let (coordinator, _, _) = try await makeCoordinator(engine: StubTransferEngine(), bus: bus)
+        let magnetURI = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=MagnetTest"
+
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        let deliveries = DeliveryCollector()
+        await bus.register(deliveries.sink())
+        let cancelReply = await coordinator.processCommand(encode(
+            .cancelAdd(CancelAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+        ))
+        let ack = try resultPayload(from: cancelReply)
+        XCTAssertEqual(ack, SuccessPayload.ack)
+
+        let publishedEvents = await deliveries.events(timeoutNanoseconds: 50_000_000)
+        let invalidatedEvents = publishedEvents.filter {
+            if case .inspectionInvalidated = $0 { return true }
+            return false
+        }
+        XCTAssertTrue(invalidatedEvents.isEmpty, "Cancel add must emit no inspectionInvalidated events")
+    }
 }
+
+/// Thread-safe observation box for state captured from inside a stub engine
+/// call (used to prove record mutation ordering around the engine barrier).
+private final class SelectionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedRevision: UInt64?
+    private var storedSelection: [String: FileSelectionPriority]?
+
+    func record(revision: UInt64, selection: [String: FileSelectionPriority]) {
+        lock.lock()
+        defer { lock.unlock() }
+        storedRevision = revision
+        storedSelection = selection
+    }
+
+    var observation: (revision: UInt64?, selection: [String: FileSelectionPriority]?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (storedRevision, storedSelection)
+    }
+}
+
 
 private final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
@@ -3432,6 +4791,9 @@ actor StubTransferEngine: TransferEngine {
     private var nextID = 0
     private var addCalls = 0
     private var statusCalls = 0
+    private var resumeDataByID: [String: Data] = [:]
+    private var resumeRequests: [String] = []
+    private var resumeRequestGate: ResumeRequestGate?
     private var restartCalls = 0
     private var statuses: [String: TransferTorrentStatus] = [:]
     private var settingsHistory: [EngineSettings] = []
@@ -3442,6 +4804,10 @@ actor StubTransferEngine: TransferEngine {
     private var resourceBudgetHistory: [EngineResourceBudget] = []
     private var appliedLimits: [String: TorrentinoIPC.TransferLimits] = [:]
     private var appliedTrackerTiers: [String: [[String]]] = [:]
+    private var appliedFilePriorities: [String: [[UInt8]]] = [:]
+    private var fileSelectionCalls: [(torrentID: String, priorities: [UInt8])] = []
+    private var failNextFileSelectionError: EngineFault?
+    private var fileSelectionHook: (@Sendable () async -> Void)?
     private var reannouncedIDs: [String] = []
     private var recheckedIDs: [String] = []
     private var movedStorage: [(torrentID: String, destinationPath: String)] = []
@@ -3460,6 +4826,8 @@ actor StubTransferEngine: TransferEngine {
     /// marker (per-record engine fault injection).
     private var failAddMarker: String?
 
+    private var commitMetadataOnlyCalls: [(torrentID: String, priorities: [UInt8], paused: Bool)] = []
+    private var failNextCommitMetadataOnlyError: EngineFault?
     var isStarted: Bool { started }
 
     func start(configuration: EngineSettings?) async throws {
@@ -3495,6 +4863,18 @@ actor StubTransferEngine: TransferEngine {
         }
         if failTorrentMutation { throw EngineStubError.torrentMutationFailed }
         appliedLimits[torrentID] = limits
+    }
+
+    func setFileSelection(torrentID: String, priorities: [UInt8]) async throws {
+        fileSelectionCalls.append((torrentID, priorities))
+        if let error = failNextFileSelectionError {
+            failNextFileSelectionError = nil
+            throw error
+        }
+        appliedFilePriorities[torrentID, default: []].append(priorities)
+        if let fileSelectionHook {
+            await fileSelectionHook()
+        }
     }
 
     func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws {
@@ -3565,6 +4945,22 @@ actor StubTransferEngine: TransferEngine {
         appliedLimits[torrentID]
     }
 
+    func failNextFileSelection(with error: EngineFault) {
+        failNextFileSelectionError = error
+    }
+
+    func setFileSelectionHook(_ hook: (@Sendable () async -> Void)?) {
+        fileSelectionHook = hook
+    }
+
+    func fileSelectionCallCount() -> Int {
+        fileSelectionCalls.count
+    }
+
+    func lastFileSelectionCall() -> (torrentID: String, priorities: [UInt8])? {
+        fileSelectionCalls.last
+    }
+
     func trackerTiers(for torrentID: String) -> [[String]]? {
         appliedTrackerTiers[torrentID]
     }
@@ -3583,14 +4979,59 @@ actor StubTransferEngine: TransferEngine {
         }
     }
 
+    func setResumeData(_ data: Data, for torrentID: String) {
+        resumeDataByID[torrentID] = data
+    }
+    func hasResumeData(for torrentID: String) -> Bool {
+        resumeDataByID[torrentID] != nil
+    }
+
+    func lastAddedID() -> String? {
+        nextID > 0 ? "stub-\(nextID)" : nil
+    }
+
+    fileprivate func setResumeRequestGate(_ gate: ResumeRequestGate?) {
+        resumeRequestGate = gate
+    }
+
+    func resumeDataRequestCount(for torrentID: String) -> Int {
+        resumeRequests.filter { $0 == torrentID }.count
+    }
+
     func add(specification: AddSpecificationDTO) async throws -> AddResultDTO {
         addCalls += 1
         addSpecifications.append(specification)
-        if let marker = failAddMarker, specification.magnetURI?.contains(marker) == true {
-            throw EngineStubError.addFailed
+        if let marker = failAddMarker {
+            if specification.magnetURI?.contains(marker) == true || specification.torrentFile.map({ String(decoding: $0, as: UTF8.self) })?.contains(marker) == true {
+                throw EngineStubError.addFailed
+            }
         }
         nextID += 1
-        return AddResultDTO(torrentID: "stub-\(nextID)", infoHash: "stub", name: "stub", totalSize: -1)
+        let torrentID = "stub-\(nextID)"
+        if specification.metadataOnly, let magnetURI = specification.magnetURI, resumeDataByID[torrentID] == nil {
+            if let parsed = try? MagnetParser.parse(magnetURI) {
+                let infoHashHex = TorrentAdder.hexString(parsed.infoHashV1)
+                let name = parsed.displayName ?? "magnet-\(infoHashHex.prefix(8))"
+                let data = MetainfoBuilder.singleFile(name: name, size: 1024, pieceLength: 256, piecesCount: 4, trackers: parsed.trackers)
+                resumeDataByID[torrentID] = data
+                statuses[torrentID] = TransferTorrentStatus(
+                    engineID: torrentID,
+                    progressFraction: 0,
+                    downloadedBytes: 0,
+                    uploadedBytes: 0,
+                    downloadBytesPerSec: 0,
+                    uploadBytesPerSec: 0,
+                    peersConnected: 1,
+                    seedsTotal: 1,
+                    activity: .downloading,
+                    health: .healthy,
+                    etaSeconds: nil,
+                    metadataName: name,
+                    totalBytes: 1024
+                )
+            }
+        }
+        return AddResultDTO(torrentID: torrentID, infoHash: "stub", name: "stub", totalSize: -1)
     }
 
 
@@ -3646,7 +5087,38 @@ actor StubTransferEngine: TransferEngine {
     func setRecheckHook(_ hook: (@Sendable () async -> Void)?) {
         recheckHook = hook
     }
+    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
+        commitMetadataOnlyCalls.append((torrentID, priorities, paused))
+        if let error = failNextCommitMetadataOnlyError {
+            failNextCommitMetadataOnlyError = nil
+            throw error
+        }
+    }
 
+    func failNextCommitMetadataOnly(with error: EngineFault) {
+        failNextCommitMetadataOnlyError = error
+    }
+
+    func commitMetadataOnlyCallCount() -> Int {
+        commitMetadataOnlyCalls.count
+    }
+
+    func lastCommitMetadataOnlyCall() -> (torrentID: String, priorities: [UInt8], paused: Bool)? {
+        commitMetadataOnlyCalls.last
+    }
+
+
+    func requestResumeData(torrentID: String) async throws -> Data {
+        resumeRequests.append(torrentID)
+        if let resumeRequestGate {
+            await resumeRequestGate.markEntered()
+            await resumeRequestGate.waitForRelease()
+        }
+        guard let data = resumeDataByID[torrentID] else {
+            throw EngineStubError.resumeDataUnavailable
+        }
+        return data
+    }
 
     func statusUpdate() async throws -> [TransferTorrentStatus] {
         statusCalls += 1
@@ -3657,7 +5129,6 @@ actor StubTransferEngine: TransferEngine {
         .zero
     }
 }
-
 extension StubTransferEngine: CreatorIndependentVerifier {
     func verifyCreatorTorrent(data: Data) async throws -> IndependentMetainfoIdentity {
         let parsed = try MetainfoParser.parse(data)
@@ -3665,10 +5136,53 @@ extension StubTransferEngine: CreatorIndependentVerifier {
     }
 }
 
+
+private actor ResumeRequestGate {
+    private var enteredCount = 0
+    private var released = false
+    private var enteredWaiters: [
+        (count: Int, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markEntered() {
+        enteredCount += 1
+        let readyWaiters = enteredWaiters.filter { $0.count <= enteredCount }
+        enteredWaiters.removeAll { $0.count <= enteredCount }
+        readyWaiters.forEach { $0.continuation.resume() }
+    }
+
+    func hasEntered(count: Int = 1) -> Bool {
+        enteredCount >= count
+    }
+
+    func waitUntilEntered(count: Int = 1) async {
+        guard enteredCount < count else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            enteredWaiters.append((count: count, continuation: continuation))
+        }
+    }
+
+    func waitForRelease() async {
+        guard !released else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 private enum EngineStubError: Error {
     case addFailed
     case settingsApplyFailed
     case torrentMutationFailed
+    case resumeDataUnavailable
 }
 
 // MARK: - URLProtocol stub
@@ -3730,7 +5244,15 @@ private final class HangURLProtocol: URLProtocol, @unchecked Sendable {
 
 private actor DeliveryCollector {
     private var collected: [EngineEventV1] = []
-    private var waiting: CheckedContinuation<Void, Never>?
+
+    /// One-shot wake slot. `token` lets a late timeout prove it still owns
+    /// the installed waiter before resuming it.
+    private struct Waiter {
+        let token: UUID
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var waiting: Waiter?
 
     func sink() -> TransferEventBus.Sink {
         TransferEventBus.Sink(id: UUID()) { [weak self] events in
@@ -3741,21 +5263,35 @@ private actor DeliveryCollector {
 
     private func record(_ events: [EngineEventV1]) {
         collected.append(contentsOf: events)
-        waiting?.resume()
+        resumeWaiting(id: nil)
+    }
+
+    /// Resumes the installed waiter exactly once: an event (`nil`) or the
+    /// matching timeout token wins; a stale timeout for a superseded waiter
+    /// is dropped. Cleared before resume so neither path double-resumes.
+    private func resumeWaiting(id: UUID?) {
+        guard let waiter = waiting else { return }
+        if let id, id != waiter.token { return }
         waiting = nil
+        waiter.continuation.resume()
     }
 
     func events(timeoutNanoseconds: UInt64) async -> [EngineEventV1] {
         guard collected.isEmpty else { return collected }
+        let token = UUID()
         await withCheckedContinuation { continuation in
-            waiting = continuation
+            waiting = Waiter(token: token, continuation: continuation)
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                await self?.resumeWaiting(id: token)
+            }
         }
         return collected
     }
     func events(atLeast count: Int) async -> [EngineEventV1] {
         guard collected.count < count else { return collected }
         await withCheckedContinuation { continuation in
-            waiting = continuation
+            waiting = Waiter(token: UUID(), continuation: continuation)
         }
         return collected
     }

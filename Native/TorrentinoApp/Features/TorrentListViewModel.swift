@@ -2,9 +2,8 @@
 // Role: consumes the agent's authoritative snapshot + event stream (deltas,
 // snapshotRequired, torrentAdded/Removed, inspectionInvalidated) and projects
 // them into observable state for the transfer table, detail pane and status
-// bar. Falls back to a 100-row demo fixture ONLY when the agent is
-// unreachable, so the table's identity/scroll/focus behavior can be validated
-// without a running engine.
+// bar. An unreachable transport lands in a truthful empty library plus an
+// actionable engine-unavailable note; it never synthesizes demo rows.
 // Must-not: invent torrents, cache agent state as source of truth, mutate
 // engine state except through the v1 command lane, or perform file IO on the
 // main actor.
@@ -22,7 +21,6 @@ final class TorrentListViewModel: ObservableObject {
     @Published private(set) var torrents: [TorrentSnapshot] = []
     @Published private(set) var engineRevision: UInt64 = 0
     @Published private(set) var instanceID: UUID?
-    @Published private(set) var usingFixture = false
     @Published private(set) var connectionNote: String?
     @Published private(set) var lifecyclePhase: EngineLifecycleState?
     @Published private(set) var lifecycleDegradedReason: String?
@@ -79,6 +77,40 @@ final class TorrentListViewModel: ObservableObject {
         showAddSheet = true
     }
 
+    /// One-shot LaunchServices/browser magnet token (WP22.D9). Delivery only
+    /// presents the existing Add sheet; the sheet consumes the URI exactly
+    /// once to begin inspection, so no route reaches the engine commit lane.
+    @Published private(set) var pendingAddMagnetURI: String?
+
+    func presentIncomingMagnet(_ uri: String) {
+        let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard MagnetURIRouting.isMagnetURI(trimmed) else { return }
+        guard acceptIncomingMagnetURI(trimmed) else { return }
+        pendingAddMagnetURI = trimmed
+        showAddSheet = true
+    }
+
+    /// Atomically takes the pending magnet once the Add sheet can present it.
+    func consumePendingMagnetURI() -> String? {
+        let uri = pendingAddMagnetURI
+        pendingAddMagnetURI = nil
+        return uri
+    }
+
+    private var recentInboundMagnetURIs: [String: Date] = [:]
+
+    /// Same duplicate window as the torrent drop path; AppDelegate's own
+    /// cold/warm dedup stays authoritative for LaunchServices bursts.
+    private func acceptIncomingMagnetURI(_ uri: String) -> Bool {
+        let now = Date()
+        if let last = recentInboundMagnetURIs[uri], now.timeIntervalSince(last) < 2.0 {
+            return false
+        }
+        recentInboundMagnetURIs[uri] = now
+        recentInboundMagnetURIs = recentInboundMagnetURIs.filter { now.timeIntervalSince($0.value) < 10.0 }
+        return true
+    }
+
     /// Atomically takes the first Finder service request once ContentView is
     /// ready to present the create sheet.
     func consumePendingCreateSourcePath() -> String? {
@@ -106,6 +138,9 @@ final class TorrentListViewModel: ObservableObject {
 
     let client: EngineClient
     private let sendRemovalCommand: @Sendable (EngineCommandV1) async throws -> SuccessPayload
+    /// WP22.D9: the inspect/poll/cancel/commit lane for the magnet preflight.
+    /// Tests inject a scripted sender; production defaults to the client.
+    private let sendAddCommand: @Sendable (EngineCommandV1) async throws -> SuccessPayload
     private(set) var directoryStack: [String] = []
     private var fileCursor: PageCursor?
     private var filesLoadRequestID = UUID()
@@ -116,12 +151,22 @@ final class TorrentListViewModel: ObservableObject {
     private var snapshotBackstopTask: Task<Void, Never>?
     private var appActivationObserver: NSObjectProtocol?
     private var snapshotRequestGeneration: UInt64 = 0
+    /// WP-22.D10 review: push-event acceptance latch. Landing in the
+    /// engine-unavailable state closes it so delayed or reconnect-raced
+    /// batches (the client sink schedules them before the reconnect
+    /// snapshot) cannot repopulate the truthful empty library; only an
+    /// accepted authoritative snapshot reopens it.
+    private var isAcceptingEngineEvents = true
     init(
         client: EngineClient,
-        sendRemovalCommand: (@Sendable (EngineCommandV1) async throws -> SuccessPayload)? = nil
+        sendRemovalCommand: (@Sendable (EngineCommandV1) async throws -> SuccessPayload)? = nil,
+        sendAddCommand: (@Sendable (EngineCommandV1) async throws -> SuccessPayload)? = nil
     ) {
         self.client = client
         self.sendRemovalCommand = sendRemovalCommand ?? { command in
+            try await client.sendCommand(command)
+        }
+        self.sendAddCommand = sendAddCommand ?? { command in
             try await client.sendCommand(command)
         }
         appActivationObserver = NotificationCenter.default.addObserver(
@@ -174,9 +219,8 @@ final class TorrentListViewModel: ObservableObject {
     // MARK: - Lifecycle
 
     /// Connects, subscribes to the event stream, and pulls the full snapshot.
-    /// Fixtures are used only after bounded transport reconnect is exhausted;
-    /// a reachable degraded agent remains visible as a truthful empty/list
-    /// state with a lifecycle note.
+    /// Bounded transport retries end in the truthful engine-unavailable state;
+    /// a reachable degraded agent remains visible with its lifecycle note.
     func start() async {
         await client.setReconnectHandler { [weak self] in
             Task { @MainActor [weak self] in
@@ -190,7 +234,6 @@ final class TorrentListViewModel: ObservableObject {
                 try await subscribe()
                 try await fetchFullSnapshot()
                 await refreshPendingRemovals()
-                usingFixture = false
                 lifecyclePhase = .ready
                 lifecycleDegradedReason = nil
                 connectionNote = nil
@@ -212,13 +255,9 @@ final class TorrentListViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
-        usingFixture = true
-        lifecyclePhase = nil
-        lifecycleDegradedReason = nil
-        connectionNote = String(localized: "fixture.note")
-        torrents = FixtureLibrary.snapshot(count: 100)
-        engineRevision = UInt64(torrents.count)
-        if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
+        // Bounded connect attempts exhausted: land in the truthful
+        // engine-unavailable state instead of synthesizing demo rows (WP-22).
+        enterEngineUnavailableState()
     }
 
     /// Registers the event handler on the XPC queue; batches hop to MainActor.
@@ -269,13 +308,28 @@ final class TorrentListViewModel: ObservableObject {
     }
 
     private func refreshActiveSnapshot() async {
-        guard !usingFixture, !recoveryInFlight else { return }
-        try? await fetchFullSnapshot()
+        guard !recoveryInFlight else { return }
+        await refreshSnapshotLandingUnavailable()
     }
 
     private func refreshAfterAppActivation() async {
-        guard !usingFixture else { return }
-        try? await fetchFullSnapshot()
+        await refreshSnapshotLandingUnavailable()
+    }
+
+    /// Background refreshes must not silently preserve stale rows across a
+    /// dead transport (WP-22.D10 review): a transport failure lands in the
+    /// truthful unavailable state, which also invalidates any in-flight
+    /// reply and latches events until the next accepted snapshot. Retries
+    /// stay unblocked (no recovery flag is held here); non-transport
+    /// failures keep the previous silent-refresh behavior.
+    private func refreshSnapshotLandingUnavailable() async {
+        do {
+            try await fetchFullSnapshot()
+        } catch let error as EngineClientError where Self.isTransportFailure(error) {
+            enterEngineUnavailableState()
+        } catch {
+            // Non-transport failures: unchanged behavior.
+        }
     }
 
     func restartEngineSafely() {
@@ -308,13 +362,19 @@ final class TorrentListViewModel: ObservableObject {
 
     // MARK: - Event application (reconciliation)
 
-    private func apply(_ events: [EngineEventV1]) {
+    /// Internal (not public, no ForTesting surface) so app tests can replay
+    /// delayed batches through the exact delivery path production uses.
+    func apply(_ events: [EngineEventV1]) {
+        // While latched (engine unavailable) the whole batch is dropped
+        // before any mutation, revision/lifecycle update, note clearing,
+        // or notification emission.
+        guard isAcceptingEngineEvents else { return }
         var changedAuthoritativeState = false
         for event in events {
             switch event {
             case .torrentDelta(let payload):
                 let delta = payload.delta
-                guard delta.engineRevision == engineRevision + 1, !usingFixture else {
+                guard delta.engineRevision == engineRevision + 1 else {
                     Task { await recoverFromFullSnapshot() }
                     continue
                 }
@@ -348,9 +408,8 @@ final class TorrentListViewModel: ObservableObject {
                 lifecyclePhase = payload.to
                 lifecycleDegradedReason = payload.to == .degraded ? payload.degradedReason : nil
                 if payload.to == .degraded {
-                    usingFixture = false
                     connectionNote = Self.localizedLifecycleReason(payload.degradedReason)
-                } else if payload.to == .ready, !usingFixture {
+                } else if payload.to == .ready {
                     connectionNote = nil
                 }
             case .operationProgress(let payload):
@@ -409,12 +468,14 @@ final class TorrentListViewModel: ObservableObject {
                 break
             }
         }
-        if changedAuthoritativeState && !usingFixture {
+        if changedAuthoritativeState {
             NotificationManager.shared.processSnapshots(torrents)
         }
     }
 
-    private func upsert(_ snapshot: TorrentSnapshot) {
+    /// Internal (like apply) so app tests can seed an authoritative row
+    /// without instantiating the UNUserNotificationCenter-backed manager.
+    func upsert(_ snapshot: TorrentSnapshot) {
         if let index = torrents.firstIndex(where: { $0.id == snapshot.id }) {
             torrents[index] = snapshot
         } else {
@@ -435,11 +496,14 @@ final class TorrentListViewModel: ObservableObject {
 
     // MARK: - Commands
 
-    private func fetchFullSnapshot() async throws {
+    private func fetchFullSnapshot(
+        send: (@Sendable (EngineCommandV1) async throws -> SuccessPayload)? = nil
+    ) async throws {
         snapshotRequestGeneration &+= 1
         let requestGeneration = snapshotRequestGeneration
         let command = EngineCommandV1.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil))
-        guard case .snapshot(let snapshot) = try await client.sendCommand(command) else {
+        let sender = send ?? { [client] in try await client.sendCommand($0) }
+        guard case .snapshot(let snapshot) = try await sender(command) else {
             throw EngineClientError.protocolMismatch(details: "unexpected fetchSnapshot reply")
         }
         // A newer backstop/mutation fetch wins if an older XPC reply arrives
@@ -449,7 +513,10 @@ final class TorrentListViewModel: ObservableObject {
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         engineRevision = snapshot.engineRevision
         instanceID = snapshot.instanceID
-        usingFixture = false
+        // An accepted authoritative snapshot reopens push-event application
+        // (WP-22.D10 review); the unavailable note clears below unless a
+        // reachable degraded agent owns it.
+        isAcceptingEngineEvents = true
         if lifecyclePhase != .degraded {
             connectionNote = nil
         }
@@ -505,7 +572,6 @@ final class TorrentListViewModel: ObservableObject {
 
 
     private func applyReachableFault(_ error: EngineClientError) {
-        usingFixture = false
         lifecyclePhase = .degraded
         torrents.removeAll()
         selection.removeAll()
@@ -525,6 +591,35 @@ final class TorrentListViewModel: ObservableObject {
         case .protocolMismatch, .fault:
             return false
         }
+    }
+
+    /// Shared landing state for an unreachable engine transport: bounded
+    /// connect exhaustion in start() and a transport failure during snapshot
+    /// recovery both end here. Publishes the truthful empty library — never
+    /// synthetic rows — and clears every stale authoritative trace so no row,
+    /// selection, file cursor, revision or instance can leak into a later
+    /// session. Lifecycle stays unknown (an unreachable agent reports
+    /// nothing); the note carries the unavailable signal and any later
+    /// successful snapshot clears it again.
+    func enterEngineUnavailableState() {
+        // Latch event application closed and invalidate any in-flight
+        // snapshot reply BEFORE clearing state: neither a delayed event
+        // batch nor a stale fetchFullSnapshot success may repopulate rows,
+        // touch revision/lifecycle, or clear the note afterwards.
+        isAcceptingEngineEvents = false
+        snapshotRequestGeneration &+= 1
+        torrents.removeAll()
+        selection.removeAll()
+        files = []
+        filesLoading = false
+        fileCursor = nil
+        directoryStack = []
+        filesLoadRequestID = UUID()
+        engineRevision = 0
+        instanceID = nil
+        lifecyclePhase = nil
+        lifecycleDegradedReason = nil
+        connectionNote = String(localized: "error.xpc_unavailable")
     }
 
     private static func localizedLifecycleReason(_ reason: String?) -> String {
@@ -551,11 +646,9 @@ final class TorrentListViewModel: ObservableObject {
             connectionGeneration &+= 1
         } catch let error as EngineClientError {
             if Self.isTransportFailure(error) {
-                usingFixture = true
-                connectionNote = String(localized: "fixture.note")
-                torrents = FixtureLibrary.snapshot(count: 100)
-                engineRevision = UInt64(torrents.count)
-                if selection.isEmpty { selection = torrents.first.map { [$0.id] } ?? [] }
+                // Transport died mid-recovery: same truthful landing state as
+                // bounded connect exhaustion (WP-22). Never synthesize rows.
+                enterEngineUnavailableState()
             } else {
                 applyReachableFault(error)
             }
@@ -594,26 +687,208 @@ final class TorrentListViewModel: ObservableObject {
         creatorError = String(localized: "creator.fault.interrupted")
     }
 
+    // MARK: - WP22.D9 magnet metadata preflight
+
+    /// One presented magnet preflight. Mirrors the D8 inspection truthfully:
+    /// `operationID` stays nil until the agent assigns one, and commit is
+    /// impossible before `.readyToCommit`.
+    struct MagnetInspectionState: Equatable {
+        let uri: String
+        let operationID: AddOperationID?
+        let phase: AddInspectionPhase
+        let preview: AddTorrentPreview?
+        let errorMessage: String?
+
+        static func retrieving(_ uri: String) -> MagnetInspectionState {
+            MagnetInspectionState(
+                uri: uri,
+                operationID: nil,
+                phase: .retrievingMetadata,
+                preview: nil,
+                errorMessage: nil)
+        }
+    }
+
+    @Published private(set) var magnetInspection: MagnetInspectionState?
+    /// Plan §14.7 accepted poll cadence; tests shrink it for determinism.
+    var magnetPollInterval: TimeInterval = 1.0
+    private var magnetGeneration: UInt64 = 0
+    private var magnetLifecycleTask: Task<Void, Never>?
+
+    /// Begins (or replaces) the magnet preflight. Returns the lifecycle task
+    /// so callers that need deterministic completion can await it; the sheet
+    /// presents state through `magnetInspection` instead of blocking.
     @discardableResult
-    func addMagnet(_ uri: String, startPaused: Bool) async -> Bool {
+    func beginMagnetInspection(_ uri: String) -> Task<Void, Never> {
+        abandonMagnetInspection()
+        magnetGeneration &+= 1
+        let generation = magnetGeneration
+        magnetInspection = .retrieving(uri)
+        let task = Task { @MainActor in
+            await self.runMagnetRetrieval(uri, generation: generation)
+        }
+        magnetLifecycleTask = task
+        return task
+    }
+
+    /// Sheet-lifecycle cancellation: stop polling, drop the presentation, and
+    /// cancel the removed handle's agent operation exactly once. State is
+    /// cleared synchronously first, so a double abandon is a no-op and a
+    /// committed preflight (already cleared) is never cancelled.
+    func abandonMagnetInspection() {
+        magnetLifecycleTask?.cancel()
+        magnetLifecycleTask = nil
+        magnetGeneration &+= 1
+        guard let abandoned = magnetInspection else { return }
+        magnetInspection = nil
+        guard let operationID = abandoned.operationID else { return }
+        cancelMagnetOperation(operationID)
+    }
+
+    /// Sends one cancellation for an already-removed agent handle; callers
+    /// clear the owning state synchronously, keeping each cancel single-shot.
+    private func cancelMagnetOperation(_ operationID: AddOperationID) {
+        Task {
+            _ = try? await sendAddCommand(EngineCommandV1.cancelAdd(CancelAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: operationID)))
+        }
+    }
+
+    /// Explicit user confirmation gate. A retrieving or failed preflight can
+    /// never reach the existing commit lane.
+    func commitReadyMagnet(
+        saveLocation: PersistedLocation?,
+        fileSelection: [FileSelectionItem],
+        startPaused: Bool
+    ) async -> Bool {
+        guard let ready = magnetInspection,
+              ready.phase == .readyToCommit,
+              let preview = ready.preview
+        else { return false }
+        let success = await commitInspectedTorrent(
+            preview,
+            saveLocation: saveLocation,
+            fileSelection: fileSelection,
+            startPaused: startPaused)
+        if success {
+            // The ephemeral handle became a durable record; nothing left to
+            // present or cancel.
+            magnetInspection = nil
+        }
+        return success
+    }
+
+    private func runMagnetRetrieval(_ uri: String, generation: UInt64) async {
         do {
             let inspection = try await inspect(source: .magnet(uri))
-            try await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
-            lastAddError = nil
-            return true
+            if applyMagnetInspection(inspection, uri: uri, generation: generation) {
+                while !Task.isCancelled,
+                      magnetInspection?.phase == .retrievingMetadata,
+                      let operationID = magnetInspection?.operationID {
+                    try await Task.sleep(nanoseconds: UInt64(magnetPollInterval * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    let pollResult = try await pollMagnetOperation(operationID)
+                    guard applyMagnetPollResult(pollResult, uri: uri, generation: generation) else { return }
+                }
+            } else if !isCurrentMagnet(generation),
+                      inspection.operationID != magnetInspection?.operationID {
+                // A stale-but-successful inspect still created an agent
+                // handle; cancel it unless the current preflight already owns
+                // that exact ID.
+                cancelMagnetOperation(inspection.operationID)
+            }
         } catch EngineClientError.fault(let fault) {
-            lastAddError = localizedFaultDescription(fault)
-            connectionNote = lastAddError
-            return false
-        } catch let fault as EngineFault {
-            lastAddError = localizedFaultDescription(fault)
-            connectionNote = lastAddError
-            return false
+            applyMagnetFailure(localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed"), uri: uri, generation: generation)
+        } catch is CancellationError {
+            // abandonMagnetInspection owns this teardown; nothing to surface.
         } catch {
-            lastAddError = String(localized: "add.failed")
-            connectionNote = String(localized: "add.failed")
+            applyMagnetFailure(String(localized: "torrents.add.inspection_failed"), uri: uri, generation: generation)
+        }
+    }
+
+    @discardableResult
+    private func applyMagnetInspection(
+        _ inspection: AddSourceInspection,
+        uri: String,
+        generation: UInt64
+    ) -> Bool {
+        guard isCurrentMagnet(generation) else { return false }
+        if inspection.phase == .failed {
+            applyMagnetFailure(String(localized: "add.failed"), uri: uri, generation: generation)
             return false
         }
+        magnetInspection = MagnetInspectionState(
+            uri: uri,
+            operationID: inspection.operationID,
+            phase: inspection.phase,
+            preview: magnetPreview(from: inspection),
+            errorMessage: nil)
+        return true
+    }
+
+    @discardableResult
+    private func applyMagnetPollResult(
+        _ result: PollAddOperationResult,
+        uri: String,
+        generation: UInt64
+    ) -> Bool {
+        guard isCurrentMagnet(generation) else { return false }
+        switch result.phase {
+        case .readyToCommit:
+            if let inspection = result.inspection {
+                return applyMagnetInspection(inspection, uri: uri, generation: generation)
+            }
+            return true
+        case .failed:
+            let message = result.failure.map {
+                localizedFaultDescription($0, fallback: "add.failed")
+            } ?? String(localized: "add.failed")
+            applyMagnetFailure(message, uri: uri, generation: generation)
+            return false
+        case .retrievingMetadata:
+            // Truthful no-change: the spinner stays until metadata lands.
+            return true
+        }
+    }
+
+    private func applyMagnetFailure(_ message: String, uri: String, generation: UInt64) {
+        guard isCurrentMagnet(generation) else { return }
+        magnetInspection = MagnetInspectionState(
+            uri: uri,
+            operationID: magnetInspection?.operationID,
+            phase: .failed,
+            preview: nil,
+            errorMessage: message)
+    }
+
+    private func isCurrentMagnet(_ generation: UInt64) -> Bool {
+        generation == magnetGeneration && !Task.isCancelled
+    }
+
+    private func pollMagnetOperation(_ operationID: AddOperationID) async throws -> PollAddOperationResult {
+        let command = EngineCommandV1.pollAddOperation(PollAddOperationRequest(
+            requestID: RequestID(),
+            operationID: operationID))
+        guard case .pollAddOperation(let result) = try await sendAddCommand(command) else {
+            throw EngineClientError.protocolMismatch(details: "unexpected pollAddOperation reply")
+        }
+        return result
+    }
+
+    /// Projects the D8 inspected file list into the same rows the local
+    /// `.torrent` preview renders.
+    private func magnetPreview(from inspection: AddSourceInspection) -> AddTorrentPreview {
+        let files = (inspection.files ?? []).map { entry in
+            FileEntry(
+                relativePath: entry.path,
+                name: entry.path.split(separator: "/").last.map(String.init) ?? entry.path,
+                sizeBytes: entry.sizeBytes,
+                kind: .file,
+                selection: .normal)
+        }
+        return AddTorrentPreview(inspection: inspection, files: files)
     }
 
     @discardableResult
@@ -751,7 +1026,7 @@ final class TorrentListViewModel: ObservableObject {
     private func inspect(source: AddSource) async throws -> AddSourceInspection {
         let command = EngineCommandV1.inspectAddSource(
             InspectAddSourceRequest(requestID: RequestID(), source: source))
-        guard case .addSourceInspection(let inspection) = try await client.sendCommand(command) else {
+        guard case .addSourceInspection(let inspection) = try await sendAddCommand(command) else {
             throw EngineClientError.protocolMismatch(details: "unexpected inspectAddSource reply")
         }
         return inspection
@@ -774,12 +1049,12 @@ final class TorrentListViewModel: ObservableObject {
                 startPaused: startPaused
             )
         )
-        guard case .commitAdd(let result) = try await client.sendCommand(command) else {
+        guard case .commitAdd(let result) = try await sendAddCommand(command) else {
             throw EngineClientError.protocolMismatch(details: "unexpected commitAdd reply")
         }
         selection = [result.recordID]
         do {
-            try await fetchFullSnapshot()
+            try await fetchFullSnapshot(send: sendAddCommand)
             selection = [result.recordID]
         } catch {
             connectionNote = String(localized: "snapshot.failed")
@@ -1444,6 +1719,16 @@ final class TorrentListViewModel: ObservableObject {
     }
 }
 
+/// Routing-level magnet gate shared by LaunchServices delivery, plain-text
+/// drops and the Add sheet's first confirmation. The scheme compares
+/// case-insensitively (RFC 3986), so MAGNET:/MaGnEt: route exactly like
+/// magnet:; unparseable or non-magnet input never routes.
+enum MagnetURIRouting {
+    static func isMagnetURI(_ value: String) -> Bool {
+        URLComponents(string: value)?.scheme?.lowercased() == "magnet"
+    }
+}
+
 enum TorrentRemovalFlow {
     static func run(
         recordID: TorrentRecordID,
@@ -1544,8 +1829,8 @@ struct TorrentRemovalConfirmationRouter: Equatable {
     }
 }
 
-// FixtureLibrary is kept in its dependency-free source file so the app tests
-// can exercise the same generator: enum FixtureLibrary { static func snapshot(count: Int = 100) -> [TorrentSnapshot] { return (1...count).map { _ in fatalError() } } }
+// The test/measurement-only row generator lives in the app test target
+// (TorrentinoAppTests.swift); production UI state must never reference it.
 
 /// Aggregate numbers for the status bar (UI-side projection of the snapshot).
 struct TorrentStatusBarModel: Equatable {

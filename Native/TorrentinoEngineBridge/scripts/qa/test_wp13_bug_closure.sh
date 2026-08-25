@@ -96,7 +96,7 @@ require_source "${ENGINE_PROTOCOL}" "func setFileSelection" "BUG-003 TransferEng
 require_source "${PAGINATION}" "public let progressFraction" "BUG-003 FileEntry exposes per-file progress"
 require_source "${BRIDGE_ENGINE}" "coordinator.setFilePriorities" "BUG-003 production bridge forwards live file selection"
 require_source "${ENGINE_COORDINATOR}" "setFilePriorities(" "BUG-003 Swift coordinator owns the native priority boundary"
-require_source "${BRIDGE_CPP}" "prioritize_files(next)" "BUG-003 C++ bridge applies priorities through libtorrent"
+require_source "${BRIDGE_CPP}" "prioritize_files(" "BUG-003 C++ bridge applies priorities through libtorrent"
 require_source "${COORDINATOR}" "storage preflight failed" "BUG-004 add preflight failure path is wired"
 require_source "${COORDINATOR}" "requiredBytes" "BUG-004 required byte calculation is present"
 require_source "${WPSAFE_TESTS}" "testWP13FaultedRecordRemovalSupportsKeepAndDeleteData" "BUG-005 disposable faulted-record proof exists"

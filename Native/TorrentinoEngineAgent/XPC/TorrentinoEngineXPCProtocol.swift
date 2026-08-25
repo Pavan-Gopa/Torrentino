@@ -7,6 +7,7 @@
 // LIFECYCLE_CONTRACT.md.
 
 import Foundation
+import Security
 
 /// Wire contract between the UI process and the engine LaunchAgent.
 ///
@@ -66,10 +67,10 @@ protocol TorrentinoEventSink: NSObjectProtocol {
     func deliver(eventData: Data)
 }
 
-/// Frozen identity + peer code-signing policy (plan §23). Both sides install a
-/// code-signing requirement (requirement-language string) on their
-/// NSXPCConnection via setCodeSigningRequirement BEFORE resume/decode, so an
-/// unsigned or wrong-identifier peer is rejected before any payload is touched.
+/// Frozen identity + peer code-signing policy (plan §23). Dynamic peer validation
+/// requires a positive PID, queries the live guest process via SecCodeCopyGuestWithAttributes,
+/// and performs default-flags SecCodeCheckValidity against the compiled exact SecRequirement,
+/// rejecting unsigned or wrong-identifier peers before any payload is touched.
 /// makeRequirement validates the expression compiles as a SecRequirement.
 enum TorrentinoXPCSecurity {
     static let uiAppBundleIdentifier = "com.torrentino.app"
@@ -94,6 +95,35 @@ enum TorrentinoXPCSecurity {
         let status = SecRequirementCreateWithString(expression as CFString, [], &requirement)
         guard status == errSecSuccess else { return nil }
         return requirement
+    }
+
+    public enum DynamicPeerValidationError: Error, Sendable, Equatable {
+        case invalidProcessIdentifier
+        case guestLookupFailed(OSStatus)
+        case validityCheckFailed(OSStatus)
+    }
+
+    /// Shared live-PID dynamic SecCode evaluator used by both agent and client.
+    /// Uses SecCodeCopyGuestWithAttributes and SecCodeCheckValidity against an exact SecRequirement.
+    @discardableResult
+    static func validateDynamicPeer(
+        processIdentifier pid: pid_t,
+        requirement: SecRequirement
+    ) -> Result<Void, DynamicPeerValidationError> {
+        guard pid > 0 else {
+            return .failure(.invalidProcessIdentifier)
+        }
+        let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
+        var guestCode: SecCode?
+        let guestStatus = SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(rawValue: 0), &guestCode)
+        guard guestStatus == errSecSuccess, let guestCode else {
+            return .failure(.guestLookupFailed(guestStatus))
+        }
+        let validityStatus = SecCodeCheckValidity(guestCode, SecCSFlags(rawValue: 0), requirement)
+        guard validityStatus == errSecSuccess else {
+            return .failure(.validityCheckFailed(validityStatus))
+        }
+        return .success(())
     }
 
     /// Allowlist for the health(reply:) dictionary payload ([String: Any] of

@@ -689,6 +689,15 @@ actor PersistenceStore {
         _ = try statement.step()
     }
 
+    func updateTorrentName(torrentID: String, name: String) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let statement = try prepare("UPDATE torrents SET name = ? WHERE id = ?")
+        try statement.bindText(name, index: 1)
+        try statement.bindText(torrentID, index: 2)
+        _ = try statement.step()
+    }
+
     func torrent(withID id: String) throws -> StoredTorrent? {
         try requireOpen()
         let statement = try prepare("""

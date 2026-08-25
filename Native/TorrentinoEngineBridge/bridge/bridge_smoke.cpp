@@ -113,6 +113,38 @@ std::vector<char> make_large_torrent_file(const std::filesystem::path& dir)
 	return creator.generate_buf();
 }
 
+// Deterministic three-file torrent for the WP22.D5 file-priority barrier.
+// Metainfo order is alphabetical (a.bin, b.bin, c.bin) so a mixed vector is
+// expressible as exact indices; the payload bytes are real so the engine has
+// genuine metadata to hash-check against (WP-01 rule).
+std::vector<char> make_multi_file_torrent_file(const std::filesystem::path& root)
+{
+	const std::vector<std::pair<const char*, std::size_t>> files = {
+		{"a.bin", 256}, {"b.bin", 512}, {"c.bin", 256},
+	};
+	for (const auto& [name, size] : files) {
+		std::ofstream out(root / name, std::ios::binary);
+		for (std::size_t i = 0; i < size; ++i) {
+			out.put(static_cast<char>(i % 251));
+		}
+	}
+
+	const std::vector<lt::create_file_entry> entries = lt::list_files(root.string());
+	lt::create_torrent creator(std::move(entries), 16384, lt::create_torrent::v1_only);
+	creator.set_creator("Torrentino bridge smoke multi-file (WP22.D5)");
+
+	lt::error_code ec;
+	// list_files() prefixes every entry with the root directory name, so
+	// piece hashing is anchored one level up (the containing directory).
+	lt::set_piece_hashes(creator, root.parent_path().string(), ec);
+	TH_REQUIRE(!ec, "set_piece_hashes (multi-file) must not fail");
+	if (ec) {
+		std::fprintf(stderr, "multi-file hash error: %s\n", ec.message().c_str());
+		return {};
+	}
+	return creator.generate_buf();
+}
+
 // Pumps alerts until a predicate matches or the deadline passes. Mirrors the
 // harness wait_for_alert idiom with bridge-style bounded deadlines.
 bool wait_for_alert(EngineBridge& bridge, std::chrono::milliseconds timeout,
@@ -360,6 +392,7 @@ int main()
 		}
 	}
 
+
 	// --- deadline: a bounded wait must surface BridgeError::timeout ---------------
 	{
 		const auto timeout_set = bridge.setOperationTimeout(1);
@@ -397,6 +430,229 @@ int main()
 		// A batch drains to zero: identical second call returns nothing left.
 		const std::vector<EngineAlertDTO> empty = bridge.drainAlerts(0);
 		TH_REQUIRE(empty.empty(), "second drain returns empty batch");
+	}
+
+	// --- WP22.D5 / ADR-022: mixed file-priority read-back barrier ---------------
+	{
+		const std::filesystem::path multi_root = workspace / "multi";
+		std::error_code mkdir_ec;
+		std::filesystem::create_directories(multi_root, mkdir_ec);
+		const std::vector<char> multi = make_multi_file_torrent_file(multi_root);
+		TH_REQUIRE(!multi.empty(), "multi-file torrent generation must succeed");
+
+		// Remove the to-be-skipped payload before the add. Nothing may
+		// recreate it: a reappearing file would prove libtorrent allocated or
+		// wrote the skipped file.
+		std::error_code rm_ec;
+		std::filesystem::remove(multi_root / "b.bin", rm_ec);
+
+		AddSpecification mspec;
+		mspec.torrent_file = multi;
+		mspec.save_path = workspace.string();
+		mspec.paused = true;
+		const auto madded = bridge.add(mspec);
+		TH_REQUIRE(madded.is_ok(), "multi-file add must succeed");
+
+		if (madded.is_ok()) {
+			const torrentino::bridge::TorrentRecordID multi_id = madded.value().torrent_id;
+
+			// Mixed vector in metainfo order: normal, skip, normal. Success is
+			// only reported after the bounded exact get_file_priorities()
+			// read-back, so this acknowledgement IS the read-back evidence.
+			const auto applied = bridge.setFilePriorities(multi_id, {4, 0, 4});
+			TH_REQUIRE(applied.is_ok(), "mixed priority application must pass the exact read-back");
+
+			const auto unknown = bridge.setFilePriorities(std::string(64, '9'), {4, 0, 4});
+			TH_REQUIRE(!unknown.is_ok(), "unknown id must fail closed");
+			TH_REQUIRE(unknown.error_code() == BridgeError::not_found,
+				"unknown id maps to not_found");
+
+			const auto partial = bridge.setFilePriorities(multi_id, {4});
+			TH_REQUIRE(!partial.is_ok(), "partial vectors must be rejected");
+			TH_REQUIRE(partial.error_code() == BridgeError::invalid_argument,
+				"partial vector maps to invalid_argument");
+
+			const auto empty = bridge.setFilePriorities(multi_id, {});
+			TH_REQUIRE(!empty.is_ok(), "empty vectors must be rejected");
+			TH_REQUIRE(empty.error_code() == BridgeError::invalid_argument,
+				"empty vector maps to invalid_argument");
+
+			const auto out_of_range = bridge.setFilePriorities(multi_id, {4, 0, 8});
+			TH_REQUIRE(!out_of_range.is_ok(), "out-of-range priorities must be rejected");
+			TH_REQUIRE(out_of_range.error_code() == BridgeError::invalid_argument,
+				"out-of-range priority maps to invalid_argument");
+
+			std::error_code exists_ec;
+			const bool skipped_allocated =
+				std::filesystem::exists(multi_root / "b.bin", exists_ec);
+			TH_REQUIRE(!skipped_allocated, "skipped file must not be allocated");
+			std::printf("priority evidence: files=3 skip=1 normal=2 skipped_allocated=%s\n",
+				skipped_allocated ? "true" : "false");
+
+			const auto removed = bridge.prepareRemoval(multi_id);
+			TH_REQUIRE(removed.is_ok(), "multi-file prepareRemoval must succeed");
+			if (removed.is_ok()) {
+				TH_REQUIRE(bridge.commitRemoval(removed.value()).is_ok(),
+					"multi-file commitRemoval must succeed");
+			}
+		}
+	}
+
+	// --- WP22.D7 / ADR-022: metadata-only add and guarded commit ---------------
+	{
+		// Raw torrent_flags bits from torrent_status.flags (pinned 2.1.1):
+		// upload_mode = 1_bit, paused = 4_bit, auto_managed = 5_bit.
+		constexpr std::uint64_t kUploadMode = 1ull << 1;
+		constexpr std::uint64_t kPaused = 1ull << 4;
+		constexpr std::uint64_t kAutoManaged = 1ull << 5;
+
+		// Latest flag sample for one id from a fresh drain (the pump emits a
+		// live status sample per known torrent on every drain).
+		const auto flagsFor = [](EngineBridge& engine,
+			const torrentino::bridge::TorrentRecordID& id, std::int64_t& outFlags) {
+			outFlags = -1;
+			for (const EngineAlertDTO& alert : engine.drainAlerts(0)) {
+				if (alert.torrent_id == id && alert.flags >= 0) {
+					outFlags = alert.flags;
+				}
+			}
+		};
+
+		// (1) Multi-file .torrent added METADATA-ONLY: guard set, unpaused,
+		// zero payload; wrong-shape and untracked commits fail closed; the
+		// guarded [4,0,4] paused commit passes and releases the guard last.
+		const std::filesystem::path meta_root = workspace / "meta";
+		std::error_code mk_ec;
+		std::filesystem::create_directories(meta_root, mk_ec);
+		const std::vector<char> meta_multi = make_multi_file_torrent_file(meta_root);
+		TH_REQUIRE(!meta_multi.empty(), "metadata-only multi-file torrent generation must succeed");
+		// Allocation probe: nothing may recreate the skipped file.
+		std::error_code rm_ec;
+		std::filesystem::remove(meta_root / "b.bin", rm_ec);
+
+		AddSpecification meta_spec;
+		meta_spec.torrent_file = meta_multi;
+		meta_spec.save_path = workspace.string();
+		meta_spec.metadata_only = true;
+		const auto meta_added = bridge.add(meta_spec);
+		TH_REQUIRE(meta_added.is_ok(), "metadata-only add must succeed");
+
+		if (meta_added.is_ok()) {
+			const torrentino::bridge::TorrentRecordID meta_id = meta_added.value().torrent_id;
+
+			std::int64_t pre_flags = -1;
+			flagsFor(bridge, meta_id, pre_flags);
+			TH_REQUIRE(pre_flags >= 0, "alert sample carries native flags");
+			TH_REQUIRE((pre_flags & static_cast<std::uint64_t>(kUploadMode)) != 0,
+				"upload_mode guard is set before commit");
+			TH_REQUIRE((pre_flags & static_cast<std::uint64_t>(kAutoManaged)) == 0,
+				"metadata-only add must never be auto-managed");
+			TH_REQUIRE((pre_flags & static_cast<std::uint64_t>(kPaused)) == 0,
+				"metadata-only add is unpaused regardless of spec.paused");
+
+			const auto untracked = bridge.commitMetadataOnly(std::string(64, '7'), {4, 0, 4}, true);
+			TH_REQUIRE(!untracked.is_ok(), "commit on an untracked id must fail closed");
+			TH_REQUIRE(untracked.error_code() == BridgeError::not_found,
+				"untracked commit maps to not_found");
+
+			const auto wrong_shape = bridge.commitMetadataOnly(meta_id, {4, 0}, true);
+			TH_REQUIRE(!wrong_shape.is_ok(), "wrong-shape priority vector must fail closed");
+			TH_REQUIRE(wrong_shape.error_code() == BridgeError::invalid_argument,
+				"wrong-shape vector maps to invalid_argument");
+			std::int64_t kept_flags = -1;
+			flagsFor(bridge, meta_id, kept_flags);
+			TH_REQUIRE(kept_flags >= 0 && (kept_flags & static_cast<std::uint64_t>(kUploadMode)) != 0,
+				"a failed commit keeps upload_mode set");
+
+			// Success REQUIRES the exact read-back inside the same critical
+			// section; the guard clears only afterwards.
+			const auto committed = bridge.commitMetadataOnly(meta_id, {4, 0, 4}, true);
+			TH_REQUIRE(committed.is_ok(), "guarded commit [4,0,4] paused must pass the barrier");
+
+			std::int64_t post_flags = -1;
+			flagsFor(bridge, meta_id, post_flags);
+			TH_REQUIRE(post_flags >= 0 && (post_flags & static_cast<std::uint64_t>(kUploadMode)) == 0,
+				"guard is released only after the exact read-back");
+			TH_REQUIRE(post_flags >= 0 && (post_flags & static_cast<std::uint64_t>(kPaused)) != 0,
+				"commit applies the requested paused state");
+			std::error_code exists_ec;
+			const bool skipped_allocated = std::filesystem::exists(meta_root / "b.bin", exists_ec);
+			TH_REQUIRE(!skipped_allocated, "skipped file remains unallocated after commit");
+			std::printf("metadata-only evidence: guard_before=%d guard_kept_on_failure=%d "
+				"guard_cleared_after_commit=%d paused_applied=%d skipped_allocated=%s\n",
+				pre_flags >= 0 && (pre_flags & kUploadMode) != 0 ? 1 : 0,
+				kept_flags >= 0 && (kept_flags & kUploadMode) != 0 ? 1 : 0,
+				post_flags >= 0 && (post_flags & kUploadMode) == 0 ? 1 : 0,
+				post_flags >= 0 && (post_flags & kPaused) != 0 ? 1 : 0,
+				skipped_allocated ? "true" : "false");
+
+			const auto recommitted = bridge.commitMetadataOnly(meta_id, {4, 0, 4}, true);
+			TH_REQUIRE(!recommitted.is_ok() && recommitted.error_code() == BridgeError::not_found,
+				"double commit is rejected after promotion");
+
+			// A durable/normal handle never passes the temporary-tracking check.
+			const auto normal_handle = bridge.commitMetadataOnly(add_result.torrent_id, {4}, true);
+			TH_REQUIRE(!normal_handle.is_ok() && normal_handle.error_code() == BridgeError::not_found,
+				"commit on a normal handle is rejected");
+		}
+
+		// (2) Raw metadata-only magnet with unknown metainfo: unpaused metadata
+		// networking with zero payload; premature commit fails closed; removal
+		// cleans the temporary tracking. Metadata completion is NOT required.
+		AddSpecification magnet_spec;
+		magnet_spec.magnet_uri =
+			"magnet:?xt=urn:btih:fedcba9876543210fedcba9876543210fedcba98&dn=wp22-d7-meta";
+		magnet_spec.save_path = workspace.string();
+		magnet_spec.metadata_only = true;
+		const auto mag_added = bridge.add(magnet_spec);
+		TH_REQUIRE(mag_added.is_ok(), "raw metadata-only magnet add must succeed");
+
+		if (mag_added.is_ok()) {
+			const torrentino::bridge::TorrentRecordID mag_id = mag_added.value().torrent_id;
+
+			bool mag_guarded = false;
+			bool mag_running = true;
+			bool mag_zero_payload = true;
+			for (const EngineAlertDTO& alert : bridge.drainAlerts(0)) {
+				if (alert.torrent_id != mag_id) continue;
+				if (alert.flags >= 0) {
+					mag_guarded = mag_guarded || (static_cast<std::uint64_t>(alert.flags) & kUploadMode) != 0;
+					if ((static_cast<std::uint64_t>(alert.flags) & kAutoManaged) != 0
+						|| (static_cast<std::uint64_t>(alert.flags) & kPaused) != 0) {
+						mag_running = false;
+					}
+				}
+				if (alert.downloaded_bytes > 0) {
+					mag_zero_payload = false;
+				}
+			}
+			TH_REQUIRE(mag_guarded, "magnet metadata-only handle keeps upload_mode set");
+			TH_REQUIRE(mag_running, "metadata retrieval runs unpaused and unmanaged");
+			TH_REQUIRE(mag_zero_payload, "payload bytes stay zero before commit");
+
+			const auto premature = bridge.commitMetadataOnly(mag_id, {4}, false);
+			TH_REQUIRE(!premature.is_ok(), "premature commit without metainfo fails closed");
+			TH_REQUIRE(premature.error_code() == BridgeError::invalid_argument,
+				"premature commit maps to invalid_argument");
+			std::int64_t mag_after_fail = -1;
+			flagsFor(bridge, mag_id, mag_after_fail);
+			TH_REQUIRE(mag_after_fail >= 0 && (mag_after_fail & static_cast<std::uint64_t>(kUploadMode)) != 0,
+				"failed premature commit keeps the guard set");
+
+			const auto prepared = bridge.prepareRemoval(mag_id);
+			TH_REQUIRE(prepared.is_ok(), "temporary magnet prepareRemoval must succeed");
+			if (prepared.is_ok()) {
+				TH_REQUIRE(bridge.commitRemoval(prepared.value()).is_ok(),
+					"temporary magnet commitRemoval must succeed");
+			}
+			TH_REQUIRE(wait_for_alert(bridge, 10s, [&mag_id](const EngineAlertDTO& alert) {
+				return is_removed(alert) && alert.torrent_id == mag_id;
+			}), "removed alert arrives for the temporary magnet");
+
+			const auto post_remove = bridge.commitMetadataOnly(mag_id, {4}, false);
+			TH_REQUIRE(!post_remove.is_ok() && post_remove.error_code() == BridgeError::not_found,
+				"removal cleans the metadata-only tracking");
+		}
 	}
 
 	// --- shutdown + idempotence -------------------------------------------------

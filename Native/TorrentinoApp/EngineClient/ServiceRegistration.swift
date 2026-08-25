@@ -8,30 +8,52 @@
 import Foundation
 import ServiceManagement
 
+enum RegistrationPolicyAction: String, Sendable, Equatable {
+    case noOp
+    case rebind
+    case register
+}
+
 enum AgentServiceRegistration {
     /// Frozen identifiers (plan §23, LIFECYCLE_CONTRACT.md). The app-side
     /// identity authority is PeerValidation (WP-05).
     static let plistName = PeerValidation.identity.plistFilename
     static let label = PeerValidation.identity.launchAgentLabel
 
+    /// Pure policy helper for registration requests given current state and force flag.
+    static func registrationAction(status: StatusSnapshot.State, forceRebind: Bool) -> RegistrationPolicyAction {
+        switch (status, forceRebind) {
+        case (.enabled, false):
+            return .noOp
+        case (.enabled, true):
+            return .rebind
+        default:
+            return .register
+        }
+    }
+
     /// Registers Contents/Library/LaunchAgents/<plistName> from this bundle.
+    /// Default `forceRebind: false` is idempotent: returns without mutation if already enabled.
+    /// Explicit `forceRebind: true` forces a rebind (unregister + register) if enabled.
     /// Throws on failure; success still requires status == .enabled afterwards
     /// (first registration may land in .requiresApproval until the user
     /// toggles it in System Settings > Login Items).
-    static func register() async throws {
+    static func register(forceRebind: Bool = false) async throws {
         let agent = SMAppService.agent(plistName: plistName)
-        // BTM self-heal: if launchd still pairs this label with a stale app
-        // copy (prior build moved/removed), register() alone does not
-        // re-anchor BackgroundTaskManagement and the agent spawn later fails
-        // inside launchd with copy_bundle_path 0x6f / exit 78 (EX_CONFIG) even
-        // though this binary starts fine. Re-writing the entry
-        // (unregister + register) while status == .enabled forces BTM to
-        // re-resolve against the current app bundle. Fresh registrations skip
-        // the extra pair.
-        if agent.status == .enabled {
+        let currentStatus = StatusSnapshot(status: agent.status).state
+        let action = registrationAction(status: currentStatus, forceRebind: forceRebind)
+        switch action {
+        case .noOp:
+            return
+        case .rebind:
+            // BTM self-heal: if launchd still pairs this label with a stale app
+            // copy (prior build moved/removed), explicit forceRebind forces
+            // BackgroundTaskManagement to re-resolve against current app bundle.
             try await agent.unregister()
+            try agent.register()
+        case .register:
+            try agent.register()
         }
-        try agent.register()
     }
 
     static func unregister() async throws {

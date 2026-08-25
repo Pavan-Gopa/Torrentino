@@ -75,6 +75,26 @@ public actor EngineCoordinator {
         try voidCall(payload) { try adapter.setLimitsWithPayloadData($0) }
     }
 
+    /// WP22.D5 (ADR-022): applies a complete selected/skipped file-priority
+    /// vector in metainfo order to the native handle. The bridge only reports
+    /// success after a bounded exact get_file_priorities read-back, so a
+    /// returned error means the engine never adopted the selection.
+    public func setFilePriorities(torrentID: String, priorities: [UInt8]) throws {
+        let payload = try encode(FilePrioritiesRequestDTO(torrentID: torrentID, priorities: priorities))
+        try voidCall(payload) { try adapter.setFilePrioritiesWithPayloadData($0) }
+    }
+
+    /// WP22.D7 (ADR-022): guarded commit for a temporary metadata-only
+    /// torrent. The native bridge verifies the tracked handle and metainfo,
+    /// applies the full priority vector behind the exact read-back, applies
+    /// the paused state, and clears upload_mode last; any failure keeps the
+    /// guard set and the temporary tracking intact.
+    public func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) throws {
+        let payload = try encode(CommitMetadataOnlyRequestDTO(
+            torrentID: torrentID, priorities: priorities, paused: paused))
+        try voidCall(payload) { try adapter.commitMetadataOnly(withPayloadData: $0) }
+    }
+
     /// Reads the native handle's current bandwidth limits without changing it.
     /// The raw -1 unlimited sentinel is retained for integration assertions.
     public func currentLimits(torrentID: String) throws -> AppliedTorrentLimitsDTO {

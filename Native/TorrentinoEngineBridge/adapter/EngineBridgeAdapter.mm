@@ -364,11 +364,38 @@ AddSpecification addSpecificationFromJSON(NSDictionary* dict)
 	spec.magnet_uri = std::string(stringValue(dict, "magnet-uri", @"").UTF8String);
 	spec.save_path = std::string(stringValue(dict, "save-path", @"").UTF8String);
 	spec.paused = boolValue(dict, "paused", false);
+	// WP22.D7 (ADR-022): missing key = false, so every existing caller adds a
+	// normal torrent exactly as before.
+	spec.metadata_only = boolValue(dict, "metadata-only", false);
 	// Per-task policy: missing key = -1 (engine default), present = 0/1.
 	spec.enable_dht = (int)int64Value(dict, "enable-dht", -1);
 	spec.enable_pex = (int)int64Value(dict, "enable-pex", -1);
 	spec.enable_lsd = (int)int64Value(dict, "enable-lsd", -1);
 	return spec;
+}
+
+// Shared WP22.D5/WP22.D7 boundary contract: the vector must be an array of
+// integral bytes. Rejection happens here, before any engine state can move.
+bool priorityVectorFromJSON(NSDictionary* dict, std::vector<std::uint8_t>& out,
+	NSError** error)
+{
+	id value = dict[jsonKey("priorities")];
+	if (![value isKindOfClass:[NSArray class]]) {
+		setInvalidArgument(error, @"priorities payload must be an array");
+		return false;
+	}
+	out.reserve(((NSArray*)value).count);
+	for (NSNumber* rawPriority in (NSArray*)value) {
+		if (![rawPriority isKindOfClass:[NSNumber class]]
+			|| rawPriority.doubleValue != rawPriority.longLongValue
+			|| rawPriority.longLongValue < 0
+			|| rawPriority.longLongValue > 255) {
+			setInvalidArgument(error, @"priority entries must be integers in 0...255");
+			return false;
+		}
+		out.push_back(static_cast<std::uint8_t>(rawPriority.unsignedIntValue));
+	}
+	return true;
 }
 
 std::vector<char> rawTorrentBytes(NSData* data)
@@ -427,6 +454,7 @@ NSDictionary* alertToJSON(const EngineAlertDTO& alert)
 		jsonKey("seeds-total") : @(alert.seeds_total),
 		jsonKey("name") : [NSString stringWithUTF8String:alert.name.c_str()],
 		jsonKey("total-size") : @(alert.total_size),
+		jsonKey("flags") : @(alert.flags),
 	};
 }
 
@@ -689,6 +717,42 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		}
 		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
 		return voidResultToData(_engine->setLimits(id, torrentLimitsFromJSON(dict)), error);
+	}, error);
+}
+
+- (nullable NSData *)setFilePrioritiesWithPayloadData:(NSData *)payloadData
+												error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		// Full-vector boundary contract shared with the D7 commit payload.
+		std::vector<std::uint8_t> priorities;
+		if (!priorityVectorFromJSON(dict, priorities, error)) {
+			return nil;
+		}
+		return voidResultToData(_engine->setFilePriorities(id, priorities), error);
+	}, error);
+}
+
+- (nullable NSData *)commitMetadataOnlyWithPayloadData:(NSData *)payloadData
+												error:(NSError *_Nullable *_Nullable)error
+{
+	return runBridge([&]() -> NSData* {
+		NSDictionary* dict = toJSON(payloadData, error);
+		if (dict == nil) {
+			return nil;
+		}
+		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		std::vector<std::uint8_t> priorities;
+		if (!priorityVectorFromJSON(dict, priorities, error)) {
+			return nil;
+		}
+		const bool paused = boolValue(dict, "paused", false);
+		return voidResultToData(_engine->commitMetadataOnly(id, priorities, paused), error);
 	}, error);
 }
 

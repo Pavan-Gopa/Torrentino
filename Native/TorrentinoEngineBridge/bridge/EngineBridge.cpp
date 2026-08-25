@@ -33,6 +33,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -494,6 +495,21 @@ bool is_tcp_listen(lt::socket_type_t type) noexcept
 	}
 }
 
+// Shared WP22.D5/WP22.D7 vector contract: complete, non-empty, 0..7. Returns
+// nullptr when valid; otherwise the reason (composed with the caller prefix).
+const char* priority_vector_error(const std::vector<std::uint8_t>& priorities) noexcept
+{
+	if (priorities.empty()) {
+		return "priority vector is empty";
+	}
+	for (const std::uint8_t priority : priorities) {
+		if (priority > 7) {
+			return "priority value outside the 0..7 range";
+		}
+	}
+	return nullptr;
+}
+
 } // namespace
 
 const char* bridge_error_name(BridgeError code) noexcept
@@ -566,6 +582,7 @@ struct EngineBridge::Impl {
 		}
 		stop_requested_.store(false);
 		handles_.clear();
+		metadata_only_.clear();
 		pending_.clear();
 		alerts_seen_ = 0;
 		// The boot report must reflect what the engine actually runs with, so
@@ -588,7 +605,6 @@ struct EngineBridge::Impl {
 				return Result<BootReport>::failed(BridgeError::stopped,
 					"engine start cancelled by shutdown");
 			}
-
 			const int port = session_->listen_port();
 			if (port <= 0) {
 				shutdownLocked();
@@ -677,11 +693,13 @@ struct EngineBridge::Impl {
 				session_.reset();
 			}
 			handles_.clear();
+			metadata_only_.clear();
 			pending_.clear();
 		} catch (...) {
 			// shutdown must never throw; a raw session leak at worst
 			session_.reset();
 			handles_.clear();
+			metadata_only_.clear();
 			pending_.clear();
 		}
 	}
@@ -702,6 +720,10 @@ struct EngineBridge::Impl {
 			dto.seeds_total = static_cast<int>(status.num_seeds);
 			dto.name = status.name;
 			dto.total_size = status.total_wanted > 0 ? static_cast<std::int64_t>(status.total_wanted) : -1;
+			// Raw flag bitmask (WP22.D7): the same sample carries upload_mode/
+			// paused/auto_managed so callers can observe the guard without a
+			// dedicated handle API.
+			dto.flags = static_cast<std::int64_t>(static_cast<std::uint64_t>(status.flags));
 			if (status.errc) {
 				dto.error = status.errc.message();
 			}
@@ -834,7 +856,10 @@ struct EngineBridge::Impl {
 		case lt::torrent_removed_alert::alert_type: {
 			const auto* a = static_cast<const lt::torrent_removed_alert*>(&alert);
 			dto.kind = EngineAlertKind::removed;
-			dto.torrent_id = id_string(a->handle.info_hashes());
+			// The handle is already detached when this alert posts, so the
+			// identity comes from the alert itself (the handle's hashes may be
+			// empty for a magnet-added torrent).
+			dto.torrent_id = id_string(a->info_hashes);
 			dto.message = a->message();
 			fill_progress(a->handle);
 			break;
@@ -948,6 +973,18 @@ struct EngineBridge::Impl {
 			if (spec.paused) {
 				atp.flags |= lt::torrent_flags::paused;
 			}
+			// WP22.D7 (ADR-022): metadata-only guard. upload_mode makes no
+			// piece requests; default_dont_download pins every file libtorrent
+			// discovers to priority 0; auto_managed is already cleared above
+			// (libtorrent otherwise lifts upload mode by itself) and the
+			// paused bit is force-cleared so metadata networking can start
+			// regardless of spec.paused. The guard is released only by a
+			// successful commitMetadataOnly.
+			if (spec.metadata_only) {
+				atp.flags |= lt::torrent_flags::upload_mode;
+				atp.flags |= lt::torrent_flags::default_dont_download;
+				atp.flags &= ~lt::torrent_flags::paused;
+			}
 			// Per-task DHT/PEX/LSD policy (private torrents: trackers are the
 			// only allowed peer source, so discovery is forced off).
 			// libtorrent 2.0 exposes inverted flags: set disable_* to turn the
@@ -984,6 +1021,12 @@ struct EngineBridge::Impl {
 			const lt::info_hash_t hashes = handle.info_hashes();
 			const TorrentRecordID id = id_string(hashes);
 			handles_[id] = handle;
+			// Track temporary identity only for a handle THIS call created;
+			// duplicate/error recovery below must never relabel an existing
+			// normal/durable handle as temporary (WP22.D7).
+			if (spec.metadata_only) {
+				metadata_only_.insert(id);
+			}
 
 			AddResult result;
 			result.torrent_id = id;
@@ -1243,6 +1286,151 @@ struct EngineBridge::Impl {
 		}
 	}
 
+	// Shared WP22.D5/WP22.D7 commit barrier (caller holds mutex_ and has
+	// already validated the 0..7 range): verifies metainfo coverage, applies
+	// the complete priority vector with prioritize_files, and only an exact
+	// get_file_priorities() read-back within the operation deadline reports
+	// success. libtorrent applies file priorities asynchronously, so a
+	// fire-and-forget call would let callers persist a selection — or release
+	// the metadata-only guard — for a vector the engine never adopted.
+	Result<void> applyPriorityVectorLocked(const lt::torrent_handle& handle,
+		const std::vector<std::uint8_t>& priorities,
+		std::unique_lock<std::mutex>& lock, const char* what)
+	{
+		try {
+			const std::shared_ptr<const lt::torrent_info> metainfo =
+				handle.torrent_file();
+			if (!metainfo || metainfo->num_files() == 0) {
+				return Result<void>::failed(BridgeError::invalid_argument,
+					std::string(what) + ": torrent metadata is unavailable");
+			}
+			if (static_cast<std::size_t>(metainfo->num_files()) != priorities.size()) {
+				return Result<void>::failed(BridgeError::invalid_argument,
+					std::string(what) + ": vector must cover every file exactly once");
+			}
+
+			std::vector<lt::download_priority_t> requested;
+			requested.reserve(priorities.size());
+			for (const std::uint8_t priority : priorities) {
+				requested.emplace_back(priority);
+			}
+			handle.prioritize_files(requested);
+
+			const Deadline deadline = Clock::now() + timeout_;
+			while (Clock::now() < deadline) {
+				if (stop_requested_.load()) {
+					return Result<void>::failed(BridgeError::stopped,
+						"file priority application aborted by shutdown");
+				}
+				pumpLocked();
+				const std::vector<lt::download_priority_t> observed =
+					handle.get_file_priorities();
+				bool equal = observed.size() == requested.size();
+				for (std::size_t index = 0; equal && index < requested.size(); ++index) {
+					equal = observed[index] == requested[index];
+				}
+				if (equal) {
+					return Result<void>::success();
+				}
+				wait_wake_.wait_for(lock, std::min(Millis{50}, timeout_),
+					[this] { return stop_requested_.load(); });
+			}
+			return Result<void>::failed(BridgeError::timeout,
+				"file priority read-back timed out");
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string(what) + " failed: " + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				std::string(what) + " failed: unknown exception");
+		}
+	}
+
+	// WP22.D5 (ADR-022): the commit barrier for durable file selection.
+	Result<void> setFilePriorities(const TorrentRecordID& id,
+		const std::vector<std::uint8_t>& priorities)
+	{
+		if (const char* invalid = priority_vector_error(priorities)) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				std::string("setFilePriorities: ") + invalid);
+		}
+
+		// unique_lock so the read-back loop can release the mutex while
+		// sleeping (shutdown() must be able to acquire it and wake us).
+		std::unique_lock<std::mutex> lock(mutex_);
+		const Result<void> started = requireStartedLocked();
+		if (!started.is_ok()) {
+			return started;
+		}
+		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		if (!handle.is_ok()) {
+			return Result<void>::failed(handle.error_code(), handle.error_message());
+		}
+		return applyPriorityVectorLocked(handle.value(), priorities, lock,
+			"setFilePriorities");
+	}
+
+	// WP22.D7 (ADR-022): guarded promotion of a metadata-only handle. The
+	// whole sequence runs under one critical section: tracked-handle and
+	// metainfo verification, full priority vector with exact read-back,
+	// requested paused/running state, then upload_mode cleared LAST and the
+	// temporary tracking dropped. Any failure before the guard release keeps
+	// upload_mode set and the tracking intact, so a premature commit can
+	// never open the payload floodgate and a retry stays possible.
+	Result<void> commitMetadataOnly(const TorrentRecordID& id,
+		const std::vector<std::uint8_t>& priorities, const bool paused)
+	{
+		if (const char* invalid = priority_vector_error(priorities)) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				std::string("commitMetadataOnly: ") + invalid);
+		}
+
+		std::unique_lock<std::mutex> lock(mutex_);
+		const Result<void> started = requireStartedLocked();
+		if (!started.is_ok()) {
+			return started;
+		}
+		// Only handles still tracked as temporary may pass the guard;
+		// normal/durable handles are rejected before any engine state moves.
+		if (metadata_only_.find(id) == metadata_only_.end()) {
+			return Result<void>::failed(BridgeError::not_found,
+				"commitMetadataOnly: id is not a pending metadata-only torrent");
+		}
+		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		if (!handle.is_ok()) {
+			return Result<void>::failed(handle.error_code(), handle.error_message());
+		}
+
+		try {
+			const Result<void> applied = applyPriorityVectorLocked(
+				handle.value(), priorities, lock, "commitMetadataOnly");
+			if (!applied.is_ok()) {
+				return applied;
+			}
+			// Apply the requested start state BEFORE releasing the guard so no
+			// window exists where the torrent runs with unselected priorities.
+			if (paused) {
+				handle.value().pause();
+			} else {
+				handle.value().resume();
+			}
+			// The race guard is released only after the exact read-back above
+			// proved the engine adopted the selection.
+			handle.value().unset_flags(lt::torrent_flags::upload_mode);
+			metadata_only_.erase(id);
+			return Result<void>::success();
+		} catch (const lt::system_error& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("commitMetadataOnly failed: ") + e.what());
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string("commitMetadataOnly failed: ") + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				"commitMetadataOnly failed: unknown exception");
+		}
+	}
+
 	Result<void> editTrackers(const TorrentRecordID& id,
 		const TrackerTiers& tracker_tiers)
 	{
@@ -1341,6 +1529,9 @@ struct EngineBridge::Impl {
 			// synchronously and posts torrent_removed_alert (status category,
 			// in our mask). The record dies here so later ops fail fast.
 			session_->remove_torrent(handle.value(), flags);
+			// Existing remove path also drops the temporary identity (WP22.D7):
+			// a removed metadata-only torrent can never be committed afterwards.
+			metadata_only_.erase(token.torrent_id);
 			handles_.erase(token.torrent_id);
 
 			RemovalResult result;
@@ -1564,6 +1755,10 @@ struct EngineBridge::Impl {
 	std::condition_variable wait_wake_;
 	std::unique_ptr<lt::session> session_;
 	std::map<TorrentRecordID, lt::torrent_handle> handles_;
+	// WP22.D7: ids whose handle was created metadata-only and is still guarded
+	// by upload_mode. Promoted by commitMetadataOnly, destroyed with the
+	// session, and erased by the remove path.
+	std::set<TorrentRecordID> metadata_only_;
 	std::vector<EngineAlertDTO> pending_;
 	std::vector<lt::alert*> scratch_;
 	std::uint64_t alerts_seen_{0};
@@ -1709,6 +1904,32 @@ Result<AppliedTorrentLimits> EngineBridge::currentLimits(const TorrentRecordID& 
 		return Result<AppliedTorrentLimits>::failed(
 			BridgeError::internal,
 			detail::internal_message("currentLimits: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::setFilePriorities(const TorrentRecordID& id,
+	const std::vector<std::uint8_t>& priorities) noexcept
+{
+	try {
+		return impl_->setFilePriorities(id, priorities);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("setFilePriorities: unknown exception"));
+	}
+}
+
+Result<void> EngineBridge::commitMetadataOnly(const TorrentRecordID& id,
+	const std::vector<std::uint8_t>& priorities, bool paused) noexcept
+{
+	try {
+		return impl_->commitMetadataOnly(id, priorities, paused);
+	} catch (const std::exception& e) {
+		return Result<void>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<void>::failed(BridgeError::internal,
+			detail::internal_message("commitMetadataOnly: unknown exception"));
 	}
 }
 

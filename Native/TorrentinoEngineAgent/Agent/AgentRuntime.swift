@@ -11,6 +11,7 @@
 
 import Foundation
 import OSLog
+import Security
 import TorrentinoIPC
 
 final class AgentRuntime: @unchecked Sendable {
@@ -520,20 +521,21 @@ final class AgentRuntime: @unchecked Sendable {
         }
     }
 
-    /// Validates the connecting UI process against the frozen code-signing
-    /// requirement BEFORE any payload is decoded (plan §23).
+    /// Handles incoming connections for the agent listener: shouldAcceptNewConnection
+    /// validates the still-suspended connection via TorrentinoXPCSecurity.validateDynamicPeer,
+    /// re-reads stable PID, and returns false to reject unauthenticated peers before lease,
+    /// interfaces, proxy, exported object, handlers, or resume.
     private final class ListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         private let service: AgentService
         private let stateQueue: DispatchQueue
-        private let uiAppRequirement: SecRequirement?
         private let log = TorrentinoLog.logger(category: "xpc")
+        private let uiRequirement: SecRequirement?
         private var activeConnections = 0
 
         init(service: AgentService, stateQueue: DispatchQueue) {
             self.service = service
             self.stateQueue = stateQueue
-            self.uiAppRequirement = TorrentinoXPCSecurity.makeRequirement(
-                TorrentinoXPCSecurity.expectedUIAppExpression)
+            self.uiRequirement = TorrentinoXPCSecurity.makeRequirement(TorrentinoXPCSecurity.expectedUIAppExpression)
         }
 
         func authorizeShutdown() -> Bool {
@@ -541,20 +543,54 @@ final class AgentRuntime: @unchecked Sendable {
         }
 
         func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-            guard uiAppRequirement != nil else {
-                log.error("rejecting connection: invalid ui requirement expression")
+            let pid = connection.processIdentifier
+            guard pid > 0 else {
+                TorrentinoLog.record(
+                    category: "xpc-security",
+                    level: "error",
+                    message: "xpc connection rejected invalid pid=\(pid)"
+                )
                 return false
             }
-            stateQueue.sync { activeConnections += 1 }
+            guard let requirement = uiRequirement else {
+                TorrentinoLog.record(
+                    category: "xpc-security",
+                    level: "error",
+                    message: "xpc connection rejected requirement compilation failed pid=\(pid)"
+                )
+                return false
+            }
+            let validationResult = TorrentinoXPCSecurity.validateDynamicPeer(processIdentifier: pid, requirement: requirement)
+            guard case .success = validationResult else {
+                let statusText: String
+                if case .failure(let err) = validationResult {
+                    statusText = "\(err)"
+                } else {
+                    statusText = "unknown"
+                }
+                TorrentinoLog.record(
+                    category: "xpc-security",
+                    level: "error",
+                    message: "xpc connection rejected dynamic validation failed pid=\(pid) error=\(statusText)"
+                )
+                return false
+            }
+            let reReadPID = connection.processIdentifier
+            guard reReadPID > 0, reReadPID == pid else {
+                TorrentinoLog.record(
+                    category: "xpc-security",
+                    level: "error",
+                    message: "xpc connection rejected pid instability initialPid=\(pid) reReadPid=\(reReadPID)"
+                )
+                return false
+            }
+
             let connectionID = UUID()
+
+            stateQueue.sync { activeConnections += 1 }
             let lease = ConnectionLease { [weak self] in
                 self?.releaseConnection()
             }
-            // macOS 13+: peer must satisfy this or the connection is invalidated
-            // before any message decode. The API takes a requirement-language
-            // string; the expression was validated into uiAppRequirement at init.
-            connection.setCodeSigningRequirement(TorrentinoXPCSecurity.expectedUIAppExpression)
-
             let interface = NSXPCInterface(with: TorrentinoEngineXPCProtocol.self)
             // health(reply:) replies with [String: Any]; whitelist plist classes.
             interface.setClasses(TorrentinoXPCSecurity.healthReplyClasses,
@@ -598,4 +634,5 @@ final class AgentRuntime: @unchecked Sendable {
             }
         }
     }
+
 }

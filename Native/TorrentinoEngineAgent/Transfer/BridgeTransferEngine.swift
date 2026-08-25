@@ -47,7 +47,11 @@ public actor BridgeTransferEngine: TransferEngine {
         } else {
             bridgeConfiguration = Self.defaultSessionConfiguration(for: resourceBudget)
         }
-        _ = try await coordinator.start(configuration: bridgeConfiguration)
+        do {
+            _ = try await coordinator.start(configuration: bridgeConfiguration)
+        } catch EngineCoordinatorError.alreadyStarted {
+            // Underlying EngineCoordinator was already started
+        }
         started = true
     }
 
@@ -105,6 +109,14 @@ public actor BridgeTransferEngine: TransferEngine {
         try await coordinator.recheck(torrentID: torrentID)
     }
 
+    public func requestResumeData(torrentID: String) async throws -> Data {
+        do {
+            return try await coordinator.requestResumeData(torrentID: torrentID).resumeData
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "requestResumeData")
+        }
+    }
+
     public func remove(torrentID: String) async throws {
         // WP-10 (Gate 6): the bridge is delete-free — never ask the engine to
         // delete payload bytes. Payload cleanup is the coordinator's
@@ -127,6 +139,29 @@ public actor BridgeTransferEngine: TransferEngine {
             try await coordinator.setLimits(torrentID: torrentID, limits: limits)
         } catch {
             throw Self.mappedBridgeError(error, operation: "setLimits")
+        }
+    }
+
+    /// WP22.D5 (ADR-022): forwards the complete metainfo-ordered priority
+    /// vector to the native bridge. The bridge's bounded read-back barrier is
+    /// what makes the acknowledgement truthful for the durable record.
+    public func setFileSelection(torrentID: String, priorities: [UInt8]) async throws {
+        do {
+            try await coordinator.setFilePriorities(torrentID: torrentID, priorities: priorities)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "setFileSelection")
+        }
+    }
+
+    /// WP22.D7 (ADR-022): forwards the guarded metadata-only commit to the
+    /// native bridge. The bridge's guard-last ordering (exact read-back ->
+    /// paused state -> upload_mode cleared) is what makes the promotion
+    /// truthful; a failure leaves the torrent temporary and guarded.
+    public func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
+        do {
+            try await coordinator.commitMetadataOnly(torrentID: torrentID, priorities: priorities, paused: paused)
+        } catch {
+            throw Self.mappedBridgeError(error, operation: "commitMetadataOnly")
         }
     }
 

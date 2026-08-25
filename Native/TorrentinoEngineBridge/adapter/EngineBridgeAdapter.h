@@ -90,6 +90,21 @@ typedef NS_ENUM(NSInteger, TorrentinoEngineBridgeError) {
 - (nullable NSData *)currentLimitsWithPayloadData:(NSData *)payloadData
 																 error:(NSError *_Nullable *_Nullable)error;
 
+/// Applies the complete file-priority vector for {"torrent-id", "priorities"}
+/// in metainfo order (WP22.D5, ADR-022). prioritize_files is asynchronous:
+/// success means a bounded native read-back returned the exact vector before
+/// the operation deadline; timeout/mismatch fails closed. Returns `{}`.
+- (nullable NSData *)setFilePrioritiesWithPayloadData:(NSData *)payloadData
+												error:(NSError *_Nullable *_Nullable)error;
+
+/// WP22.D7 (ADR-022): guarded commit for a temporary metadata-only torrent:
+/// {"torrent-id", "priorities", "paused"}. The bridge verifies the handle is
+/// still tracked as metadata-only and carries metainfo, applies the exact
+/// priority vector behind a bounded read-back, applies the paused state, then
+/// clears upload_mode last. Any failure keeps the guard set. Returns `{}`.
+- (nullable NSData *)commitMetadataOnlyWithPayloadData:(NSData *)payloadData
+												error:(NSError *_Nullable *_Nullable)error;
+
 /// Replaces the complete structured tracker topology for
 /// {"torrent-id", "tracker-tiers"}. Scalar payloads are rejected.
 - (nullable NSData *)editTrackersWithPayloadData:(NSData *)payloadData

@@ -176,6 +176,15 @@ public struct CancelAddRequest: EngineCommandPayload {
         self.operationID = operationID
     }
 }
+public struct PollAddOperationRequest: EngineCommandPayload {
+    public let requestID: RequestID
+    public let operationID: AddOperationID
+
+    public init(requestID: RequestID, operationID: AddOperationID) {
+        self.requestID = requestID
+        self.operationID = operationID
+    }
+}
 
 // MARK: - Torrent control
 
@@ -567,19 +576,90 @@ public struct ExportDiagnosticsRequest: EngineCommandPayload {
 
 /// inspectAddSource outcome: an AddOperationID the UI must remember and hand
 /// to commitAdd, plus everything the agent learned about the source.
+/// One file row inside an AddSourceInspection payload.
+public struct InspectedFileEntry: Codable, Sendable, Equatable {
+    public let path: String
+    public let sizeBytes: Int64
+    public let priority: FileSelectionPriority
+
+    public init(path: String, sizeBytes: Int64, priority: FileSelectionPriority = .normal) {
+        self.path = path
+        self.sizeBytes = sizeBytes
+        self.priority = priority
+    }
+}
+
+/// inspectAddSource outcome: an AddOperationID the UI must remember and hand
+/// to commitAdd, plus everything the agent learned about the source.
 public struct AddSourceInspection: Codable, Sendable, Equatable {
     public let operationID: AddOperationID
     public let contentIdentity: ContentIdentity?
     public let displayName: String?
     public let sizeBytes: Int64?
     public let warnings: [String]
+    public let phase: AddInspectionPhase
+    public let files: [InspectedFileEntry]?
 
-    public init(operationID: AddOperationID, contentIdentity: ContentIdentity?, displayName: String?, sizeBytes: Int64?, warnings: [String]) {
+    public init(
+        operationID: AddOperationID,
+        contentIdentity: ContentIdentity?,
+        displayName: String?,
+        sizeBytes: Int64?,
+        warnings: [String],
+        phase: AddInspectionPhase = .readyToCommit,
+        files: [InspectedFileEntry]? = nil
+    ) {
         self.operationID = operationID
         self.contentIdentity = contentIdentity
         self.displayName = displayName
         self.sizeBytes = sizeBytes
         self.warnings = warnings
+        self.phase = phase
+        self.files = files
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationID
+        case contentIdentity
+        case displayName
+        case sizeBytes
+        case warnings
+        case phase
+        case files
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.operationID = try container.decode(AddOperationID.self, forKey: .operationID)
+        self.contentIdentity = try container.decodeIfPresent(ContentIdentity.self, forKey: .contentIdentity)
+        self.displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        self.sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        self.warnings = try container.decode([String].self, forKey: .warnings)
+        self.phase = try container.decodeIfPresent(AddInspectionPhase.self, forKey: .phase) ?? .readyToCommit
+        self.files = try container.decodeIfPresent([InspectedFileEntry].self, forKey: .files)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(operationID, forKey: .operationID)
+        try container.encode(contentIdentity, forKey: .contentIdentity)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(sizeBytes, forKey: .sizeBytes)
+        try container.encode(warnings, forKey: .warnings)
+        try container.encode(phase, forKey: .phase)
+        try container.encode(files, forKey: .files)
+    }
+}
+
+public struct PollAddOperationResult: Codable, Sendable, Equatable {
+    public let phase: AddInspectionPhase
+    public let inspection: AddSourceInspection?
+    public let failure: EngineFault?
+
+    public init(phase: AddInspectionPhase, inspection: AddSourceInspection? = nil, failure: EngineFault? = nil) {
+        self.phase = phase
+        self.inspection = inspection
+        self.failure = failure
     }
 }
 
@@ -913,6 +993,7 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
     case fetchCreatorManifestPage(FetchCreatorManifestPageRequest)
     case inspectAddSource(InspectAddSourceRequest)
     case commitAdd(CommitAddRequest)
+    case pollAddOperation(PollAddOperationRequest)
     case cancelAdd(CancelAddRequest)
     case pause(PauseRequest)
     case resume(ResumeRequest)
@@ -958,6 +1039,7 @@ public enum EngineCommandV1: Codable, Sendable, Equatable {
             .inspectAddSource(InspectAddSourceRequest(requestID: rid, source: .magnet(""))),
             .commitAdd(CommitAddRequest(requestID: rid, idempotencyKey: idempotency, operationID: AddOperationID())),
             .cancelAdd(CancelAddRequest(requestID: rid, idempotencyKey: idempotency, operationID: AddOperationID())),
+            .pollAddOperation(PollAddOperationRequest(requestID: rid, operationID: AddOperationID())),
             .pause(PauseRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID)),
             .resume(ResumeRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID)),
             .setFileSelection(SetFileSelectionRequest(requestID: rid, idempotencyKey: idempotency, recordID: recordID, selection: fileSelection, expectedRevision: 0)),
@@ -1005,6 +1087,7 @@ extension EngineCommandV1 {
         case .commitAdd: return "commitAdd"
         case .cancelAdd: return "cancelAdd"
         case .pause: return "pause"
+        case .pollAddOperation: return "pollAddOperation"
         case .resume: return "resume"
         case .setFileSelection: return "setFileSelection"
         case .setLimits: return "setLimits"
@@ -1046,6 +1129,7 @@ extension EngineCommandV1 {
         case .pause(let p): return p.requestID
         case .resume(let p): return p.requestID
         case .setFileSelection(let p): return p.requestID
+        case .pollAddOperation(let p): return p.requestID
         case .setLimits(let p): return p.requestID
         case .fetchSettings(let p): return p.requestID
         case .validateSettings(let p): return p.requestID

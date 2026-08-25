@@ -39,8 +39,29 @@ struct AddTorrentSheet: View {
     @State private var inspectionState = LatestInspectionState<AddTorrentPreview>()
     private let preferences = AddSheetPreferences()
 
+    /// The presented source: a ready magnet preflight wins over the local
+    /// `.torrent` inspection; only one is ever active.
+    private var activePreview: AddTorrentPreview? {
+        viewModel.magnetInspection?.preview ?? inspectionPresentation.preview
+    }
+
+    private var isPreflightWorking: Bool {
+        viewModel.magnetInspection?.phase == .retrievingMetadata
+            || inspectionPresentation.inspecting
+    }
+
+    private var activeErrorMessage: String? {
+        viewModel.magnetInspection?.errorMessage ?? inspectionPresentation.errorMessage
+    }
+
     private var canCommit: Bool {
-        guard !committing, !inspectionPresentation.inspecting else { return false }
+        guard !committing else { return false }
+        if let magnet = viewModel.magnetInspection {
+            // A retrieving or failed magnet can never commit; once the D8
+            // inspection is ready, this is the explicit confirmation gate.
+            return magnet.phase == .readyToCommit && magnet.preview != nil
+        }
+        guard !inspectionPresentation.inspecting else { return false }
         if fileURL != nil {
             return inspectionPresentation.canCommit
         }
@@ -48,7 +69,7 @@ struct AddTorrentSheet: View {
     }
 
     private var selectedBytes: Int64 {
-        guard let preview = inspectionPresentation.preview else { return 0 }
+        guard let preview = activePreview else { return 0 }
         return preview.files.reduce(into: Int64(0)) { result, file in
             if inspectionPresentation.selectedPaths.contains(file.relativePath) {
                 result += file.sizeBytes
@@ -63,18 +84,24 @@ struct AddTorrentSheet: View {
             Text(String(localized: "torrents.add.subtitle"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
-
             TextField(String(localized: "torrents.add.magnet"), text: $text)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { commit() }
                 .onChange(of: text) { newValue in
-                    guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                          fileURL != nil else { return }
-                    fileURL = nil
-                    inspectionPresentation.preview = nil
-                    inspectionPresentation.selectedPaths.removeAll()
-                    inspectionPresentation.inspecting = false
-                    _ = inspectionState.begin()
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty, fileURL != nil {
+                        fileURL = nil
+                        inspectionPresentation.preview = nil
+                        inspectionPresentation.selectedPaths.removeAll()
+                        inspectionPresentation.inspecting = false
+                        _ = inspectionState.begin()
+                    }
+                    // Editing away from (or clearing) the presented magnet
+                    // abandons its retrieval; the operation is cancelled at
+                    // most once. Re-setting the same URI is a no-op.
+                    if trimmed != viewModel.magnetInspection?.uri {
+                        viewModel.abandonMagnetInspection()
+                    }
                 }
 
             HStack {
@@ -107,7 +134,7 @@ struct AddTorrentSheet: View {
                 }
             }
 
-            if inspectionPresentation.inspecting {
+            if isPreflightWorking {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
@@ -115,14 +142,15 @@ struct AddTorrentSheet: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            } else if let preview = inspectionPresentation.preview {
+                .accessibilityElement(children: .combine)
+            } else if let preview = activePreview {
                 inspectionSummary(preview)
             }
 
             Toggle(String(localized: "torrents.add.start_paused"), isOn: $startPaused)
                 .toggleStyle(.checkbox)
 
-            if let errorMessage = inspectionPresentation.errorMessage {
+            if let errorMessage = activeErrorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -187,12 +215,33 @@ struct AddTorrentSheet: View {
         .onAppear {
             seedPreferences()
             consumePendingFile()
+            consumePendingMagnet()
         }
         .onChange(of: viewModel.pendingAddFileURL) { newURL in
             if let newURL {
                 consumePendingFile(newURL)
                 viewModel.pendingAddFileURL = nil
             }
+        }
+        .onChange(of: viewModel.pendingAddMagnetURI) { newURI in
+            if let newURI {
+                consumePendingMagnet(newURI)
+                _ = viewModel.consumePendingMagnetURI()
+            }
+        }
+        .onChange(of: viewModel.magnetInspection) { magnet in
+            // A ready preflight feeds the existing selection tree exactly like
+            // a local `.torrent` inspection does.
+            if let preview = magnet?.preview {
+                inspectionPresentation.selectedPaths = Set(preview.files.map(\.relativePath))
+            }
+        }
+        .onDisappear {
+            // Sheet-lifecycle cancellation: every exit path stops polling and
+            // cancels the current operation at most once. A committed
+            // preflight was already promoted and cleared, so dismissal never
+            // touches a durable record.
+            viewModel.abandonMagnetInspection()
         }
         .task {
             await viewModel.loadDefaultDownloadLocation()
@@ -206,42 +255,58 @@ struct AddTorrentSheet: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             defer { committing = false }
-            if let preview = inspectionPresentation.preview {
-                let selection = preview.files.map { file in
-                    FileSelectionItem(
-                        relativePath: file.relativePath,
-                        priority: inspectionPresentation.selectedPaths.contains(file.relativePath) ? .normal : .skip
-                    )
-                }
-                let saveLocation = destinationURL.map { PersistedLocation(path: $0.path) }
-                let success = await viewModel.commitInspectedTorrent(
+            if viewModel.magnetInspection != nil {
+                // WP22.D9: a ready preflight commits exactly the presented
+                // operation with the chosen files, destination and start mode.
+                await commitReadyMagnet()
+            } else if let preview = inspectionPresentation.preview {
+                finish(await viewModel.commitInspectedTorrent(
                     preview,
-                    saveLocation: saveLocation,
-                    fileSelection: selection,
+                    saveLocation: saveLocation(),
+                    fileSelection: selectionItems(for: preview),
                     startPaused: startPaused
-                )
-                if success {
-                    finishSuccessfulAdd()
-                } else if let err = viewModel.lastAddError {
-                    inspectionPresentation.errorMessage = err
-                }
-            } else if trimmed.hasPrefix("magnet:") {
-                let success = await viewModel.addMagnet(trimmed, startPaused: startPaused)
-                if success {
-                    finishSuccessfulAdd()
-                } else if let err = viewModel.lastAddError {
-                    inspectionPresentation.errorMessage = err
-                }
+                ))
+            } else if MagnetURIRouting.isMagnetURI(trimmed) {
+                // A pasted magnet begins inspection; commit stays impossible
+                // until the D8 metadata is ready and the user confirms again.
+                beginMagnetInspection(trimmed)
             } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-                let success = await viewModel.addTorrentFileURL(trimmed, startPaused: startPaused)
-                if success {
-                    finishSuccessfulAdd()
-                } else if let err = viewModel.lastAddError {
-                    inspectionPresentation.errorMessage = err
-                }
+                finish(await viewModel.addTorrentFileURL(trimmed, startPaused: startPaused))
             } else {
                 inspectionPresentation.errorMessage = String(localized: "torrents.add.invalid_source")
             }
+        }
+    }
+
+    private func commitReadyMagnet() async {
+        guard let magnet = viewModel.magnetInspection,
+              magnet.phase == .readyToCommit,
+              let preview = magnet.preview else { return }
+        finish(await viewModel.commitReadyMagnet(
+            saveLocation: saveLocation(),
+            fileSelection: selectionItems(for: preview),
+            startPaused: startPaused
+        ))
+    }
+
+    private func finish(_ success: Bool) {
+        if success {
+            finishSuccessfulAdd()
+        } else if let err = viewModel.lastAddError {
+            inspectionPresentation.errorMessage = err
+        }
+    }
+
+    private func saveLocation() -> PersistedLocation? {
+        destinationURL.map { PersistedLocation(path: $0.path) }
+    }
+
+    private func selectionItems(for preview: AddTorrentPreview) -> [FileSelectionItem] {
+        preview.files.map { file in
+            FileSelectionItem(
+                relativePath: file.relativePath,
+                priority: inspectionPresentation.selectedPaths.contains(file.relativePath) ? .normal : .skip
+            )
         }
     }
 
@@ -346,6 +411,23 @@ struct AddTorrentSheet: View {
         beginInspection(for: url)
     }
 
+    /// Takes the one-shot browser/paste token exactly once and starts the D8
+    /// retrieval for it. Replacing any current source cancels it at most once.
+    private func consumePendingMagnet(_ pending: String? = nil) {
+        guard let uri = pending ?? viewModel.consumePendingMagnetURI() else { return }
+        beginMagnetInspection(uri)
+    }
+
+    private func beginMagnetInspection(_ uri: String) {
+        // Invalidate any in-flight local inspection first: once the magnet
+        // owns the preview, a late local result is dropped by generation.
+        _ = inspectionState.begin()
+        fileURL = nil
+        inspectionPresentation = AddTorrentInspectionPresentation()
+        text = uri
+        viewModel.beginMagnetInspection(uri)
+    }
+
     private func beginInspection(for url: URL) {
         let requestID = inspectionState.begin()
         guard TorrentDropRouting.isTorrentDropURL(url) else {
@@ -353,6 +435,9 @@ struct AddTorrentSheet: View {
             inspectionPresentation.errorMessage = String(localized: "torrents.add.pick_failed")
             return
         }
+        // Local inspection takes preview ownership; release any presented
+        // magnet first (single cancel; synchronous no-op when none shown).
+        viewModel.abandonMagnetInspection()
         fileURL = url
         text = ""
         inspectionPresentation = AddTorrentInspectionPresentation(inspecting: true)

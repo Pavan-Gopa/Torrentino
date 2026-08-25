@@ -26,6 +26,9 @@ xcodebuild test \
     -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testSetFileSelectionInvalidatesInspection \
     -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testFileSelectionPrioritiesRoundTrip \
     -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testFileSelectionRejectsUnknownPath \
+    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testSetFileSelectionForwardsOrderedPriorityVectorToEngine \
+    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testSetFileSelectionMutatesRecordOnlyAfterEngineSuccess \
+    -only-testing:TorrentinoEngineAgentTests/TransferSmokeTests/testSetFileSelectionEngineFailurePreservesRecordAndEmitsNoInvalidation \
     CODE_SIGN_IDENTITY="Developer ID Application" \
     DEVELOPMENT_TEAM=438UQRF7JV \
     2>&1 | tail -30
