@@ -2126,6 +2126,40 @@
         }
       }
     },
+    "torrents.add.destination_required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a destination folder to continue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите папку назначения для продолжения"
+          }
+        }
+      }
+    },
+    "torrents.add.selection_required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select at least one file to download"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите хотя бы один файл для загрузки"
+          }
+        }
+      }
+    },
     "torrents.add.destination_failed": {
       "extractionState": "manual",
       "localizations": {

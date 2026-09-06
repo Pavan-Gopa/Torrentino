@@ -152,6 +152,7 @@ public actor TransferCoordinator {
     private var nextEngineStartAt = Date.distantPast
     private var statusFailures = 0
     private var nextStatusAttemptAt = Date.distantPast
+    private var latestStatusByEngineID: [String: TransferTorrentStatus] = [:]
     private var networkRecoveryPending = false
     private var nextNetworkRecoveryAt = Date.distantPast
     private var readdBackoff: [TorrentRecordID: (failures: Int, nextAttemptAt: Date)] = [:]
@@ -401,7 +402,29 @@ public actor TransferCoordinator {
                 recordHealth = recordHealth ?? .recoverableError(.storeError)
                 saveLocation = configuredSaveLocation()
             }
-            let effectiveBytes = metainfo.map { Self.effectiveTotalBytes(for: $0, selection: []) } ?? (metainfo?.totalSize ?? 0)
+            let storedSelection: [RecordFileSelection]?
+            do {
+                storedSelection = try await persistence.torrentFileSelection(torrentID: torrent.id)
+            } catch {
+                log.warning("restore: file selection fallback for record=\(recordID) error=\(TorrentinoLog.redactedDescription(error))")
+                storedSelection = nil
+            }
+            let fileSelection: [RecordFileSelection]
+            if let storedSelection {
+                // WP23 R1: explicit stored selection row exists -> strict default-deny unmapped files
+                if let metainfo {
+                    let map = Dictionary(uniqueKeysWithValues: storedSelection.map { ($0.relativePath, $0.priority) })
+                    fileSelection = metainfo.files.map { file in
+                        RecordFileSelection(relativePath: file.path, priority: map[file.path] ?? .skip)
+                    }
+                } else {
+                    fileSelection = storedSelection
+                }
+            } else {
+                // WP23 R1: missing stored row = legacy record (or corrupt payload) -> all files normal (represented as [])
+                fileSelection = []
+            }
+            let effectiveBytes = metainfo.map { Self.effectiveTotalBytes(for: $0, selection: fileSelection) } ?? (metainfo?.totalSize ?? 0)
             let storageState = storageProbe(saveLocation, effectiveBytes)
             let storageHealth = health(for: storageState, recordID: recordID)
 
@@ -441,7 +464,7 @@ public actor TransferCoordinator {
                 engineID: nil,
                 metainfoData: metainfoData,
                 trackerTiers: trackerTiers,
-                fileSelection: [],
+                fileSelection: fileSelection,
                 saveLocation: saveLocation,
                 addedAt: torrent.addedAt,
                 revision: 0,
@@ -1253,9 +1276,19 @@ public actor TransferCoordinator {
         guard let activeOp = pendingOperations[request.operationID] else {
             return .failure(EngineFault.operationNotFound(details: "operationID=\(request.operationID)"))
         }
+        guard let requestedSaveLocation = request.saveLocation else {
+            return .failure(EngineFault.invalidPayload(details: "saveLocation is required"))
+        }
 
         // Duplicate detection by content identity — check before readyToCommit phase guard so duplicate commit returns Show Existing
         if let existing = record(matching: activeOp.contentIdentity) {
+            if Self.isSavePathDiverged(actual: existing.saveLocation.path, expected: requestedSaveLocation.path) {
+                return .failure(EngineFault.volumeUnavailable(
+                    recordID: existing.id,
+                    volumeIdentifier: existing.saveLocation.volumeIdentifier,
+                    details: "torrent already exists with a different save location; use move storage"
+                ))
+            }
             let result = CommitAddResult(recordID: existing.id, engineRevision: engineRevision)
             await removePendingInspection(request.operationID, force: true)
             rememberIdempotency(request.idempotencyKey, result: result)
@@ -1275,12 +1308,12 @@ public actor TransferCoordinator {
         let now = Int64(Date().timeIntervalSince1970)
         let recordID = TorrentRecordID(rawValue: UUID())
         let desiredState: DesiredTorrentState = (request.startPaused ?? false) ? .paused : .running
-        let saveLocation = Self.normalizedSaveLocation(request.saveLocation ?? configuredSaveLocation())
+        let saveLocation = Self.normalizedSaveLocation(requestedSaveLocation)
         let displayName = request.desiredName ?? activeOp.displayName
-        let selection: [RecordFileSelection]
+        let rawSelection: [RecordFileSelection]
         if let metainfo = activeOp.metainfo {
             do {
-                selection = try TorrentAdder.validateSelection(request.fileSelection, against: metainfo)
+                rawSelection = try TorrentAdder.validateSelection(request.fileSelection, against: metainfo)
             } catch {
                 if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
                     failedOp.isInFlight = false
@@ -1289,9 +1322,19 @@ public actor TransferCoordinator {
                 return .failure(EngineFault.invalidPayload(details: "fileSelection: \(error.localizedDescription)"))
             }
         } else {
-            selection = request.fileSelection.map {
+            rawSelection = request.fileSelection.map {
                 RecordFileSelection(relativePath: $0.relativePath, priority: $0.priority)
             }
+        }
+        // WP23 R1c: always build the complete effective selection map for all files in metainfo
+        let selection: [RecordFileSelection]
+        if let metainfo = activeOp.metainfo {
+            let selectionMap = Dictionary(uniqueKeysWithValues: rawSelection.map { ($0.relativePath, $0.priority) })
+            selection = metainfo.files.map { file in
+                RecordFileSelection(relativePath: file.path, priority: selectionMap[file.path] ?? .skip)
+            }
+        } else {
+            selection = rawSelection
         }
 
         let trackerTiers: [[String]]
@@ -1314,10 +1357,7 @@ public actor TransferCoordinator {
         }
 
         if let engineID = activeOp.engineID, let metainfo = activeOp.metainfo {
-            let mergedPriorities = Dictionary(uniqueKeysWithValues: selection.map { ($0.relativePath, $0.priority) })
-            let priorities: [UInt8] = metainfo.files.map { file in
-                mergedPriorities[file.path] == .skip ? UInt8(0) : UInt8(4)
-            }
+            let priorities = Self.prioritiesVector(for: metainfo, selection: selection)
             do {
                 try await engine.commitMetadataOnly(
                     torrentID: engineID,
@@ -1350,6 +1390,11 @@ public actor TransferCoordinator {
             try await persistence.setTorrentLocation(
                 torrentID: recordID.rawValue.uuidString,
                 location: saveLocation
+            )
+            // WP23 R1c: persist the complete effective map ALWAYS (including when empty / all-skip)
+            try await persistence.setTorrentFileSelection(
+                torrentID: recordID.rawValue.uuidString,
+                selection: selection
             )
             let seq = try await persistence.journalAppend(command: "commitAdd", torrentID: recordID.rawValue.uuidString, timestamp: now)
             if let sourceData = activeOp.sourceData {
@@ -1384,7 +1429,7 @@ public actor TransferCoordinator {
             effectiveBytes = activeOp.metainfo?.totalSize ?? 0
         }
 
-        let initialActivity: TorrentActivity = desiredState == .running ? (effectiveBytes > 0 ? .downloading : .fetchingMetadata) : .idle
+        let initialActivity: TorrentActivity = desiredState == .running ? (effectiveBytes > 0 ? .downloading : (activeOp.metainfo == nil ? .fetchingMetadata : .idle)) : .idle
         let record = TransferRecord(
             id: recordID,
             contentIdentity: activeOp.contentIdentity,
@@ -1473,6 +1518,24 @@ public actor TransferCoordinator {
             }
             do {
                 if let engineID = record.engineID {
+                    if let actualPath = latestStatusByEngineID[engineID]?.savePath,
+                       Self.isSavePathDiverged(actual: actualPath, expected: record.saveLocation.path) {
+                        log.warning("admit: destination diverged for record \(recordID): live handle save_path=\(actualPath) != record saveLocation=\(record.saveLocation.path)")
+                        return .failed(
+                            fault: .volumeUnavailable(
+                                recordID: recordID,
+                                volumeIdentifier: record.saveLocation.volumeIdentifier,
+                                details: "live handle save_path diverged from record saveLocation"
+                            ),
+                            health: .waitingForVolume
+                        )
+                    }
+                    if !record.fileSelection.isEmpty,
+                       let metainfoData = record.metainfoData,
+                       let metainfo = try? Preflight.validateTorrentData(metainfoData) {
+                        let priorities = Self.prioritiesVector(for: metainfo, selection: record.fileSelection)
+                        try await engine.setFileSelection(torrentID: engineID, priorities: priorities)
+                    }
                     try await engine.pause(torrentID: engineID)
                     return .admitted(engineID: engineID, activity: .idle)
                 }
@@ -1505,6 +1568,24 @@ public actor TransferCoordinator {
 
         do {
             if let engineID = record.engineID {
+                if let actualPath = latestStatusByEngineID[engineID]?.savePath,
+                   Self.isSavePathDiverged(actual: actualPath, expected: record.saveLocation.path) {
+                    log.warning("admit: destination diverged for record \(recordID): live handle save_path=\(actualPath) != record saveLocation=\(record.saveLocation.path)")
+                    return .failed(
+                        fault: .volumeUnavailable(
+                            recordID: recordID,
+                            volumeIdentifier: record.saveLocation.volumeIdentifier,
+                            details: "live handle save_path diverged from record saveLocation"
+                        ),
+                        health: .waitingForVolume
+                    )
+                }
+                if !record.fileSelection.isEmpty,
+                   let metainfoData = record.metainfoData,
+                   let metainfo = try? Preflight.validateTorrentData(metainfoData) {
+                    let priorities = Self.prioritiesVector(for: metainfo, selection: record.fileSelection)
+                    try await engine.setFileSelection(torrentID: engineID, priorities: priorities)
+                }
                 try await engine.resume(torrentID: engineID)
                 return .admitted(engineID: engineID, activity: bootstrapActivity(for: record))
             }
@@ -1559,9 +1640,14 @@ public actor TransferCoordinator {
 
     private func makeSpecification(for record: TransferRecord, paused: Bool) -> AddSpecificationDTO {
         var privateTorrent = false
+        var priorities: [UInt8]? = nil
         if let metainfoData = record.metainfoData {
             do {
-                privateTorrent = try Preflight.validateTorrentData(metainfoData).isPrivate
+                let metainfo = try Preflight.validateTorrentData(metainfoData)
+                privateTorrent = metainfo.isPrivate
+                if !record.fileSelection.isEmpty {
+                    priorities = Self.prioritiesVector(for: metainfo, selection: record.fileSelection)
+                }
             } catch {
                 log.warning("admission metainfo warning record=\(record.id): \(TorrentinoLog.redactedDescription(error))")
             }
@@ -1572,7 +1658,8 @@ public actor TransferCoordinator {
             trackerTiers: record.trackerTiers,
             savePath: record.saveLocation.path,
             paused: paused,
-            privateTorrent: privateTorrent
+            privateTorrent: privateTorrent,
+            priorities: priorities
         )
     }
 
@@ -1651,15 +1738,24 @@ public actor TransferCoordinator {
         // durable record moves. Build the complete vector in metainfo file
         // order (.normal -> 4, .skip -> 0); a partial or sparse payload can
         // never reach libtorrent.
-        var updatedMap = Dictionary(uniqueKeysWithValues: record.fileSelection.map { ($0.relativePath, $0) })
+        var updatedMap: [String: RecordFileSelection] = [:]
+        if record.fileSelection.isEmpty {
+            // WP23 R1: legacy record with no explicit selection: all files start as .normal
+            for file in metainfo.files {
+                updatedMap[file.path] = RecordFileSelection(relativePath: file.path, priority: .normal)
+            }
+        } else {
+            for item in record.fileSelection {
+                updatedMap[item.relativePath] = item
+            }
+        }
         for item in selection {
             updatedMap[item.relativePath] = item
         }
-        let updatedSelection = Array(updatedMap.values)
-        let mergedPriorities = Dictionary(uniqueKeysWithValues: updatedSelection.map { ($0.relativePath, $0.priority) })
-        let priorities: [UInt8] = metainfo.files.map { file in
-            mergedPriorities[file.path] == .skip ? UInt8(0) : UInt8(4)
+        let updatedSelection = metainfo.files.map { file in
+            updatedMap[file.path] ?? RecordFileSelection(relativePath: file.path, priority: .skip)
         }
+        let priorities = Self.prioritiesVector(for: metainfo, selection: updatedSelection)
         guard let engineID = await liveEngineID(for: request.recordID) else {
             return .failure(.engineNotReady(details: "torrent engine handle is unavailable"))
         }
@@ -1675,6 +1771,15 @@ public actor TransferCoordinator {
                 fallback: "file selection rejected by engine"
             ))
         }
+        do {
+            try await persistence.setTorrentFileSelection(
+                torrentID: request.recordID.rawValue.uuidString,
+                selection: updatedSelection
+            )
+        } catch {
+            log.error("setFileSelection persistence failed for \(request.recordID): \(TorrentinoLog.redactedDescription(error))")
+            return .failure(Self.persistenceFault(error, recordID: request.recordID, volumeIdentifier: record.saveLocation.volumeIdentifier))
+        }
         let effectiveBytes = Self.effectiveTotalBytes(for: metainfo, selection: updatedSelection)
         records[request.recordID] = record.with(totalBytes: effectiveBytes, fileSelection: updatedSelection)
         bumpRecordRevision(request.recordID)
@@ -1682,15 +1787,22 @@ public actor TransferCoordinator {
         await publishInspectionInvalidated(recordID: request.recordID, scope: .files)
         return .success(.ack)
     }
+    fileprivate static func prioritiesVector(for metainfo: Metainfo, selection: [RecordFileSelection]) -> [UInt8] {
+        let selectionMap = Dictionary(uniqueKeysWithValues: selection.map { ($0.relativePath, $0.priority) })
+        return metainfo.files.map { file in
+            selectionMap[file.path] == .normal ? UInt8(4) : UInt8(0)
+        }
+    }
+
     fileprivate static func effectiveTotalBytes(for metainfo: Metainfo, selection: [RecordFileSelection]) -> Int64 {
+        // WP23 R1: selection [] = legacy record with no explicit selection -> full size (all files normal)
         if selection.isEmpty {
             return metainfo.totalSize
         }
         var total: Int64 = 0
         let selectionMap = Dictionary(uniqueKeysWithValues: selection.map { ($0.relativePath, $0.priority) })
         for file in metainfo.files {
-            let priority = selectionMap[file.path] ?? .normal
-            if priority != .skip {
+            if selectionMap[file.path] == .normal {
                 total += file.sizeBytes
             }
         }
@@ -1916,6 +2028,7 @@ public actor TransferCoordinator {
             return
         }
         let statusByEngineID = Dictionary(statuses.map { ($0.engineID, $0) }, uniquingKeysWith: { first, _ in first })
+        latestStatusByEngineID = statusByEngineID
         // Clean expired pending operations (5-minute TTL window)
         let expiredIDs = pendingOperations.compactMap { (id, op) -> AddOperationID? in
             if now.timeIntervalSince(op.lastPolledTime) > Self.pendingOperationTTL {
@@ -1989,7 +2102,12 @@ public actor TransferCoordinator {
         let currentRecords = records
         for (recordID, record) in currentRecords {
             guard let engineID = record.engineID, let status = statusByEngineID[engineID] else { continue }
-            let updated = record.applying(status, health: Self.liveHealth(for: status))
+            var liveHealth = Self.liveHealth(for: status)
+            if let actualPath = status.savePath, Self.isSavePathDiverged(actual: actualPath, expected: record.saveLocation.path) {
+                log.warning("pump: destination diverged for record \(recordID): live handle save_path=\(actualPath) != record saveLocation=\(record.saveLocation.path)")
+                liveHealth = .waitingForVolume
+            }
+            let updated = record.applying(status, health: liveHealth)
             if updated != record {
                 records[recordID] = updated
                 changed.insert(recordID)
@@ -2391,6 +2509,10 @@ public actor TransferCoordinator {
 
     // MARK: - Revision + delta bookkeeping
 
+    func record(for id: TorrentRecordID) -> TransferRecord? {
+        records[id]
+    }
+
     private func record(matching identity: ContentIdentity) -> TransferRecord? {
         records.values.first { candidate in
             guard identity.isKnown else { return false }
@@ -2481,11 +2603,11 @@ public actor TransferCoordinator {
 
     private func selection(for pathOrDirectory: String, record: TransferRecord) -> FileSelectionPriority {
         guard pathOrDirectory.hasSuffix("/") else {
-            return record.fileSelection.first { $0.relativePath == pathOrDirectory }?.priority ?? .normal
+            return record.fileSelection.first { $0.relativePath == pathOrDirectory }?.priority ?? .skip
         }
         let children = record.fileSelection.filter { $0.relativePath.hasPrefix(pathOrDirectory) }
-        guard !children.isEmpty else { return .normal }
-        return children.allSatisfy { $0.priority == .skip } ? .skip : .normal
+        guard !children.isEmpty else { return .skip }
+        return children.contains { $0.priority == .normal } ? .normal : .skip
     }
 
     /// Opaque cursor: UInt32 index in little-endian.
@@ -2691,6 +2813,14 @@ public actor TransferCoordinator {
         return PersistedLocation(path: path, volumeIdentifier: location.volumeIdentifier)
     }
 
+    private static func isSavePathDiverged(actual: String, expected: String) -> Bool {
+        let actualExpanded = (actual as NSString).expandingTildeInPath
+        let expectedExpanded = (expected as NSString).expandingTildeInPath
+        let actualNorm = URL(fileURLWithPath: actualExpanded).standardizedFileURL.path
+        let expectedNorm = URL(fileURLWithPath: expectedExpanded).standardizedFileURL.path
+        return actualNorm != expectedNorm
+    }
+
     private static func engineFault(
         _ error: Error,
         operation: String,
@@ -2880,36 +3010,31 @@ extension TransferRecord {
     }
 
     /// Live engine status merged into the record. Equal when nothing changed.
-    fileprivate func applying(_ status: TransferTorrentStatus, health: TorrentHealth = .healthy) -> TransferRecord {
-        let fraction = min(1, max(0, status.progressFraction))
+    func applying(_ status: TransferTorrentStatus, health: TorrentHealth = .healthy) -> TransferRecord {
         let effectiveTotal: Int64
         if let metainfoData, let metainfo = try? Preflight.validateTorrentData(metainfoData) {
             effectiveTotal = TransferCoordinator.effectiveTotalBytes(for: metainfo, selection: fileSelection)
         } else if status.totalBytes > 0 {
-            // A magnet has no persisted metainfo until the engine receives it;
-            // use the live torrent_status total as soon as it is available.
             effectiveTotal = status.totalBytes
-        } else if self.totalBytes > 0 {
-            effectiveTotal = self.totalBytes
-        } else if status.downloadedBytes > 0 && fraction > 0 {
-            effectiveTotal = Int64(Double(status.downloadedBytes) / fraction)
         } else {
-            effectiveTotal = 0
+            effectiveTotal = self.totalBytes
         }
 
         let downloaded: Int64
-        if status.downloadedBytes > 0 {
-            downloaded = min(effectiveTotal, status.downloadedBytes)
+        if status.downloadedBytes >= 0 {
+            downloaded = effectiveTotal > 0 ? min(effectiveTotal, status.downloadedBytes) : status.downloadedBytes
         } else {
-            downloaded = Int64(fraction * Double(effectiveTotal))
+            downloaded = self.downloadedBytes
         }
 
         let candidate = TransferRecord(
             id: id, contentIdentity: contentIdentity, displayName: displayName,
             desiredState: desiredState, activity: status.activity, health: health,
-            totalBytes: effectiveTotal, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes,
-            downloadBytesPerSec: status.downloadBytesPerSec, uploadBytesPerSec: status.uploadBytesPerSec,
-            peersConnected: status.peersConnected, seedsTotal: status.seedsTotal,
+            totalBytes: effectiveTotal, downloadedBytes: downloaded, uploadedBytes: status.uploadedBytes >= 0 ? status.uploadedBytes : self.uploadedBytes,
+            downloadBytesPerSec: status.downloadBytesPerSec >= 0 ? status.downloadBytesPerSec : self.downloadBytesPerSec,
+            uploadBytesPerSec: status.uploadBytesPerSec >= 0 ? status.uploadBytesPerSec : self.uploadBytesPerSec,
+            peersConnected: status.peersConnected >= 0 ? status.peersConnected : self.peersConnected,
+            seedsTotal: status.seedsTotal >= 0 ? status.seedsTotal : self.seedsTotal,
             engineID: engineID, metainfoData: metainfoData,
             trackerTiers: trackerTiers,
             fileSelection: fileSelection, saveLocation: saveLocation,

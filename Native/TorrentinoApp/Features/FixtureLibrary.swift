@@ -288,12 +288,37 @@ struct AddTorrentPreview: Sendable, Equatable {
 
 struct AddTorrentInspectionPresentation: Equatable {
     var preview: AddTorrentPreview?
+    var destinationPath: String?
     var selectedPaths: Set<String> = []
     var errorMessage: String?
     var inspecting = false
 
+    /// Inspection-level readiness (inspection complete and preview available).
     var canCommit: Bool {
         !inspecting && preview != nil
+    }
+
+    /// Sheet-level commit gate (WP23.D1, WP23.D5): requires valid inspection, non-nil destination,
+    /// and at least one selected file when preview has files.
+    var sheetCanCommit: Bool {
+        canCommit(destinationPath: destinationPath)
+    }
+
+    func canCommit(destinationPath: String?) -> Bool {
+        guard canCommit, destinationPath != nil else { return false }
+        if let preview, !preview.files.isEmpty {
+            return !selectedPaths.isEmpty
+        }
+        return true
+    }
+
+    static func selectionItems(for preview: AddTorrentPreview, selectedPaths: Set<String>) -> [FileSelectionItem] {
+        preview.files.map { file in
+            FileSelectionItem(
+                relativePath: file.relativePath,
+                priority: selectedPaths.contains(file.relativePath) ? .normal : .skip
+            )
+        }
     }
 }
 
@@ -319,7 +344,7 @@ enum AddTorrentInspectionResultApplication {
         switch outcome {
         case .success(let preview):
             presentation.preview = preview
-            presentation.selectedPaths = Set(preview.files.map(\.relativePath))
+            presentation.selectedPaths = []
             presentation.errorMessage = nil
             presentation.inspecting = false
         case .failure(let failureMessage):

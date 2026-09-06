@@ -507,7 +507,9 @@ final class TransferSmokeTests: TestProfileCase {
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = CommitAddRequest(
             requestID: RequestID(), idempotencyKey: IdempotencyKey(),
-            operationID: inspection.operationID, desiredName: "Flow", startPaused: true
+            operationID: inspection.operationID, desiredName: "Flow",
+            saveLocation: PersistedLocation(path: profile.rootURL.path),
+            startPaused: true
         )
         let reply = await coordinator.processCommand(encode(.commitAdd(commit)))
         let result = try resultPayload(from: reply)
@@ -616,13 +618,13 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "dup.bin", size: 2048, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let firstResult) = first else { return XCTFail() }
 
         let inspection2 = try await inspect(coordinator, source: .torrentFileData(torrent))
         let second = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection2.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection2.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let secondResult) = second else { return XCTFail() }
         XCTAssertEqual(secondResult.recordID, firstResult.recordID)
@@ -640,7 +642,7 @@ final class TransferSmokeTests: TestProfileCase {
             PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID)
         ))))
         let key = IdempotencyKey()
-        let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID)
+        let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
         guard case .commitAdd(let firstResult) = first else { return XCTFail() }
 
@@ -654,7 +656,7 @@ final class TransferSmokeTests: TestProfileCase {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let (coordinator, _) = try await makeCoordinator(bus: bus)
         let reply = await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: AddOperationID())
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: AddOperationID(), saveLocation: PersistedLocation(path: profile.rootURL.path))
         )))
         guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
             return XCTFail("expected fault")
@@ -673,7 +675,7 @@ final class TransferSmokeTests: TestProfileCase {
         let ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
         XCTAssertEqual(ready.phase, .readyToCommit)
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -702,7 +704,7 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -744,7 +746,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.multiFile(files: [("dir/a.txt", 100)], pieceLength: 256, piecesCount: 1, name: "sel")
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -783,7 +785,17 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [
+                    FileSelectionItem(relativePath: "dir/a.txt", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/b.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/c.bin", priority: .normal),
+                ]
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -819,7 +831,17 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [
+                    FileSelectionItem(relativePath: "dir/a.txt", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/b.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/c.bin", priority: .normal),
+                ]
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -875,7 +897,17 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [
+                    FileSelectionItem(relativePath: "dir/a.txt", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/b.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/c.bin", priority: .normal),
+                ]
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -1053,6 +1085,7 @@ final class TransferSmokeTests: TestProfileCase {
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
                 startPaused: false
             )
         ))))
@@ -1362,7 +1395,16 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(ready.files?.count, 2)
         XCTAssertEqual(ready.phase, .readyToCommit)
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: ready.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [
+                    FileSelectionItem(relativePath: "dir/a.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/b.bin", priority: .normal),
+                ]
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
         let recordID = addResult.recordID
@@ -1826,7 +1868,7 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -1859,7 +1901,17 @@ final class TransferSmokeTests: TestProfileCase {
         )
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [
+                    FileSelectionItem(relativePath: "dir/file1.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/file2.bin", priority: .normal),
+                    FileSelectionItem(relativePath: "dir/file3.bin", priority: .normal),
+                ]
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -2032,7 +2084,7 @@ final class TransferSmokeTests: TestProfileCase {
             MetainfoBuilder.multiFile(files: [("dir/a.txt", 10)], pieceLength: 16, piecesCount: 1)
         ))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -2416,7 +2468,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "edit.bin", size: 1024, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail("expected commitAdd result") }
         let recordID = addResult.recordID
@@ -2499,7 +2551,13 @@ final class TransferSmokeTests: TestProfileCase {
                 MetainfoBuilder.singleFile(name: "agg-\(index).bin", size: Int64(size), pieceLength: 256, piecesCount: 1)
             ))
             let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-                CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+                CommitAddRequest(
+                    requestID: RequestID(),
+                    idempotencyKey: IdempotencyKey(),
+                    operationID: inspection.operationID,
+                    saveLocation: PersistedLocation(path: profile.rootURL.path),
+                    fileSelection: [FileSelectionItem(relativePath: "agg-\(index).bin", priority: .normal)]
+                )
             ))))
             guard case .commitAdd(let addResult) = commit else { return XCTFail() }
             ids.append(addResult.recordID)
@@ -2546,14 +2604,14 @@ final class TransferSmokeTests: TestProfileCase {
         let torrentC = MetainfoBuilder.singleFile(name: "fileC.bin", size: 1024, pieceLength: 256, piecesCount: 1)
 
         let inspA = try await inspect(coordinator, source: .torrentFileData(torrentA))
-        guard case .commitAdd(let resA) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspA.operationID))))) else { return XCTFail() }
+        guard case .commitAdd(let resA) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspA.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))))) else { return XCTFail() }
         let idA = resA.recordID
         await engineRef.failAdds(containing: "fileB.bin")
         let inspB = try await inspect(coordinator, source: .torrentFileData(torrentB))
-        guard case .commitAdd(let resB) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspB.operationID))))) else { return XCTFail() }
+        guard case .commitAdd(let resB) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspB.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))))) else { return XCTFail() }
         let idB = resB.recordID
         let inspC = try await inspect(coordinator, source: .torrentFileData(torrentC))
-        guard case .commitAdd(let resC) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspC.operationID))))) else { return XCTFail() }
+        guard case .commitAdd(let resC) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspC.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))))) else { return XCTFail() }
         let idC = resC.recordID
 
         var snap = try snapshot(from: await coordinator.processCommand(encode(.fetchSnapshot(FetchSnapshotRequest(requestID: RequestID(), afterRevision: nil)))))
@@ -2791,7 +2849,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "offline.bin", size: 512, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
         let recordID = addResult.recordID
@@ -2832,7 +2890,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "pressure.bin", size: 512, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
         let recordID = addResult.recordID
@@ -2882,7 +2940,7 @@ final class TransferSmokeTests: TestProfileCase {
         await engineRef.failAdds(containing: marker)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd = commit else { return XCTFail() }
 
@@ -2938,7 +2996,7 @@ final class TransferSmokeTests: TestProfileCase {
         let ready = try await pollAddOperationUntilReady(coordinator, inspection: inspection)
         XCTAssertEqual(ready.phase, .readyToCommit)
         let key = IdempotencyKey()
-        let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: ready.operationID)
+        let request = CommitAddRequest(requestID: RequestID(), idempotencyKey: key, operationID: ready.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         let first = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
         let replay = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(request))))
         XCTAssertEqual(first, replay, "duplicate/replay must use the bounded idempotency store")
@@ -2989,7 +3047,8 @@ final class TransferSmokeTests: TestProfileCase {
         let reply = await coordinator.processCommand(encode(.commitAdd(CommitAddRequest(
             requestID: RequestID(),
             idempotencyKey: IdempotencyKey(),
-            operationID: inspection.operationID
+            operationID: inspection.operationID,
+            saveLocation: PersistedLocation(path: profile.rootURL.path)
         ))))
         guard case .failure(let fault) = decode(IPCEnvelope.self, from: reply).result else {
             return XCTFail("persistence fault must fail commitAdd")
@@ -3011,7 +3070,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "safe-mode.bin", size: 512, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd = commit else { return XCTFail() }
         let safeModeAddCalls = await engineRef.addCallCount()
@@ -3132,7 +3191,7 @@ final class TransferSmokeTests: TestProfileCase {
         let torrent = MetainfoBuilder.singleFile(name: "low-power.bin", size: 512, pieceLength: 256, piecesCount: 1)
         let inspection = try await inspect(coordinator, source: .torrentFileData(torrent))
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
         let recordID = addResult.recordID
@@ -3287,7 +3346,7 @@ final class TransferSmokeTests: TestProfileCase {
         await engineRef.failAdds(containing: badMarker)
         let badInspection = try await inspect(coordinator, source: .torrentFileData(badTorrent))
         let badCommit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: badInspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: badInspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd = badCommit else { return XCTFail() }
 
@@ -3296,7 +3355,7 @@ final class TransferSmokeTests: TestProfileCase {
         let goodTorrent = MetainfoBuilder.singleFile(name: "good-engine-record", size: 512, pieceLength: 256, piecesCount: 1)
         let goodInspection = try await inspect(coordinator, source: .torrentFileData(goodTorrent))
         let goodCommit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: goodInspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: goodInspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let goodResult) = goodCommit else { return XCTFail() }
 
@@ -3371,7 +3430,7 @@ final class TransferSmokeTests: TestProfileCase {
             ))))
         }
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID)
+            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path))
         ))))
         guard case .commitAdd(let addResult) = commit else { return XCTFail() }
 
@@ -3417,6 +3476,7 @@ final class TransferSmokeTests: TestProfileCase {
                 quarantined: false
             ))
             _ = try await store.storeMetainfo(torrentID: id, data: metainfo)
+            try await store.setTorrentFileSelection(torrentID: id, selection: [RecordFileSelection(relativePath: "row-\(index).bin", priority: .normal)])
         }
 
         // Simulated restart: a fresh coordinator rebuilds from persistence.
@@ -3760,8 +3820,16 @@ final class TransferSmokeTests: TestProfileCase {
             XCTFail("addMagnet must commit only after readyToCommit; observed phase=\(ready.phase.rawValue)")
             throw NSError(domain: "TransferSmokeTests", code: 16)
         }
+        let selection = (ready.files ?? []).map { FileSelectionItem(relativePath: $0.path, priority: .normal) }
         let commit = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(
-            CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: ready.operationID, startPaused: startPaused)
+            CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: ready.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: selection,
+                startPaused: startPaused
+            )
         ))))
         guard case .commitAdd(let addResult) = commit else {
             throw NSError(domain: "test", code: 6, userInfo: [NSLocalizedDescriptionKey: "unexpected \(commit)"])
@@ -4345,6 +4413,8 @@ final class TransferSmokeTests: TestProfileCase {
                 requestID: RequestID(),
                 idempotencyKey: IdempotencyKey(),
                 operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: profile.rootURL.path),
+                fileSelection: [FileSelectionItem(relativePath: "MagnetTest.bin", priority: .normal)],
                 startPaused: true
             ))
         )))
@@ -4443,7 +4513,7 @@ final class TransferSmokeTests: TestProfileCase {
             .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection1.operationID))
         )))
         let commit1Payload = try resultPayload(from: await coordinator.processCommand(encode(
-            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection1.operationID))
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection1.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))
         )))
         guard case .commitAdd(let firstCommitResult) = commit1Payload else {
             return XCTFail("Expected commitAdd result")
@@ -4456,7 +4526,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(addCallsAfter, addCallsBefore, "Duplicate inspect must not invoke engine.add")
 
         let commit2Payload = try resultPayload(from: await coordinator.processCommand(encode(
-            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection2.operationID))
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection2.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))
         )))
         guard case .commitAdd(let secondCommitResult) = commit2Payload else {
             return XCTFail("Expected commitAdd result for duplicate durable record")
@@ -4502,7 +4572,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(inspection.phase, AddInspectionPhase.retrievingMetadata)
 
         let commitReply = await coordinator.processCommand(encode(
-            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))
         ))
         let envelope = decode(IPCEnvelope.self, from: commitReply)
         guard case .failure(let fault) = envelope.result else {
@@ -4679,7 +4749,7 @@ final class TransferSmokeTests: TestProfileCase {
         await engine.failNextCommitMetadataOnly(with: EngineFault.engineNotReady(details: "simulated failure"))
 
         let failedCommitReply = await coordinator.processCommand(encode(
-            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))
         ))
         let failedEnvelope = decode(IPCEnvelope.self, from: failedCommitReply)
         guard case .failure(let fault) = failedEnvelope.result else {
@@ -4688,7 +4758,7 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(fault.code, .engineNotReady)
 
         let retryCommitPayload = try resultPayload(from: await coordinator.processCommand(encode(
-            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID))
+            .commitAdd(CommitAddRequest(requestID: RequestID(), idempotencyKey: IdempotencyKey(), operationID: inspection.operationID, saveLocation: PersistedLocation(path: profile.rootURL.path)))
         )))
         guard case .commitAdd(let commitResult) = retryCommitPayload else {
             return XCTFail("Expected successful commitAdd on retry")
@@ -4808,6 +4878,7 @@ actor StubTransferEngine: TransferEngine {
     private var fileSelectionCalls: [(torrentID: String, priorities: [UInt8])] = []
     private var failNextFileSelectionError: EngineFault?
     private var fileSelectionHook: (@Sendable () async -> Void)?
+    private var resumeHook: (@Sendable () async -> Void)?
     private var reannouncedIDs: [String] = []
     private var recheckedIDs: [String] = []
     private var movedStorage: [(torrentID: String, destinationPath: String)] = []
@@ -4953,6 +5024,10 @@ actor StubTransferEngine: TransferEngine {
         fileSelectionHook = hook
     }
 
+    func setResumeHook(_ hook: (@Sendable () async -> Void)?) {
+        resumeHook = hook
+    }
+
     func fileSelectionCallCount() -> Int {
         fileSelectionCalls.count
     }
@@ -5040,6 +5115,9 @@ actor StubTransferEngine: TransferEngine {
         if let error = failNextResumeError {
             failNextResumeError = nil
             throw error
+        }
+        if let resumeHook {
+            await resumeHook()
         }
     }
 

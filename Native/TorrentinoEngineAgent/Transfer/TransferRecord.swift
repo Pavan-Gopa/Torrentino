@@ -11,7 +11,7 @@ import TorrentinoIPC
 
 /// Per-file desired selection (v1: skip | normal). Kept on the record so
 /// fetchFiles can report it and a re-add can re-apply it.
-public struct RecordFileSelection: Sendable, Equatable {
+public struct RecordFileSelection: Codable, Sendable, Equatable, Hashable {
     public let relativePath: String
     public let priority: FileSelectionPriority
 
@@ -100,7 +100,9 @@ public struct TransferRecord: Sendable, Equatable, Identifiable {
         return min(1, max(0, Double(downloadedBytes) / Double(totalBytes)))
     }
 
-    public var isCompleted: Bool { totalBytes > 0 && downloadedBytes >= totalBytes }
+    public var isCompleted: Bool {
+        totalBytes > 0 && downloadedBytes >= totalBytes && (activity == .seeding || activity == .idle)
+    }
 
     public func snapshot(revision: UInt64) -> TorrentSnapshot {
         TorrentSnapshot(
@@ -167,7 +169,7 @@ public struct TransferTorrentStatus: Sendable, Equatable {
     public let activity: TorrentActivity
     public let health: TorrentHealth
     public let etaSeconds: Int64?
-
+    public let savePath: String?
     public init(
         engineID: String,
         progressFraction: Double,
@@ -181,7 +183,8 @@ public struct TransferTorrentStatus: Sendable, Equatable {
         health: TorrentHealth,
         etaSeconds: Int64?,
         metadataName: String? = nil,
-        totalBytes: Int64 = -1
+        totalBytes: Int64 = -1,
+        savePath: String? = nil
     ) {
         self.engineID = engineID
         self.progressFraction = progressFraction
@@ -196,6 +199,7 @@ public struct TransferTorrentStatus: Sendable, Equatable {
         self.activity = activity
         self.health = health
         self.etaSeconds = etaSeconds
+        self.savePath = savePath
     }
 }
 

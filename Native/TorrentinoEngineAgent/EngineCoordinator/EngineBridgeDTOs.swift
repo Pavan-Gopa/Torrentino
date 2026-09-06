@@ -176,6 +176,9 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
     public let enableDHT: Bool?
     public let enablePEX: Bool?
     public let enableLSD: Bool?
+    /// WP23.D1 (ADR-023): initial per-file priority vector in metainfo order.
+    /// Optional additive field; nil = default all normal.
+    public let filePriorities: [UInt8]?
 
     public init(
         torrentFile: Data? = nil,
@@ -185,7 +188,8 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         metadataOnly: Bool = false,
         enableDHT: Bool? = nil,
         enablePEX: Bool? = nil,
-        enableLSD: Bool? = nil
+        enableLSD: Bool? = nil,
+        filePriorities: [UInt8]? = nil
     ) {
         self.torrentFile = torrentFile
         self.magnetURI = magnetURI
@@ -195,6 +199,7 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         self.enableDHT = enableDHT
         self.enablePEX = enablePEX
         self.enableLSD = enableLSD
+        self.filePriorities = filePriorities
     }
 
     enum CodingKeys: String, CodingKey {
@@ -206,6 +211,7 @@ public struct AddSpecificationDTO: Codable, Sendable, Equatable {
         case enableDHT = "enable-dht"
         case enablePEX = "enable-pex"
         case enableLSD = "enable-lsd"
+        case filePriorities = "file-priorities"
     }
 }
 
@@ -304,6 +310,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
     public let name: String?
     /// -1 while metadata is unknown, otherwise the engine's total wanted size.
     public let totalSize: Int64
+    /// Actual save path of the live torrent handle (WP23.D4).
+    public let savePath: String?
 
     public init(
         kind: String,
@@ -320,7 +328,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         seedsTotal: Int = -1,
         name: String? = nil,
         totalSize: Int64 = -1,
-        flags: Int64 = -1
+        flags: Int64 = -1,
+        savePath: String? = nil
     ) {
         self.kind = kind
         self.torrentID = torrentID
@@ -337,6 +346,7 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         self.name = name
         self.totalSize = totalSize
         self.flags = flags
+        self.savePath = savePath
     }
 
     enum CodingKeys: String, CodingKey {
@@ -355,6 +365,7 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         case name = "name"
         case totalSize = "total-size"
         case flags = "flags"
+        case savePath = "save-path"
     }
 
     public init(from decoder: Decoder) throws {
@@ -375,6 +386,8 @@ public struct EngineAlertDTO: Codable, Sendable, Equatable {
         name = decodedName?.isEmpty == true ? nil : decodedName
         totalSize = try container.decodeIfPresent(Int64.self, forKey: .totalSize) ?? -1
         flags = try container.decodeIfPresent(Int64.self, forKey: .flags) ?? -1
+        let decodedSavePath = try container.decodeIfPresent(String.self, forKey: .savePath)
+        savePath = decodedSavePath?.isEmpty == true ? nil : decodedSavePath
     }
 }
 

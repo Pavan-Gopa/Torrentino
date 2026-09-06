@@ -19,6 +19,7 @@ public actor BridgeTransferEngine: TransferEngine {
     private var started = false
     private var statusCache = ByteBoundedStatusCache()
     private var lastProjectedStatuses: [String: TransferTorrentStatus] = [:]
+    private var savePathsByTorrentID: [String: String] = [:]
     private var resourceBudget = EngineResourceBudget.balanced
     private var activeSettings = EngineSettings.default
 
@@ -64,6 +65,7 @@ public actor BridgeTransferEngine: TransferEngine {
             ))
             statusCache.removeAll()
             lastProjectedStatuses.removeAll()
+            savePathsByTorrentID.removeAll()
             started = true
         } catch {
             started = false
@@ -123,6 +125,7 @@ public actor BridgeTransferEngine: TransferEngine {
         // manifest-scoped Trash (see handleCommitRemoval).
         let token = try await coordinator.prepareRemoval(torrentID: torrentID)
         _ = try await coordinator.commitRemoval(token: token)
+        savePathsByTorrentID.removeValue(forKey: torrentID)
     }
 
     /// WP-10: async storage move via the bridge (bounded wait, dont_replace).
@@ -200,6 +203,9 @@ public actor BridgeTransferEngine: TransferEngine {
         }
         for alert in alerts {
             guard let torrentID = alert.torrentID else { continue }
+            if let savePath = alert.savePath, !savePath.isEmpty {
+                savePathsByTorrentID[torrentID] = savePath
+            }
             let projectedHealth = Self.health(
                 from: alert.error ?? (alert.kind == "error" ? alert.message : nil),
                 kind: alert.kind
@@ -224,6 +230,7 @@ public actor BridgeTransferEngine: TransferEngine {
             if alert.kind == "removed" {
                 statusCache.remove(torrentID)
                 lastProjectedStatuses.removeValue(forKey: torrentID)
+                savePathsByTorrentID.removeValue(forKey: torrentID)
                 continue
             }
             if projectedHealth != .healthy {
@@ -249,7 +256,8 @@ public actor BridgeTransferEngine: TransferEngine {
                 health: snapshot.health,
                 etaSeconds: nil,
                 metadataName: snapshot.name,
-                totalBytes: snapshot.totalSize
+                totalBytes: snapshot.totalSize,
+                savePath: savePathsByTorrentID[torrentID]
             )
         }
         for status in projected {

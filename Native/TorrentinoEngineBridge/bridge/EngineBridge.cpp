@@ -714,7 +714,11 @@ struct EngineBridge::Impl {
 			dto.state = static_cast<int>(status.state);
 			dto.download_rate = static_cast<std::int64_t>(status.download_payload_rate > 0 ? status.download_payload_rate : status.download_rate);
 			dto.upload_rate = static_cast<std::int64_t>(status.upload_payload_rate > 0 ? status.upload_payload_rate : status.upload_rate);
-			dto.downloaded_bytes = static_cast<std::int64_t>(status.total_done > 0 ? status.total_done : status.total_download);
+			// WP23.D3: downloaded_bytes is strictly the wanted-file numerator
+			// paired with total_size (total_wanted). total_done includes
+			// priority-0 pieces and total_download is session traffic; neither
+			// is valid for the public selected-progress field.
+			dto.downloaded_bytes = static_cast<std::int64_t>(status.total_wanted_done);
 			dto.uploaded_bytes = static_cast<std::int64_t>(status.total_upload);
 			dto.peers_connected = static_cast<int>(status.num_peers);
 			dto.seeds_total = static_cast<int>(status.num_seeds);
@@ -724,6 +728,7 @@ struct EngineBridge::Impl {
 			// paused/auto_managed so callers can observe the guard without a
 			// dedicated handle API.
 			dto.flags = static_cast<std::int64_t>(static_cast<std::uint64_t>(status.flags));
+			dto.save_path = status.save_path;
 			if (status.errc) {
 				dto.error = status.errc.message();
 			}
@@ -935,7 +940,7 @@ struct EngineBridge::Impl {
 
 	Result<AddResult> add(const AddSpecification& spec)
 	{
-		std::lock_guard<std::mutex> lock(mutex_);
+		std::unique_lock<std::mutex> lock(mutex_);
 		const Result<void> started = requireStartedLocked();
 		if (!started.is_ok()) {
 			return Result<AddResult>::failed(started.error_code(), started.error_message());
@@ -953,6 +958,12 @@ struct EngineBridge::Impl {
 				"add: provide exactly one of torrent_file or magnet_uri");
 		}
 
+		if (!spec.file_priorities.empty()) {
+			if (const char* invalid = priority_vector_error(spec.file_priorities)) {
+				return Result<AddResult>::failed(BridgeError::invalid_argument,
+					std::string("add: ") + invalid);
+			}
+		}
 		lt::add_torrent_params atp;
 		lt::info_hash_t targetHashes;
 		try {
@@ -1010,6 +1021,14 @@ struct EngineBridge::Impl {
 					atp.flags |= lt::torrent_flags::disable_lsd;
 				}
 			}
+			if (!spec.file_priorities.empty()) {
+				std::vector<lt::download_priority_t> atp_prio;
+				atp_prio.reserve(spec.file_priorities.size());
+				for (const std::uint8_t p : spec.file_priorities) {
+					atp_prio.emplace_back(p);
+				}
+				atp.file_priorities = std::move(atp_prio);
+			}
 
 			// NOTE: add_torrent can throw duplicate_torrent; caught below and
 			// reported as a structured engine_failure.
@@ -1026,6 +1045,21 @@ struct EngineBridge::Impl {
 			// normal/durable handle as temporary (WP22.D7).
 			if (spec.metadata_only) {
 				metadata_only_.insert(id);
+			}
+
+			if (!spec.file_priorities.empty() && handle.torrent_file()) {
+				const Result<void> applied = applyPriorityVectorLocked(
+					handle, spec.file_priorities, lock, "add");
+				if (!applied.is_ok()) {
+					try {
+						session_->remove_torrent(handle);
+					} catch (...) {}
+					handles_.erase(id);
+					if (spec.metadata_only) {
+						metadata_only_.erase(id);
+					}
+					return Result<AddResult>::failed(applied.error_code(), applied.error_message());
+				}
 			}
 
 			AddResult result;

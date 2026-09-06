@@ -915,11 +915,17 @@ final class TorrentListViewModel: ObservableObject {
     }
 
     @discardableResult
-    func addTorrentFileURL(_ urlString: String, startPaused: Bool) async -> Bool {
+    func addTorrentFileURL(_ urlString: String, startPaused: Bool, saveLocation: PersistedLocation? = nil) async -> Bool {
         do {
             let inspection = try await inspect(source: .torrentFileURL(urlString))
-            try await commitAdd(operationID: inspection.operationID, startPaused: startPaused)
-            lastAddError = nil
+            let resolvedLocation = saveLocation ?? defaultDownloadLocation.map { PersistedLocation(path: $0) }
+            let allFiles = (inspection.files ?? []).map { FileSelectionItem(relativePath: $0.path, priority: .normal) }
+            try await commitAdd(
+                operationID: inspection.operationID,
+                saveLocation: resolvedLocation,
+                fileSelection: allFiles,
+                startPaused: startPaused
+            )
             return true
         } catch EngineClientError.fault(let fault) {
             lastAddError = localizedFaultDescription(fault)
@@ -933,6 +939,33 @@ final class TorrentListViewModel: ObservableObject {
             lastAddError = String(localized: "add.failed")
             connectionNote = String(localized: "add.failed")
             return false
+        }
+    }
+
+    /// Performs agent inspection for an HTTP(S) .torrent URL and builds a preview
+    /// from the returned inspection files for the Add sheet.
+    func inspectTorrentFileURL(_ urlString: String) async -> LatestInspectionState<AddTorrentPreview>.Result {
+        do {
+            let inspection = try await inspect(source: .torrentFileURL(urlString))
+            let files = (inspection.files ?? []).map { file in
+                FileEntry(
+                    relativePath: file.path,
+                    name: file.path.split(separator: "/").last.map(String.init) ?? file.path,
+                    sizeBytes: file.sizeBytes,
+                    kind: .file,
+                    selection: file.priority
+                )
+            }
+            return .success(AddTorrentPreview(inspection: inspection, files: files))
+        } catch EngineClientError.fault(let fault) {
+            let message = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
+        } catch let fault as EngineFault {
+            let message = localizedFaultDescription(fault, fallback: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
+        } catch {
+            let message = String(localized: "torrents.add.inspection_failed")
+            return AddTorrentInspectionResultApplication.failure(message, preserving: &connectionNote)
         }
     }
 

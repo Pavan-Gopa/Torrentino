@@ -532,7 +532,7 @@ actor PersistenceStore {
 
     /// Current schema version. The migration runner applies every migration
     /// above the stored version; a stored version ABOVE this blocks the open.
-    static let schemaVersion: Int = 3
+    static let schemaVersion: Int = 4
 
     /// Session keys. clean_shutdown is the last durable write of a clean stop.
     static let cleanShutdownKey = "clean_shutdown"
@@ -731,6 +731,7 @@ actor PersistenceStore {
         try? removeSessionValue(key: Self.torrentLimitsKey(torrentID))
         try? removeSessionValue(key: Self.torrentTrackersKey(torrentID))
         try? removeSessionValue(key: Self.torrentLocationKey(torrentID))
+        try? removeSessionValue(key: Self.torrentFileSelectionKey(torrentID))
     }
 
     func markTorrentForRecheck(torrentID: String) throws {
@@ -1104,6 +1105,45 @@ actor PersistenceStore {
                 message: "tolerant decode failed table=torrent_location record=\(torrentID) error=\(TorrentinoLog.redactedDescription(error))"
             )
             throw PersistenceError.sqlite("tolerant decode failed for torrent location")
+        }
+    }
+
+    // MARK: - File selection (WP23.D2 durable selection)
+
+    private static let fileSelectionVersion = 1
+
+    private struct FileSelectionEnvelope: Codable {
+        let version: Int
+        let selection: [RecordFileSelection]
+    }
+
+    private static func torrentFileSelectionKey(_ torrentID: String) -> String {
+        "torrent_file_selection.\(torrentID)"
+    }
+
+    func setTorrentFileSelection(torrentID: String, selection: [RecordFileSelection]) throws {
+        try requireOpen()
+        guard torrentExists(torrentID) else { throw PersistenceError.unknownTorrent(id: torrentID) }
+        let envelope = FileSelectionEnvelope(version: Self.fileSelectionVersion, selection: selection)
+        let data = try JSONEncoder().encode(envelope)
+        try setSessionValue(key: Self.torrentFileSelectionKey(torrentID), data: data)
+    }
+
+    func torrentFileSelection(torrentID: String) throws -> [RecordFileSelection]? {
+        guard let payload = try sessionValue(key: Self.torrentFileSelectionKey(torrentID)) else { return nil }
+        do {
+            let envelope = try JSONDecoder().decode(FileSelectionEnvelope.self, from: payload.data)
+            return envelope.selection
+        } catch {
+            if let bare = try? JSONDecoder().decode([RecordFileSelection].self, from: payload.data) {
+                return bare
+            }
+            TorrentinoLog.record(
+                category: "persistence",
+                level: "warning",
+                message: "tolerant decode failed table=torrent_file_selection record=\(torrentID) error=\(TorrentinoLog.redactedDescription(error))"
+            )
+            return nil
         }
     }
 
@@ -2239,6 +2279,7 @@ actor PersistenceStore {
             )
             """
         ]),
+        (4, []),
     ]
 
     private func migrate(_ database: SQLiteConnection) throws {

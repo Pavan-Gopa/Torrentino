@@ -137,7 +137,8 @@ public enum TorrentAdder {
         trackerTiers: [[String]],
         savePath: String,
         paused: Bool,
-        privateTorrent: Bool = false
+        privateTorrent: Bool = false,
+        priorities: [UInt8]? = nil
     ) -> AddSpecificationDTO {
         let enableDHT = privateTorrent ? false : nil
         let enablePEX = privateTorrent ? false : nil
@@ -150,7 +151,8 @@ public enum TorrentAdder {
                 paused: paused,
                 enableDHT: enableDHT,
                 enablePEX: enablePEX,
-                enableLSD: enableLSD
+                enableLSD: enableLSD,
+                filePriorities: priorities
             )
         }
         if let infoHashV1 = identity.infoHashV1 {

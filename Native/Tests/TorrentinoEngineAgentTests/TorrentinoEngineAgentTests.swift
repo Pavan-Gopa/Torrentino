@@ -46,7 +46,7 @@ final class TorrentinoEngineAgentPersistenceTests: TestProfileCase {
         let synchronous = try scalar("PRAGMA synchronous", connection: probe)
         XCTAssertEqual(synchronous, "1", "synchronous=NORMAL (WAL-safe)")
         let schemaVersion = try scalar("SELECT MAX(version) FROM schema_version", connection: probe)
-        XCTAssertEqual(schemaVersion, "3", "schema v3 (WP-11 tracker topology)")
+        XCTAssertEqual(schemaVersion, "4", "schema v4 (WP-23 durable file selection)")
         probe.close()
         let foreignKeys = try await store.foreignKeysEnabled()
         XCTAssertTrue(foreignKeys, "foreign_keys=ON on the store connection")

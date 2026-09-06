@@ -119,6 +119,10 @@ struct AddSpecification {
 	// metainfo may be fetched but no payload can be requested until a guarded
 	// commitMetadataOnly releases the upload_mode guard last.
 	bool metadata_only = false;
+	// WP23.D1 (ADR-023): optional initial file priorities vector. When non-empty
+	// and metainfo is present, prioritized at admission with the same exact
+	// read-back barrier as setFilePriorities.
+	std::vector<std::uint8_t> file_priorities;
 };
 
 struct BootReport {
@@ -185,6 +189,8 @@ struct EngineAlertDTO {
 	// lets callers observe upload_mode/paused/auto_managed without a new
 	// handle API. -1 retains the unknown sentinel.
 	std::int64_t flags = -1;
+	// Actual save path of the live torrent handle (WP23.D4).
+	std::string save_path;
 };
 
 struct HealthDTO {

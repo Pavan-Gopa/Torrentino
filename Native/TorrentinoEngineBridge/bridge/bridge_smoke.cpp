@@ -145,6 +145,35 @@ std::vector<char> make_multi_file_torrent_file(const std::filesystem::path& root
 	return creator.generate_buf();
 }
 
+// Deterministic two-file torrent for WP23.D3 selected progress regression.
+// File 0: 0_unselected.bin (32768 bytes, exactly 2 pieces of 16384)
+// File 1: 1_selected.bin (16384 bytes, exactly 1 piece of 16384)
+// Total size: 49152 bytes (3 pieces). Pieces are non-overlapping between files.
+std::vector<char> make_wp23_progress_torrent_file(const std::filesystem::path& root)
+{
+	const std::vector<std::pair<const char*, std::size_t>> files = {
+		{"0_unselected.bin", 32768}, {"1_selected.bin", 16384},
+	};
+	for (const auto& [name, size] : files) {
+		std::ofstream out(root / name, std::ios::binary);
+		for (std::size_t i = 0; i < size; ++i) {
+			out.put(static_cast<char>((i + 17) % 251));
+		}
+	}
+
+	const std::vector<lt::create_file_entry> entries = lt::list_files(root.string());
+	lt::create_torrent creator(std::move(entries), 16384, lt::create_torrent::v1_only);
+	creator.set_creator("Torrentino bridge smoke progress (WP23.D3)");
+
+	lt::error_code ec;
+	lt::set_piece_hashes(creator, root.parent_path().string(), ec);
+	TH_REQUIRE(!ec, "set_piece_hashes (wp23 progress) must not fail");
+	if (ec) {
+		return {};
+	}
+	return creator.generate_buf();
+}
+
 // Pumps alerts until a predicate matches or the deadline passes. Mirrors the
 // harness wait_for_alert idiom with bridge-style bounded deadlines.
 bool wait_for_alert(EngineBridge& bridge, std::chrono::milliseconds timeout,
@@ -652,6 +681,126 @@ int main()
 			const auto post_remove = bridge.commitMetadataOnly(mag_id, {4}, false);
 			TH_REQUIRE(!post_remove.is_ok() && post_remove.error_code() == BridgeError::not_found,
 				"removal cleans the metadata-only tracking");
+		}
+	}
+
+	// --- WP23.D3: truthful selected-progress counter (total_wanted_done) -------
+	// Verifies that EngineAlertDTO.downloaded_bytes reflects total_wanted_done
+	// (only selected/wanted bytes) paired with total_size (total_wanted).
+	// Injects a state where total_done >= total_wanted (unselected file exists on
+	// disk) while total_wanted_done < total_wanted (selected file is absent).
+	// Proves that downloaded_bytes equals total_wanted_done (0), does not equal
+	// total_done (32768), and never falsely reports completion. Also verifies
+	// all-files-selected partial and full completion behavior.
+	{
+		const std::filesystem::path prog_root = workspace / "wp23_progress";
+		std::error_code mk_ec;
+		std::filesystem::create_directories(prog_root, mk_ec);
+		const std::vector<char> prog_torrent = make_wp23_progress_torrent_file(prog_root);
+		TH_REQUIRE(!prog_torrent.empty(), "wp23 progress torrent generation must succeed");
+
+		// Remove the selected file so piece 2 is absent from disk.
+		// Keep the 32 KiB unselected file on disk so pieces 0 and 1 hash-check as complete.
+		std::error_code rm_ec;
+		std::filesystem::remove(prog_root / "1_selected.bin", rm_ec);
+
+		AddSpecification spec;
+		spec.torrent_file = prog_torrent;
+		spec.save_path = workspace.string();
+		spec.paused = false;
+		spec.file_priorities = {0, 4}; // [0_unselected: skip (0), 1_selected: normal (4)]
+		const auto added = bridge.add(spec);
+		TH_REQUIRE(added.is_ok(), "wp23 progress torrent add must succeed");
+
+		if (added.is_ok()) {
+			const torrentino::bridge::TorrentRecordID prog_id = added.value().torrent_id;
+
+			TH_REQUIRE(wait_for_alert(bridge, 30s, [&prog_id](const EngineAlertDTO& alert) {
+				return is_checked(alert) && alert.torrent_id == prog_id;
+			}), "wp23 progress torrent completes hash check");
+
+			const auto waitForProgress = [](EngineBridge& engine,
+				const torrentino::bridge::TorrentRecordID& id,
+				std::chrono::milliseconds timeout,
+				std::function<bool(std::int64_t dl, std::int64_t tot)> predicate,
+				std::int64_t& out_dl, std::int64_t& out_tot) {
+				const auto deadline = std::chrono::steady_clock::now() + timeout;
+				while (std::chrono::steady_clock::now() < deadline) {
+					out_dl = -1;
+					out_tot = -1;
+					for (const EngineAlertDTO& alert : engine.drainAlerts(0)) {
+						if (alert.torrent_id == id) {
+							if (alert.downloaded_bytes >= 0) out_dl = alert.downloaded_bytes;
+							if (alert.total_size >= 0) out_tot = alert.total_size;
+						}
+					}
+					if (out_dl >= 0 && out_tot >= 0 && predicate(out_dl, out_tot)) {
+						return true;
+					}
+					std::this_thread::sleep_for(10ms);
+				}
+				return false;
+			};
+
+			// (1) Injected false-complete condition:
+			// total_done (32768) >= total_wanted (16384), but total_wanted_done (0) < total_wanted (16384).
+			// The public downloaded-bytes counter must be total_wanted_done (0), NOT total_done (32768).
+			std::int64_t dl1 = -1, tot1 = -1;
+			const bool ok1 = waitForProgress(bridge, prog_id, 10s,
+				[](std::int64_t dl, std::int64_t tot) {
+					return dl == 0 && tot == 16384;
+				}, dl1, tot1);
+			TH_REQUIRE(ok1, "downloaded_bytes must equal total_wanted_done (0), never total_done (32768)");
+			TH_REQUIRE(dl1 < tot1, "partially-wanted torrent must not falsely appear complete");
+
+			// (2) Ordinary all-files-selected case:
+			// Both files wanted: total_wanted = 49152, total_wanted_done = 32768.
+			const auto all_selected = bridge.setFilePriorities(prog_id, {4, 4});
+			TH_REQUIRE(all_selected.is_ok(), "selecting all files must succeed");
+			std::int64_t dl2 = -1, tot2 = -1;
+			const bool ok2 = waitForProgress(bridge, prog_id, 10s,
+				[](std::int64_t dl, std::int64_t tot) {
+					return dl == 32768 && tot == 49152;
+				}, dl2, tot2);
+			TH_REQUIRE(ok2, "all-files-selected downloaded_bytes reflects total_wanted_done (32768)");
+			TH_REQUIRE(dl2 < tot2, "partially-downloaded all-files-selected torrent must not appear complete");
+
+			// (3) Genuine complete case: write the missing file and recheck.
+			{
+				std::ofstream out(prog_root / "1_selected.bin", std::ios::binary);
+				for (std::size_t i = 0; i < 16384; ++i) {
+					out.put(static_cast<char>((i + 17) % 251));
+				}
+			}
+			const auto recheck = bridge.requestRecheck(prog_id);
+			TH_REQUIRE(recheck.is_ok(), "recheck of fully populated files must succeed");
+			TH_REQUIRE(wait_for_alert(bridge, 30s, [&prog_id](const EngineAlertDTO& alert) {
+				return is_checked(alert) && alert.torrent_id == prog_id;
+			}), "fully populated torrent recheck completes");
+
+			std::int64_t dl3 = -1, tot3 = -1;
+			const bool ok3 = waitForProgress(bridge, prog_id, 10s,
+				[](std::int64_t dl, std::int64_t tot) {
+					return dl == 49152 && tot == 49152;
+				}, dl3, tot3);
+			TH_REQUIRE(ok3, "fully downloaded torrent must report downloaded_bytes == total_size == 49152");
+			TH_REQUIRE(dl3 == tot3, "fully downloaded torrent appears complete (downloaded == total)");
+
+			std::printf("wp23 progress evidence: partial_dl=%lld partial_tot=%lld all_dl=%lld all_tot=%lld complete_dl=%lld complete_tot=%lld\n",
+				static_cast<long long>(dl1), static_cast<long long>(tot1),
+				static_cast<long long>(dl2), static_cast<long long>(tot2),
+				static_cast<long long>(dl3), static_cast<long long>(tot3));
+
+			// Cleanup
+			const auto prep = bridge.prepareRemoval(prog_id);
+			TH_REQUIRE(prep.is_ok(), "wp23 regression prepareRemoval must succeed");
+			if (prep.is_ok()) {
+				TH_REQUIRE(bridge.commitRemoval(prep.value()).is_ok(),
+					"wp23 regression commitRemoval must succeed");
+			}
+			TH_REQUIRE(wait_for_alert(bridge, 10s, [&prog_id](const EngineAlertDTO& alert) {
+				return is_removed(alert) && alert.torrent_id == prog_id;
+			}), "removed alert arrives for wp23 regression torrent");
 		}
 	}
 

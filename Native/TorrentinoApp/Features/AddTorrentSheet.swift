@@ -54,18 +54,49 @@ struct AddTorrentSheet: View {
         viewModel.magnetInspection?.errorMessage ?? inspectionPresentation.errorMessage
     }
 
-    private var canCommit: Bool {
+    static func canCommit(
+        committing: Bool,
+        destinationPath: String?,
+        isMagnet: Bool,
+        magnetPhase: AddInspectionPhase?,
+        preview: AddTorrentPreview?,
+        isInspecting: Bool,
+        hasFileURL: Bool,
+        inspectionCanCommit: Bool,
+        selectedPaths: Set<String>,
+        trimmedText: String
+    ) -> Bool {
         guard !committing else { return false }
-        if let magnet = viewModel.magnetInspection {
-            // A retrieving or failed magnet can never commit; once the D8
-            // inspection is ready, this is the explicit confirmation gate.
-            return magnet.phase == .readyToCommit && magnet.preview != nil
+        guard destinationPath != nil else { return false }
+        if let preview, !preview.files.isEmpty, selectedPaths.isEmpty {
+            return false
         }
-        guard !inspectionPresentation.inspecting else { return false }
-        if fileURL != nil {
-            return inspectionPresentation.canCommit
+        if isMagnet {
+            return magnetPhase == .readyToCommit && preview != nil
         }
-        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !isInspecting else { return false }
+        if hasFileURL {
+            return inspectionCanCommit
+        }
+        if preview != nil {
+            return inspectionCanCommit
+        }
+        return !trimmedText.isEmpty
+    }
+
+    var canCommit: Bool {
+        Self.canCommit(
+            committing: committing,
+            destinationPath: destinationPath,
+            isMagnet: viewModel.magnetInspection != nil,
+            magnetPhase: viewModel.magnetInspection?.phase,
+            preview: activePreview,
+            isInspecting: inspectionPresentation.inspecting,
+            hasFileURL: fileURL != nil,
+            inspectionCanCommit: inspectionPresentation.canCommit,
+            selectedPaths: inspectionPresentation.selectedPaths,
+            trimmedText: text.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 
     private var selectedBytes: Int64 {
@@ -91,6 +122,12 @@ struct AddTorrentSheet: View {
                     let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty, fileURL != nil {
                         fileURL = nil
+                        inspectionPresentation.preview = nil
+                        inspectionPresentation.selectedPaths.removeAll()
+                        inspectionPresentation.inspecting = false
+                        _ = inspectionState.begin()
+                    }
+                    if fileURL == nil, inspectionPresentation.preview != nil {
                         inspectionPresentation.preview = nil
                         inspectionPresentation.selectedPaths.removeAll()
                         inspectionPresentation.inspecting = false
@@ -128,7 +165,7 @@ struct AddTorrentSheet: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else {
-                    Text(String(localized: "torrents.add.destination_default"))
+                    Text(String(localized: "torrents.add.destination_required"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -232,8 +269,8 @@ struct AddTorrentSheet: View {
         .onChange(of: viewModel.magnetInspection) { magnet in
             // A ready preflight feeds the existing selection tree exactly like
             // a local `.torrent` inspection does.
-            if let preview = magnet?.preview {
-                inspectionPresentation.selectedPaths = Set(preview.files.map(\.relativePath))
+            if magnet?.preview != nil {
+                inspectionPresentation.selectedPaths = []
             }
         }
         .onDisappear {
@@ -271,7 +308,9 @@ struct AddTorrentSheet: View {
                 // until the D8 metadata is ready and the user confirms again.
                 beginMagnetInspection(trimmed)
             } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-                finish(await viewModel.addTorrentFileURL(trimmed, startPaused: startPaused))
+                // WP23 R2: remote .torrent URL inspects and presents the same
+                // preview/selection/destination flow as a local file (no auto-commit).
+                beginURLInspection(trimmed)
             } else {
                 inspectionPresentation.errorMessage = String(localized: "torrents.add.invalid_source")
             }
@@ -297,17 +336,22 @@ struct AddTorrentSheet: View {
         }
     }
 
+    private func resolvedDestinationURL() -> URL? {
+        if let destinationURL {
+            return destinationURL
+        }
+        if let defaultLocation = viewModel.defaultDownloadLocation, !defaultLocation.isEmpty {
+            return URL(fileURLWithPath: defaultLocation, isDirectory: true)
+        }
+        return nil
+    }
+
     private func saveLocation() -> PersistedLocation? {
-        destinationURL.map { PersistedLocation(path: $0.path) }
+        resolvedDestinationURL().map { PersistedLocation(path: $0.path) }
     }
 
     private func selectionItems(for preview: AddTorrentPreview) -> [FileSelectionItem] {
-        preview.files.map { file in
-            FileSelectionItem(
-                relativePath: file.relativePath,
-                priority: inspectionPresentation.selectedPaths.contains(file.relativePath) ? .normal : .skip
-            )
-        }
+        AddTorrentInspectionPresentation.selectionItems(for: preview, selectedPaths: inspectionPresentation.selectedPaths)
     }
 
     private func seedPreferences() {
@@ -318,14 +362,14 @@ struct AddTorrentSheet: View {
 
     private func finishSuccessfulAdd() {
         preferences.recordSuccessfulAdd(
-            destinationURL: destinationURL,
+            destinationURL: resolvedDestinationURL(),
             startPaused: startPaused
         )
         dismiss()
     }
 
-    private var destinationPath: String? {
-        destinationURL?.path ?? viewModel.defaultDownloadLocation
+    var destinationPath: String? {
+        resolvedDestinationURL()?.path
     }
 
     @ViewBuilder
@@ -337,11 +381,16 @@ struct AddTorrentSheet: View {
                 }
                 Spacer()
                 if !preview.files.isEmpty {
-                    Text(Self.localizedSize("torrents.add.selected", bytes: selectedBytes))
-                        .foregroundStyle(.secondary)
+                    if inspectionPresentation.selectedPaths.isEmpty {
+                        Text(String(localized: "torrents.add.selection_required"))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(Self.localizedSize("torrents.add.selected", bytes: selectedBytes))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-
             if !preview.files.isEmpty {
                 HStack {
                     Text(String(localized: "torrents.add.files_title"))
@@ -445,6 +494,22 @@ struct AddTorrentSheet: View {
             // The localized failure travels with this attempt; lastAddError is
             // shared by other add commands and is not an inspection result.
             let outcome = await viewModel.inspectTorrentFile(url)
+            _ = AddTorrentInspectionResultApplication.apply(
+                outcome,
+                for: requestID,
+                to: &inspectionState,
+                presentation: &inspectionPresentation
+            )
+        }
+    }
+
+    private func beginURLInspection(_ urlString: String) {
+        let requestID = inspectionState.begin()
+        viewModel.abandonMagnetInspection()
+        fileURL = nil
+        inspectionPresentation = AddTorrentInspectionPresentation(inspecting: true)
+        Task { @MainActor in
+            let outcome = await viewModel.inspectTorrentFileURL(urlString)
             _ = AddTorrentInspectionResultApplication.apply(
                 outcome,
                 for: requestID,

@@ -371,6 +371,17 @@ AddSpecification addSpecificationFromJSON(NSDictionary* dict)
 	spec.enable_dht = (int)int64Value(dict, "enable-dht", -1);
 	spec.enable_pex = (int)int64Value(dict, "enable-pex", -1);
 	spec.enable_lsd = (int)int64Value(dict, "enable-lsd", -1);
+	id prioritiesVal = dict[jsonKey("file-priorities")];
+	if (prioritiesVal != nil && [prioritiesVal isKindOfClass:[NSArray class]]) {
+		for (NSNumber* rawPriority in (NSArray*)prioritiesVal) {
+			if ([rawPriority isKindOfClass:[NSNumber class]]
+				&& rawPriority.doubleValue == rawPriority.longLongValue
+				&& rawPriority.longLongValue >= 0
+				&& rawPriority.longLongValue <= 255) {
+				spec.file_priorities.push_back(static_cast<std::uint8_t>(rawPriority.unsignedIntValue));
+			}
+		}
+	}
 	return spec;
 }
 
@@ -455,6 +466,7 @@ NSDictionary* alertToJSON(const EngineAlertDTO& alert)
 		jsonKey("name") : [NSString stringWithUTF8String:alert.name.c_str()],
 		jsonKey("total-size") : @(alert.total_size),
 		jsonKey("flags") : @(alert.flags),
+		jsonKey("save-path") : [NSString stringWithUTF8String:alert.save_path.c_str()],
 	};
 }
 
