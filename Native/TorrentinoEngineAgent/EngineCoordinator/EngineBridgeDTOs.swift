@@ -500,24 +500,43 @@ public enum DTODecodeResult<T: Codable & Sendable>: Sendable {
 }
 
 /// WP22.D7 guarded metadata-only commit (`commitMetadataOnly(id, priorities,
-/// paused)`). The id must still be tracked as a temporary metadata-only
+/// paused, savePath)`). The id must still be tracked as a temporary metadata-only
 /// torrent; the vector is complete and in metainfo file order. The bridge
-/// applies the exact priority read-back, the paused state, and clears
-/// upload_mode last (ADR-022 guard-last ordering).
+/// verifies destination convergence, applies the exact priority read-back,
+/// applies the paused state, and clears upload_mode last (ADR-022 guard-last ordering).
 public struct CommitMetadataOnlyRequestDTO: Codable, Sendable, Equatable {
     public let torrentID: String
     public let priorities: [UInt8]
     public let paused: Bool
+    public let savePath: String?
 
-    public init(torrentID: String, priorities: [UInt8], paused: Bool) {
+    public init(torrentID: String, priorities: [UInt8], paused: Bool, savePath: String? = nil) {
         self.torrentID = torrentID
         self.priorities = priorities
         self.paused = paused
+        self.savePath = savePath
     }
 
     enum CodingKeys: String, CodingKey {
         case torrentID = "torrent-id"
         case priorities = "priorities"
         case paused = "paused"
+        case savePath = "save-path"
+    }
+}
+
+/// WP-25 guarded metadata-only commit outcome (`effectiveSavePath`).
+public struct CommitMetadataOnlyResultDTO: Codable, Sendable, Equatable {
+    public let torrentID: String?
+    public let effectiveSavePath: String?
+
+    public init(torrentID: String? = nil, effectiveSavePath: String? = nil) {
+        self.torrentID = torrentID
+        self.effectiveSavePath = effectiveSavePath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case torrentID = "torrent-id"
+        case effectiveSavePath = "effective-save-path"
     }
 }

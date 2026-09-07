@@ -4435,6 +4435,111 @@ final class TransferSmokeTests: TestProfileCase {
         XCTAssertEqual(removedCount, 0, "Promoted engine handle must survive commit")
     }
 
+    func testWP25MagnetCommitToDifferentDestinationConvergesAndRetries() async throws {
+        let bus = TransferEventBus(flushIntervalMilliseconds: 0)
+        let engine = StubTransferEngine()
+        let (coordinator, store, _) = try await makeCoordinator(engine: engine, bus: bus)
+
+        let dirA = profile.rootURL
+        let dirB = try profile.subdirectory("wp25-commit-b")
+        XCTAssertNotEqual(dirA.path, dirB.path)
+
+        let torrentData = MetainfoBuilder.singleFile(name: "WP25Test.bin", size: 2048, pieceLength: 256, piecesCount: 8)
+        let metainfo = try Preflight.validateTorrentData(torrentData)
+        let v1Hex = TorrentAdder.hexString(metainfo.infoHashV1!)
+        let magnetURI = "magnet:?xt=urn:btih:\(v1Hex)&dn=WP25Test"
+
+        // Preflight inspect uses default download location A
+        let inspection = try await inspect(coordinator, source: .magnet(magnetURI))
+        let initialAddSpec = await engine.lastAddSpecification()
+        XCTAssertEqual(initialAddSpec?.metadataOnly, true)
+        XCTAssertEqual(initialAddSpec?.savePath, dirA.path)
+        let inspectAddCount = await engine.addCallCount()
+        XCTAssertEqual(inspectAddCount, 1)
+
+        let engineID = "stub-1"
+        await engine.setResumeData(torrentData, for: engineID)
+        await engine.setStatuses([
+            TransferTorrentStatus(
+                engineID: engineID,
+                progressFraction: 0,
+                downloadedBytes: 0,
+                uploadedBytes: 0,
+                downloadBytesPerSec: 0,
+                uploadBytesPerSec: 0,
+                peersConnected: 1,
+                seedsTotal: 1,
+                activity: .downloading,
+                health: .healthy,
+                etaSeconds: nil,
+                metadataName: "WP25Test.bin",
+                totalBytes: 2048,
+                savePath: dirA.path
+            )
+        ])
+
+        _ = try resultPayload(from: await coordinator.processCommand(encode(
+            .pollAddOperation(PollAddOperationRequest(requestID: RequestID(), operationID: inspection.operationID))
+        )))
+
+        // Fault-injection lane: simulate engine failing to converge, returning authoritative A
+        await engine.setCommitMetadataOnlyEffectivePathOverride(dirA.path)
+
+        let failedReply = await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: dirB.path),
+                fileSelection: [FileSelectionItem(relativePath: "WP25Test.bin", priority: .normal)],
+                startPaused: true
+            ))
+        ))
+        let failedEnvelope = decode(IPCEnvelope.self, from: failedReply)
+        guard case .failure(let fault) = failedEnvelope.result else {
+            return XCTFail("Expected failure on diverged destination convergence")
+        }
+        XCTAssertEqual(fault.code, .volumeUnavailable)
+        XCTAssertTrue(fault.recoveryActions.contains("choose_storage"))
+
+        // Verify zero persistence, zero admission, operation retained
+        let storeTorrentsAfterFail = try await store.allTorrents()
+        XCTAssertTrue(storeTorrentsAfterFail.isEmpty, "Diverged commit must not persist record")
+        let failAddCount = await engine.addCallCount()
+        XCTAssertEqual(failAddCount, 1, "Diverged commit must not re-add handle")
+        let failMoveCount = await engine.moveCalls().count
+        XCTAssertEqual(failMoveCount, 0, "No coordinator moveStorage called")
+
+        // Retry lane: bridge converges to B
+        await engine.setCommitMetadataOnlyEffectivePathOverride(nil)
+
+        let successReply = await coordinator.processCommand(encode(
+            .commitAdd(CommitAddRequest(
+                requestID: RequestID(),
+                idempotencyKey: IdempotencyKey(),
+                operationID: inspection.operationID,
+                saveLocation: PersistedLocation(path: dirB.path),
+                fileSelection: [FileSelectionItem(relativePath: "WP25Test.bin", priority: .normal)],
+                startPaused: true
+            ))
+        ))
+        let successPayload = try resultPayload(from: successReply)
+        guard case .commitAdd(let commitResult) = successPayload else {
+            return XCTFail("Expected successful commitAdd on retry")
+        }
+
+        let allTorrents = try await store.allTorrents()
+        XCTAssertEqual(allTorrents.count, 1)
+        let persistedID = allTorrents.first?.id
+        XCTAssertEqual(persistedID, commitResult.recordID.rawValue.uuidString)
+        let persistedLocation = try await store.torrentLocation(torrentID: commitResult.recordID.rawValue.uuidString)
+        XCTAssertEqual(persistedLocation?.path, dirB.path)
+        let retryAddCount = await engine.addCallCount()
+        XCTAssertEqual(retryAddCount, 1, "Idempotent commit must not create additional handles")
+        let retryMoveCount = await engine.moveCalls().count
+        XCTAssertEqual(retryMoveCount, 0, "No coordinator moveStorage called")
+    }
+
     func testCancelAddRemovesHandleAndOperation() async throws {
         let bus = TransferEventBus(flushIntervalMilliseconds: 0)
         let engine = StubTransferEngine()
@@ -4879,10 +4984,12 @@ actor StubTransferEngine: TransferEngine {
     private var failNextFileSelectionError: EngineFault?
     private var fileSelectionHook: (@Sendable () async -> Void)?
     private var resumeHook: (@Sendable () async -> Void)?
+    private var addHook: (@Sendable () async -> Void)?
     private var reannouncedIDs: [String] = []
     private var recheckedIDs: [String] = []
     private var movedStorage: [(torrentID: String, destinationPath: String)] = []
     private var removedIDs: [String] = []
+    private var pausedIDs: [String] = []
     private var addSpecifications: [AddSpecificationDTO] = []
     private var failMoveStorage = false
     private var failRecheck = false
@@ -4897,11 +5004,18 @@ actor StubTransferEngine: TransferEngine {
     /// marker (per-record engine fault injection).
     private var failAddMarker: String?
 
-    private var commitMetadataOnlyCalls: [(torrentID: String, priorities: [UInt8], paused: Bool)] = []
+    private var failStart = false
+    private var failNextPauseError: EngineFault?
+    private var pauseHook: (@Sendable () async -> Void)?
+    private var commitMetadataOnlyCalls: [(torrentID: String, priorities: [UInt8], paused: Bool, savePath: String?)] = []
+    private var commitMetadataOnlyEffectivePathOverride: String?
     private var failNextCommitMetadataOnlyError: EngineFault?
     var isStarted: Bool { started }
 
     func start(configuration: EngineSettings?) async throws {
+        if failStart {
+            throw EngineStubError.startFailed
+        }
         configurationHistory.append(configuration)
         started = true
     }
@@ -5027,6 +5141,10 @@ actor StubTransferEngine: TransferEngine {
     func setResumeHook(_ hook: (@Sendable () async -> Void)?) {
         resumeHook = hook
     }
+    func setAddHook(_ hook: (@Sendable () async -> Void)?) {
+        addHook = hook
+    }
+
 
     func fileSelectionCallCount() -> Int {
         fileSelectionCalls.count
@@ -5106,11 +5224,23 @@ actor StubTransferEngine: TransferEngine {
                 )
             }
         }
+        if let addHook {
+            await addHook()
+        }
         return AddResultDTO(torrentID: torrentID, infoHash: "stub", name: "stub", totalSize: -1)
     }
 
 
-    func pause(torrentID: String) async throws {}
+    func pause(torrentID: String) async throws {
+        if let error = failNextPauseError {
+            failNextPauseError = nil
+            throw error
+        }
+        pausedIDs.append(torrentID)
+        if let pauseHook {
+            await pauseHook()
+        }
+    }
     func resume(torrentID: String) async throws {
         if let error = failNextResumeError {
             failNextResumeError = nil
@@ -5154,6 +5284,25 @@ actor StubTransferEngine: TransferEngine {
         removedIDs.filter { $0 == torrentID }.count
     }
 
+    func pausedCount(for torrentID: String) -> Int {
+        pausedIDs.filter { $0 == torrentID }.count
+    }
+
+    func setFailStart(_ value: Bool) {
+        failStart = value
+        if value {
+            started = false
+        }
+    }
+
+    func failNextPause(with error: EngineFault) {
+        failNextPauseError = error
+    }
+
+    func setPauseHook(_ hook: (@Sendable () async -> Void)?) {
+        pauseHook = hook
+    }
+
     func setFailMoveStorage(_ value: Bool) {
         failMoveStorage = value
     }
@@ -5165,12 +5314,22 @@ actor StubTransferEngine: TransferEngine {
     func setRecheckHook(_ hook: (@Sendable () async -> Void)?) {
         recheckHook = hook
     }
-    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
-        commitMetadataOnlyCalls.append((torrentID, priorities, paused))
+    func setCommitMetadataOnlyEffectivePathOverride(_ path: String?) {
+        commitMetadataOnlyEffectivePathOverride = path
+    }
+
+    func commitMetadataOnly(
+        torrentID: String,
+        priorities: [UInt8],
+        paused: Bool,
+        savePath: String?
+    ) async throws -> String {
+        commitMetadataOnlyCalls.append((torrentID, priorities, paused, savePath))
         if let error = failNextCommitMetadataOnlyError {
             failNextCommitMetadataOnlyError = nil
             throw error
         }
+        return commitMetadataOnlyEffectivePathOverride ?? savePath ?? ""
     }
 
     func failNextCommitMetadataOnly(with error: EngineFault) {
@@ -5181,7 +5340,7 @@ actor StubTransferEngine: TransferEngine {
         commitMetadataOnlyCalls.count
     }
 
-    func lastCommitMetadataOnlyCall() -> (torrentID: String, priorities: [UInt8], paused: Bool)? {
+    func lastCommitMetadataOnlyCall() -> (torrentID: String, priorities: [UInt8], paused: Bool, savePath: String?)? {
         commitMetadataOnlyCalls.last
     }
 
@@ -5261,6 +5420,7 @@ private enum EngineStubError: Error {
     case settingsApplyFailed
     case torrentMutationFailed
     case resumeDataUnavailable
+    case startFailed
 }
 
 // MARK: - URLProtocol stub

@@ -169,14 +169,22 @@ final class WP18FinderServicesTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        sceneWindow.isReleasedWhenClosed = false
+        sceneWindow.animationBehavior = .none
         sceneWindow.title = AppDelegate.mainWindowTitle
         defer {
             // Tear down this stand-in and any fallback the run created so
             // later tests start from a clean window list.
             for window in NSApp.windows where window.title == AppDelegate.mainWindowTitle {
+                window.isReleasedWhenClosed = false
+                window.animationBehavior = .none
                 window.delegate = nil
+                window.contentViewController = nil
+                window.orderOut(nil)
                 window.close()
             }
+            CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
 
         XCTAssertFalse(sceneWindow.canBecomeMain, "cold precondition: window was never presented")
@@ -210,9 +218,15 @@ final class WP18FinderServicesTests: XCTestCase {
             // Tear down every retained fallback this run created so later
             // tests start from a clean window list.
             for window in NSApp.windows where window.title == AppDelegate.mainWindowTitle {
+                window.isReleasedWhenClosed = false
+                window.animationBehavior = .none
                 window.delegate = nil
+                window.contentViewController = nil
+                window.orderOut(nil)
                 window.close()
             }
+            CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
 
         CreatorServiceRouter.bringMainWindowForward()

@@ -670,6 +670,59 @@ final class WP23AddPipelineAgentTests: TestProfileCase {
         XCTAssertEqual(finalAddCalls, 1, "diverged live handle must not be silently re-added elsewhere")
     }
 
+    /// WP-25 D2 detector lane: pump a durable record B while engine reports live A twice -> .waitingForVolume persists on both pumps
+    func testWP25LiveHandleSavePathDivergencePersistsWaitingForVolumeAcrossPumps() async throws {
+        let engine = StubTransferEngine()
+        let (coordinator, _) = try await makeCoordinator(engine: engine)
+        let dirA = try profile.subdirectory("wp25-diverge-pump-a")
+        let dirB = try profile.subdirectory("wp25-diverge-pump-b")
+        XCTAssertNotEqual(dirA.path, dirB.path)
+
+        let torrent = MetainfoBuilder.singleFile(name: "wp25-diverge.bin", size: 1024, pieceLength: 256, piecesCount: 1)
+        let inspection = try await inspect(coordinator, source: AddSource.torrentFileData(torrent))
+        let commit = CommitAddRequest(
+            requestID: RequestID(),
+            idempotencyKey: IdempotencyKey(),
+            operationID: inspection.operationID,
+            saveLocation: PersistedLocation(path: dirB.path),
+            startPaused: true
+        )
+        guard case .commitAdd(let addResult) = try resultPayload(from: await coordinator.processCommand(encode(.commitAdd(commit)))) else {
+            return XCTFail("commitAdd failed")
+        }
+
+        // Live handle reports diverged location dirA
+        await engine.setStatuses([TransferTorrentStatus(
+            engineID: "stub-1",
+            progressFraction: 0,
+            downloadedBytes: 0,
+            uploadedBytes: 0,
+            downloadBytesPerSec: 0,
+            uploadBytesPerSec: 0,
+            peersConnected: 0,
+            seedsTotal: 0,
+            activity: .idle,
+            health: .healthy,
+            etaSeconds: nil,
+            metadataName: nil,
+            totalBytes: 1024,
+            savePath: dirA.path
+        )])
+
+        // First pump detects divergence and transitions health to .waitingForVolume
+        await coordinator.pumpOnce()
+        let recordFirstPump = await coordinator.record(for: addResult.recordID)
+        XCTAssertEqual(recordFirstPump?.health, .waitingForVolume, "First pump must detect live handle divergence and set waitingForVolume")
+
+        // Second pump must keep .waitingForVolume intact (not reset or flap)
+        await coordinator.pumpOnce()
+        let recordSecondPump = await coordinator.record(for: addResult.recordID)
+        XCTAssertEqual(recordSecondPump?.health, .waitingForVolume, "Second pump must preserve waitingForVolume while divergence persists")
+
+        let finalAddCalls = await engine.addCallCount()
+        XCTAssertEqual(finalAddCalls, 1, "Diverged handle must not trigger silent re-add")
+    }
+
     /// 6. applying(status:) honesty: no synthesized total, isCompleted false while downloadRate > 0, true only at seeding with downloaded >= total
     func testWP23TruthfulProgressHonesty() {
         let record = TransferRecord(

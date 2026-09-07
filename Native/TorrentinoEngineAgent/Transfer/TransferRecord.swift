@@ -228,10 +228,11 @@ public protocol TransferEngine: Sendable {
     /// vector in metainfo file order (.normal -> 4, .skip -> 0). Production
     /// bridges perform a bounded native read-back before reporting success.
     func setFileSelection(torrentID: String, priorities: [UInt8]) async throws
-    /// WP22.D7 (ADR-022): guarded promotion of a temporary metadata-only
-    /// torrent: applies the full priority vector behind the native upload_mode
-    /// guard, applies the paused state, then releases the guard last.
-    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws
+    /// WP22.D7 (ADR-022) / WP-25 (WP25.D1): guarded promotion of a temporary metadata-only
+    /// torrent: converges destination storage if specified, applies the full
+    /// priority vector behind the native upload_mode guard, applies the paused
+    /// state, then releases the guard last. Returns verified effective save path.
+    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool, savePath: String?) async throws -> String
     /// Accepted live edits are complete nested replacements. The scalar
     /// overload below remains only as a reject-only compatibility surface.
     func editTrackers(torrentID: String, trackerTiers: [[String]]) async throws
@@ -272,7 +273,7 @@ public extension TransferEngine {
         throw EngineCoordinatorError.unsupportedOperation("file selection")
     }
 
-    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
+    func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool, savePath: String?) async throws -> String {
         throw EngineCoordinatorError.unsupportedOperation("metadata-only commit")
     }
 

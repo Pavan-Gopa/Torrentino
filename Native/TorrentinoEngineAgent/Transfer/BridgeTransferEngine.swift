@@ -156,13 +156,39 @@ public actor BridgeTransferEngine: TransferEngine {
         }
     }
 
-    /// WP22.D7 (ADR-022): forwards the guarded metadata-only commit to the
-    /// native bridge. The bridge's guard-last ordering (exact read-back ->
-    /// paused state -> upload_mode cleared) is what makes the promotion
-    /// truthful; a failure leaves the torrent temporary and guarded.
-    public func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) async throws {
+    /// WP22.D7 (ADR-022) / WP-25 (WP25.D1): forwards the guarded metadata-only
+    /// commit to the native bridge with destination convergence. The bridge's
+    /// guard-last ordering (exact read-back -> paused state -> upload_mode cleared)
+    /// makes promotion truthful; a failure leaves the torrent temporary and guarded.
+    /// On success, seeds savePathsByTorrentID from the authoritative effective path.
+    public func commitMetadataOnly(
+        torrentID: String,
+        priorities: [UInt8],
+        paused: Bool,
+        savePath: String?
+    ) async throws -> String {
         do {
-            try await coordinator.commitMetadataOnly(torrentID: torrentID, priorities: priorities, paused: paused)
+            let result = try await coordinator.commitMetadataOnly(
+                torrentID: torrentID,
+                priorities: priorities,
+                paused: paused,
+                savePath: savePath
+            )
+            let trimmedRequested = savePath?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let requested = trimmedRequested, !requested.isEmpty {
+                guard let effectivePath = result.effectiveSavePath, !effectivePath.isEmpty else {
+                    throw EngineCoordinatorError.io
+                }
+                savePathsByTorrentID[torrentID] = effectivePath
+                return effectivePath
+            } else {
+                // Optional legacy result decoding still supported; never seeded from request.
+                if let effectivePath = result.effectiveSavePath, !effectivePath.isEmpty {
+                    savePathsByTorrentID[torrentID] = effectivePath
+                    return effectivePath
+                }
+                return ""
+            }
         } catch {
             throw Self.mappedBridgeError(error, operation: "commitMetadataOnly")
         }

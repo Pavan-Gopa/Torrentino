@@ -160,10 +160,13 @@ struct BridgeSwiftTest {
                 defaultSaveLocation: PersistedLocation(path: agentRoot.path),
                 pumpIntervalNanoseconds: nil
             )
+            let agentDownloads = URL(fileURLWithPath: tmp).appendingPathComponent("agent-downloads", isDirectory: true)
+            try FileManager.default.createDirectory(at: agentDownloads, withIntermediateDirectories: true)
             let agentTorrentData = makeMultiFileSelectionTorrent(name: "agent-ipc-test")
             let agentRecordID = try await Self.commitRecord(
                 to: agent,
-                source: .torrentFileData(agentTorrentData)
+                source: .torrentFileData(agentTorrentData),
+                destination: PersistedLocation(path: agentDownloads.path)
             )
             let agentBandwidth = await agent.processCommand(Self.encode(.setLimits(SetLimitsRequest(
                 requestID: RequestID(),
@@ -307,10 +310,13 @@ struct BridgeSwiftTest {
             // TransferCoordinator (engine-first barrier) -> BridgeTransferEngine
             // -> EngineCoordinator.setFilePriorities -> ObjC++ adapter ->
             // EngineBridge prioritize_files + bounded exact read-back.
+            let selectionDownloads = URL(fileURLWithPath: tmp).appendingPathComponent("selection-downloads", isDirectory: true)
+            try FileManager.default.createDirectory(at: selectionDownloads, withIntermediateDirectories: true)
             let selectionTorrent = makeMultiFileSelectionTorrent()
             let selectionRecordID = try await Self.commitRecord(
                 to: agent,
-                source: .torrentFileData(selectionTorrent)
+                source: .torrentFileData(selectionTorrent),
+                destination: PersistedLocation(path: selectionDownloads.path)
             )
             let selectionReply = Self.decode(await agent.processCommand(Self.encode(.setFileSelection(
                 SetFileSelectionRequest(
@@ -591,13 +597,17 @@ struct BridgeSwiftTest {
         }
     }
 
-    private static func addMagnet(to coordinator: TransferCoordinator, uri: String) async throws -> TorrentRecordID {
-        try await Self.commitRecord(to: coordinator, source: .magnet(uri))
+    private static func addMagnet(to coordinator: TransferCoordinator, uri: String, destination: PersistedLocation) async throws -> TorrentRecordID {
+        try await Self.commitRecord(to: coordinator, source: .magnet(uri), destination: destination)
     }
 
     /// Inspects and commits any source (.torrent bytes or magnet URI),
     /// returning the durable record id.
-    private static func commitRecord(to coordinator: TransferCoordinator, source: AddSource) async throws -> TorrentRecordID {
+    private static func commitRecord(
+        to coordinator: TransferCoordinator,
+        source: AddSource,
+        destination: PersistedLocation
+    ) async throws -> TorrentRecordID {
         let inspectionReply = await coordinator.processCommand(Self.encode(.inspectAddSource(
             InspectAddSourceRequest(requestID: RequestID(), source: source)
         )))
@@ -617,7 +627,8 @@ struct BridgeSwiftTest {
         let commitReply = await coordinator.processCommand(Self.encode(.commitAdd(CommitAddRequest(
             requestID: RequestID(),
             idempotencyKey: IdempotencyKey(),
-            operationID: opID
+            operationID: opID,
+            saveLocation: destination
         ))))
         let commitResult = Self.decode(commitReply).result
         guard case .success(.commitAdd(let result)) = commitResult else {

@@ -127,32 +127,37 @@ enum RemovalManifestBuilder {
         let saveLocation = (record.saveLocation.path as NSString).expandingTildeInPath
         let saveURL = URL(fileURLWithPath: saveLocation).standardizedFileURL.path
 
-        // All manifest paths live directly under the save location (metainfo
-        // paths are relative to it per WP-07 parsing). Any path escaping the
-        // save location is a hard failure — never a silent skip.
+        // Validate the torrent name: must be a single relative component staying inside saveLocation.
+        let validatedName = try validateName(metainfo.name, under: saveURL)
+        let isSingle = metainfo.isSingleFile
+        let payloadRoot = isSingle ? saveURL : RemovalManifest.join(saveURL, validatedName)
+
         var fileEntries: [RemovalManifestItem] = []
         var directories: [String] = []
         var seenDirectories = Set<String>()
         for file in metainfo.files {
             guard file.sizeBytes >= 0 else { continue }
-            let absolute = RemovalManifest.join(saveURL, file.path)
+            let relativePath = isSingle ? file.path : "\(validatedName)/\(file.path)"
+            let absolute = RemovalManifest.join(saveURL, relativePath)
             guard isContained(absolute, under: saveURL) else {
                 throw RemovalManifestError.pathOutsideSaveLocation(file.path)
             }
-            let shared = otherPayloadFiles.contains(absolute)
-                || otherPayloadRoots.contains { root in
-                    isContained(absolute, under: root)
+            if !isSingle {
+                guard isContained(absolute, under: payloadRoot) else {
+                    throw RemovalManifestError.pathOutsideSaveLocation(file.path)
                 }
+            }
+            let shared = otherPayloadFiles.contains(absolute)
             fileEntries.append(RemovalManifestItem(
-                relativePath: file.path,
+                relativePath: relativePath,
                 sizeBytes: file.sizeBytes,
                 kind: .file,
                 isShared: shared,
                 fileIdentity: FileSafetyValidator.captureIdentity(
-                    absolutePath: RemovalManifest.join(saveURL, file.path)
+                    absolutePath: absolute
                 )
             ))
-            var parent = (file.path as NSString).deletingLastPathComponent
+            var parent = (relativePath as NSString).deletingLastPathComponent
             while !parent.isEmpty && parent != "." && parent != "/" {
                 if seenDirectories.insert(parent).inserted {
                     directories.append(parent)
@@ -161,12 +166,22 @@ enum RemovalManifestBuilder {
             }
         }
 
-        // Directory entries: shared when another torrent owns a file inside.
+        if !isSingle {
+            // Ensure the name directory itself is in the manifest so it can be
+            // trashed when empty after its files.
+            if seenDirectories.insert(validatedName).inserted {
+                directories.append(validatedName)
+            }
+        }
+
+        // Directory entries: shared when another torrent owns a file inside or shares the root.
         var directoryEntries: [RemovalManifestItem] = []
         for directory in directories.sorted(by: { $0.split(separator: "/").count < $1.split(separator: "/").count }) {
             let absolute = RemovalManifest.join(saveURL, directory)
             let shared = otherPayloadFiles.contains { other in
                 isContained(other, under: absolute)
+            } || otherPayloadRoots.contains { otherRoot in
+                isContained(otherRoot, under: absolute)
             }
             directoryEntries.append(RemovalManifestItem(
                 relativePath: directory,
@@ -176,7 +191,6 @@ enum RemovalManifestBuilder {
             ))
         }
 
-        let payloadRoot = saveURL
         return RemovalManifest(
             saveLocationPath: saveURL,
             payloadRootPath: payloadRoot,
@@ -194,19 +208,49 @@ enum RemovalManifestBuilder {
         }
         let saveLocation = (record.saveLocation.path as NSString).expandingTildeInPath
         let saveURL = URL(fileURLWithPath: saveLocation).standardizedFileURL.path
-        return Set(metainfo.files.map { RemovalManifest.join(saveURL, $0.path) })
+        guard let validatedName = try? validateName(metainfo.name, under: saveURL) else {
+            return []
+        }
+        let isSingle = metainfo.isSingleFile
+        return Set(metainfo.files.map { file in
+            let relative = isSingle ? file.path : "\(validatedName)/\(file.path)"
+            return RemovalManifest.join(saveURL, relative)
+        })
     }
 
-    /// The payload root of a record: its save location itself (metainfo file
-    /// paths are relative to the save path, per WP-07 parsing). Returns nil
-    /// when the metainfo is unavailable.
+    /// The payload root of a record: for single-file it is saveLocation; for
+    /// multi-file it is saveLocation/metainfo.name. Returns nil when metainfo is
+    /// unavailable or name is invalid.
     static func payloadRoot(of record: TransferRecord) -> String? {
         guard let metainfoData = record.metainfoData,
-              (try? Preflight.validateTorrentData(metainfoData)) != nil else {
+              let metainfo = try? Preflight.validateTorrentData(metainfoData) else {
             return nil
         }
         let saveLocation = (record.saveLocation.path as NSString).expandingTildeInPath
-        return URL(fileURLWithPath: saveLocation).standardizedFileURL.path
+        let saveURL = URL(fileURLWithPath: saveLocation).standardizedFileURL.path
+        guard let validatedName = try? validateName(metainfo.name, under: saveURL) else {
+            return nil
+        }
+        if metainfo.isSingleFile {
+            return saveURL
+        } else {
+            return RemovalManifest.join(saveURL, validatedName)
+        }
+    }
+
+    private static func validateName(_ name: String, under saveURL: String) throws -> String {
+        if PathValidator.validationError(name) != nil {
+            throw RemovalManifestError.pathOutsideSaveLocation(name)
+        }
+        let normalized = PathValidator.normalizedPath(name)
+        guard !normalized.isEmpty, !normalized.contains("/") else {
+            throw RemovalManifestError.pathOutsideSaveLocation(name)
+        }
+        let absolute = RemovalManifest.join(saveURL, normalized)
+        guard isContained(absolute, under: saveURL), absolute != saveURL else {
+            throw RemovalManifestError.pathOutsideSaveLocation(name)
+        }
+        return normalized
     }
 
     private static func isContained(_ path: String, under root: String) -> Bool {
@@ -234,6 +278,8 @@ enum FileSafetyValidator {
         case sizeMismatch(expected: Int64, actual: Int64)
         case identityChanged(String)
         case notEmpty(String)
+        case permissionDenied(String)
+        case unavailableRoot(String)
     }
 
     /// Verifies the full component chain of `absolutePath` under `root`
@@ -243,19 +289,25 @@ enum FileSafetyValidator {
     static func verifyChain(root: String, absolutePath: String) -> Issue? {
         let normalizedRoot = URL(fileURLWithPath: root).standardizedFileURL.path
         let normalizedPath = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
-        guard normalizedPath.hasPrefix(normalizedRoot + "/") else {
+        guard normalizedPath == normalizedRoot || normalizedPath.hasPrefix(normalizedRoot + "/") else {
             return .symlink(normalizedPath) // outside root: treat as unsafe
         }
         // Root-leaf check (Gate 7): the save location itself must be a real
         // directory. Ancestors ABOVE the root are ambient filesystem structure
         // (e.g. /var → /private/var), not attacker-controlled save locations.
-        guard let rootResult = lstat(normalizedRoot) else {
-            return .missing
+        var rootStat = Darwin.stat()
+        if normalizedRoot.withCString({ Darwin.lstat($0, &rootStat) }) != 0 {
+            let err = Darwin.errno
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(normalizedRoot)
+            }
+            return .unavailableRoot(normalizedRoot)
         }
-        guard !rootResult.isSymlink else {
+        let rootMode = rootStat.st_mode
+        if (rootMode & S_IFMT) == S_IFLNK {
             return .symlink(normalizedRoot)
         }
-        guard rootResult.isDirectory else {
+        guard (rootMode & S_IFMT) == S_IFDIR else {
             return .wrongKind
         }
         var components: [String] = []
@@ -267,10 +319,15 @@ enum FileSafetyValidator {
         var cursor = normalizedRoot
         for component in components {
             cursor = (cursor as NSString).appendingPathComponent(component)
-            guard let lstatResult = lstat(cursor) else {
+            var stat = Darwin.stat()
+            if cursor.withCString({ Darwin.lstat($0, &stat) }) != 0 {
+                let err = Darwin.errno
+                if err == EACCES || err == EPERM {
+                    return .permissionDenied(cursor)
+                }
                 return .missing
             }
-            if lstatResult.isSymlink {
+            if (stat.st_mode & S_IFMT) == S_IFLNK {
                 return .symlink(cursor)
             }
         }
@@ -285,18 +342,38 @@ enum FileSafetyValidator {
     static func verifyFileIdentity(
         absolutePath: String,
         expectedSize: Int64,
-        expectedIdentity: FileIdentity? = nil
+        expectedIdentity: FileIdentity? = nil,
+        allowPartial: Bool = false
     ) -> Issue? {
         let fd = absolutePath.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
         guard fd >= 0 else {
-            return Darwin.errno == ELOOP ? .symlink(absolutePath) : .missing
+            let err = Darwin.errno
+            if err == ELOOP {
+                return .symlink(absolutePath)
+            }
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
+            return .missing
         }
         defer { Darwin.close(fd) }
         var stat = Darwin.stat()
-        guard Darwin.fstat(fd, &stat) == 0 else { return .missing }
+        guard Darwin.fstat(fd, &stat) == 0 else {
+            let err = Darwin.errno
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
+            return .missing
+        }
         guard (stat.st_mode & S_IFMT) == S_IFREG else { return .wrongKind }
-        guard stat.st_size == expectedSize else {
-            return .sizeMismatch(expected: expectedSize, actual: Int64(stat.st_size))
+        if allowPartial {
+            guard stat.st_size >= 0 && stat.st_size <= expectedSize else {
+                return .sizeMismatch(expected: expectedSize, actual: Int64(stat.st_size))
+            }
+        } else {
+            guard stat.st_size == expectedSize else {
+                return .sizeMismatch(expected: expectedSize, actual: Int64(stat.st_size))
+            }
         }
         if let expectedIdentity {
             let actual = FileIdentity(
@@ -307,15 +384,27 @@ enum FileSafetyValidator {
             guard actual == expectedIdentity else {
                 return .identityChanged(absolutePath)
             }
+        } else {
+            // Newly created between prepare and commit: must not be hardlinked elsewhere.
+            guard stat.st_nlink == 1 else {
+                return .identityChanged(absolutePath)
+            }
         }
         return nil
     }
 
     /// Verifies the leaf is a real directory (lstat: not a symlink).
     static func verifyDirectoryIdentity(absolutePath: String) -> Issue? {
-        guard let lstatResult = lstat(absolutePath) else { return .missing }
-        guard !lstatResult.isSymlink else { return .symlink(absolutePath) }
-        guard lstatResult.isDirectory else { return .wrongKind }
+        var stat = Darwin.stat()
+        if absolutePath.withCString({ Darwin.lstat($0, &stat) }) != 0 {
+            let err = Darwin.errno
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
+            return .missing
+        }
+        if (stat.st_mode & S_IFMT) == S_IFLNK { return .symlink(absolutePath) }
+        guard (stat.st_mode & S_IFMT) == S_IFDIR else { return .wrongKind }
         return nil
     }
 
@@ -327,16 +416,33 @@ enum FileSafetyValidator {
     static func verifyDirectoryEmpty(absolutePath: String) -> Issue? {
         let fd = absolutePath.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
         guard fd >= 0 else {
-            return Darwin.errno == ELOOP ? .symlink(absolutePath) : .missing
+            let err = Darwin.errno
+            if err == ELOOP {
+                return .symlink(absolutePath)
+            }
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
+            return .missing
         }
         // fdopendir takes ownership of fd; closedir releases it.
         guard let dirStream = Darwin.fdopendir(fd) else {
+            let err = Darwin.errno
             Darwin.close(fd)
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
             return .missing
         }
         defer { Darwin.closedir(dirStream) }
         var stat = Darwin.stat()
-        guard Darwin.fstat(fd, &stat) == 0 else { return .missing }
+        guard Darwin.fstat(fd, &stat) == 0 else {
+            let err = Darwin.errno
+            if err == EACCES || err == EPERM {
+                return .permissionDenied(absolutePath)
+            }
+            return .missing
+        }
         guard (stat.st_mode & S_IFMT) == S_IFDIR else { return .wrongKind }
         while let entry = Darwin.readdir(dirStream) {
             let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes -> String in

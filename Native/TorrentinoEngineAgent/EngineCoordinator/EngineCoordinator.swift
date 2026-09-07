@@ -84,15 +84,23 @@ public actor EngineCoordinator {
         try voidCall(payload) { try adapter.setFilePrioritiesWithPayloadData($0) }
     }
 
-    /// WP22.D7 (ADR-022): guarded commit for a temporary metadata-only
-    /// torrent. The native bridge verifies the tracked handle and metainfo,
-    /// applies the full priority vector behind the exact read-back, applies
-    /// the paused state, and clears upload_mode last; any failure keeps the
-    /// guard set and the temporary tracking intact.
-    public func commitMetadataOnly(torrentID: String, priorities: [UInt8], paused: Bool) throws {
+    /// WP22.D7 (ADR-022) / WP-25 (WP25.D1): guarded commit for a temporary metadata-only
+    /// torrent. The native bridge verifies destination convergence, applies
+    /// the full priority vector behind the exact read-back, applies the paused
+    /// state, and clears upload_mode last; any failure keeps the guard set and
+    /// the temporary tracking intact.
+    @discardableResult
+    public func commitMetadataOnly(
+        torrentID: String,
+        priorities: [UInt8],
+        paused: Bool,
+        savePath: String? = nil
+    ) throws -> CommitMetadataOnlyResultDTO {
+        guard started else { throw EngineCoordinatorError.notStarted }
         let payload = try encode(CommitMetadataOnlyRequestDTO(
-            torrentID: torrentID, priorities: priorities, paused: paused))
-        try voidCall(payload) { try adapter.commitMetadataOnly(withPayloadData: $0) }
+            torrentID: torrentID, priorities: priorities, paused: paused, savePath: savePath))
+        let response = try envelope { try adapter.commitMetadataOnly(withPayloadData: payload) }
+        return try decode(CommitMetadataOnlyResultDTO.self, from: response)
     }
 
     /// Reads the native handle's current bandwidth limits without changing it.

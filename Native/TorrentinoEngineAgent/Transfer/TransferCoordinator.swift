@@ -145,6 +145,12 @@ public actor TransferCoordinator {
     private var settingsRevision: SettingsRevision = 1
     private var lastReannounceAt: [TorrentRecordID: Date] = [:]
     private var pendingRemovalTokens: [String: TorrentRecordID] = [:]
+    private var activeCommitRemovals: Set<TorrentRecordID> = []
+    private var activeAdmissions: [TorrentRecordID: Int] = [:]
+#if DEBUG
+    var moveJournalAwaitHook: (@Sendable () async -> Void)?
+    var removalTokenAwaitHook: (@Sendable () async -> Void)?
+#endif
     private var systemConditions = SystemConditions.normal
     private var resourceBudget = EngineResourceBudget.balanced
     private var safeRecovery: Bool
@@ -1359,18 +1365,48 @@ public actor TransferCoordinator {
         if let engineID = activeOp.engineID, let metainfo = activeOp.metainfo {
             let priorities = Self.prioritiesVector(for: metainfo, selection: selection)
             do {
-                try await engine.commitMetadataOnly(
+                let effectivePath = try await engine.commitMetadataOnly(
                     torrentID: engineID,
                     priorities: priorities,
-                    paused: request.startPaused ?? false
+                    paused: request.startPaused ?? false,
+                    savePath: saveLocation.path
                 )
+                if Self.isSavePathDiverged(actual: effectivePath, expected: saveLocation.path) {
+                    if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
+                        failedOp.isInFlight = false
+                        pendingOperations[request.operationID] = failedOp
+                    }
+                    log.error("commitAdd: destination convergence failed for operation \(request.operationID): effectivePath=\(effectivePath) != expected=\(saveLocation.path)")
+                    return .failure(EngineFault.volumeUnavailable(
+                        recordID: nil,
+                        volumeIdentifier: saveLocation.volumeIdentifier,
+                        details: "destination convergence failed: live save_path=\(effectivePath) != expected=\(saveLocation.path)"
+                    ))
+                }
             } catch {
                 if var failedOp = pendingOperations[request.operationID], failedOp.generation == commitGen {
                     failedOp.isInFlight = false
                     pendingOperations[request.operationID] = failedOp
                 }
                 log.error("commitAdd: commitMetadataOnly failed for operation \(request.operationID): \(String(describing: error))")
-                return .failure(EngineFault.engineNotReady(details: "commitMetadataOnly failed: \(error)"))
+                let fault: EngineFault
+                if let ef = error as? EngineFault {
+                    fault = ef
+                } else if let coordinatorError = error as? EngineCoordinatorError {
+                    switch coordinatorError {
+                    case .io, .engineFailure:
+                        fault = .volumeUnavailable(
+                            recordID: nil,
+                            volumeIdentifier: saveLocation.volumeIdentifier,
+                            details: "destination storage move failed: \(coordinatorError)"
+                        )
+                    default:
+                        fault = Self.engineFault(error, operation: "commitMetadataOnly", fallback: "commitMetadataOnly failed: \(error)")
+                    }
+                } else {
+                    fault = Self.engineFault(error, operation: "commitMetadataOnly", fallback: "commitMetadataOnly failed: \(error)")
+                }
+                return .failure(fault)
             }
         }
 
@@ -1476,13 +1512,39 @@ public actor TransferCoordinator {
         guard let existing = records[recordID] else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
+        guard !activeCommitRemovals.contains(recordID) else {
+            return .failure(EngineFault.engineBusy(details: "removal commit in flight for record"))
+        }
+        if pendingRemovalTokens.values.contains(recordID) {
+            let tokensForRecord = pendingRemovalTokens.filter { $0.value == recordID }.map(\.key)
+            var hasActivePending = false
+            for tokenStr in tokensForRecord {
+                if let rec = try? await persistence.removalToken(by: tokenStr), rec.status == "pending" {
+                    hasActivePending = true
+                } else {
+                    pendingRemovalTokens.removeValue(forKey: tokenStr)
+                }
+            }
+            if hasActivePending {
+                return .failure(EngineFault.invalidRequest(details: "torrent is pending removal"))
+            }
+        }
+        if existing.desiredState == desired {
+            return .success(.ack)
+        }
         do {
             try await persistence.updateTorrentState(torrentID: recordID.rawValue.uuidString, state: desired.rawValue)
         } catch {
             log.error("pause/resume: persistence failed for \(recordID): \(TorrentinoLog.redactedDescription(error))")
             return .failure(Self.persistenceFault(error, recordID: recordID, volumeIdentifier: existing.saveLocation.volumeIdentifier))
         }
-        let record = existing.with(desiredState: desired)
+        guard let current = records[recordID] else {
+            return .failure(EngineFault.recordNotFound(recordID: recordID))
+        }
+        guard !activeCommitRemovals.contains(recordID) else {
+            return .failure(EngineFault.engineBusy(details: "removal commit in flight for record"))
+        }
+        let record = current.with(desiredState: desired)
         records[recordID] = record
         let admission = await admit(recordID, reason: .resume)
         applyAdmissionOutcome(admission, to: recordID, reason: .resume)
@@ -1506,6 +1568,48 @@ public actor TransferCoordinator {
                 fault: .recordNotFound(recordID: recordID),
                 health: .recoverableError(.recordNotFound)
             )
+        }
+
+        if activeCommitRemovals.contains(recordID) {
+            return .failed(
+                fault: EngineFault.engineBusy(details: "removal commit in flight for record"),
+                health: .recoverableError(.recordNotFound)
+            )
+        }
+
+        activeAdmissions[recordID, default: 0] += 1
+        defer {
+            if let count = activeAdmissions[recordID] {
+                if count <= 1 {
+                    activeAdmissions.removeValue(forKey: recordID)
+                } else {
+                    activeAdmissions[recordID] = count - 1
+                }
+            }
+        }
+
+        #if DEBUG
+        if let removalTokenAwaitHook {
+            await removalTokenAwaitHook()
+        }
+        #endif
+
+        if pendingRemovalTokens.values.contains(recordID) {
+            let tokensForRecord = pendingRemovalTokens.filter { $0.value == recordID }.map(\.key)
+            var hasActivePending = false
+            for tokenStr in tokensForRecord {
+                if let rec = try? await persistence.removalToken(by: tokenStr), rec.status == "pending" {
+                    hasActivePending = true
+                } else {
+                    pendingRemovalTokens.removeValue(forKey: tokenStr)
+                }
+            }
+            if hasActivePending {
+                return .failed(
+                    fault: EngineFault.invalidRequest(details: "torrent is pending removal"),
+                    health: .recoverableError(.recordNotFound)
+                )
+            }
         }
 
         if safeRecovery {
@@ -1540,6 +1644,14 @@ public actor TransferCoordinator {
                     return .admitted(engineID: engineID, activity: .idle)
                 }
                 let result = try await engine.add(specification: makeSpecification(for: record, paused: true))
+                guard records[recordID] != nil,
+                      !activeCommitRemovals.contains(recordID) else {
+                    try? await engine.remove(torrentID: result.torrentID)
+                    return .failed(
+                        fault: .recordNotFound(recordID: recordID),
+                        health: .recoverableError(.recordNotFound)
+                    )
+                }
                 return .admitted(engineID: result.torrentID, activity: .idle)
             } catch {
                 return admissionFailure(error, recordID: recordID, operation: reason.rawValue)
@@ -1587,10 +1699,27 @@ public actor TransferCoordinator {
                     try await engine.setFileSelection(torrentID: engineID, priorities: priorities)
                 }
                 try await engine.resume(torrentID: engineID)
-                return .admitted(engineID: engineID, activity: bootstrapActivity(for: record))
+                guard let current = records[recordID],
+                      !activeCommitRemovals.contains(recordID) else {
+                    try? await engine.pause(torrentID: engineID)
+                    try? await engine.remove(torrentID: engineID)
+                    return .failed(
+                        fault: EngineFault.invalidRequest(details: "torrent is pending removal"),
+                        health: .recoverableError(.recordNotFound)
+                    )
+                }
+                return .admitted(engineID: engineID, activity: bootstrapActivity(for: current))
             }
             let result = try await engine.add(specification: makeSpecification(for: record, paused: false))
-            return .admitted(engineID: result.torrentID, activity: bootstrapActivity(for: record))
+            guard let current = records[recordID],
+                  !activeCommitRemovals.contains(recordID) else {
+                try? await engine.remove(torrentID: result.torrentID)
+                return .failed(
+                    fault: .recordNotFound(recordID: recordID),
+                    health: .recoverableError(.recordNotFound)
+                )
+            }
+            return .admitted(engineID: result.torrentID, activity: bootstrapActivity(for: current))
         } catch {
             return admissionFailure(error, recordID: recordID, operation: reason.rawValue)
         }
@@ -1601,7 +1730,8 @@ public actor TransferCoordinator {
         to recordID: TorrentRecordID,
         reason: AdmissionReason? = nil
     ) {
-        guard let record = records[recordID] else { return }
+        guard let record = records[recordID],
+              !activeCommitRemovals.contains(recordID) else { return }
         switch outcome {
         case .admitted(let engineID, let activity):
             records[recordID] = record.with(engineID: engineID, activity: activity, health: .healthy)
@@ -1704,7 +1834,7 @@ public actor TransferCoordinator {
     }
 
     private func handleRecheck(_ recordID: TorrentRecordID) async -> EngineCommandResult {
-        guard let record = records[recordID] else {
+        guard let record = records[recordID], !activeCommitRemovals.contains(recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
         guard let engineID = record.engineID, await ensureEngineStarted() else {
@@ -1721,7 +1851,7 @@ public actor TransferCoordinator {
     // MARK: - File selection
 
     private func handleSetFileSelection(_ request: SetFileSelectionRequest) async -> EngineCommandResult {
-        guard let record = records[request.recordID] else {
+        guard let record = records[request.recordID], !activeCommitRemovals.contains(request.recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
         guard let metainfoData = record.metainfoData,
@@ -2069,7 +2199,11 @@ public actor TransferCoordinator {
 
         // Re-add records the engine does not know yet (restart + failed adds).
         // Iterate a snapshot of the dictionary: records is mutated inside.
-        let toReadd = records.filter { $0.value.engineID == nil }
+        let toReadd = records.filter {
+            $0.value.engineID == nil
+                && !activeCommitRemovals.contains($0.key)
+                && !pendingRemovalTokens.values.contains($0.key)
+        }
         var readdAttempts = 0
         for (recordID, record) in toReadd {
             guard readdAttempts < resourceBudget.maxReaddsPerPump else { break }
@@ -2130,6 +2264,7 @@ public actor TransferCoordinator {
                   let engineID = record.engineID,
                   let status = statusByEngineID[engineID],
                   Self.hasResolvedMetadata(status),
+                  !activeCommitRemovals.contains(recordID),
                   metadataPromotionBackoff[recordID].map({ now < $0.nextAttemptAt }) != true else {
                 continue
             }
@@ -2150,6 +2285,8 @@ public actor TransferCoordinator {
                 && $0.value.engineID == nil
                 && $0.value.activity == .idle
                 && $0.value.health == .healthy
+                && !activeCommitRemovals.contains($0.key)
+                && !pendingRemovalTokens.values.contains($0.key)
         }
         for (recordID, record) in limbo {
             TorrentinoLog.record(
@@ -2492,7 +2629,11 @@ public actor TransferCoordinator {
                 nextHealth = .healthy
             }
             records[recordID] = record.with(engineID: nil, activity: .idle, health: nextHealth)
-            pendingAdmissionReasons[recordID] = .engineRestart
+            if !activeCommitRemovals.contains(recordID) && !pendingRemovalTokens.values.contains(recordID) {
+                pendingAdmissionReasons[recordID] = .engineRestart
+            } else {
+                pendingAdmissionReasons.removeValue(forKey: recordID)
+            }
             readdBackoff.removeValue(forKey: recordID)
             changed.append(recordID)
         }
@@ -2799,6 +2940,13 @@ public actor TransferCoordinator {
             op.lastPolledTime = op.lastPolledTime.addingTimeInterval(-seconds)
             pendingOperations[operationID] = op
         }
+    }
+    public func setMoveJournalAwaitHook(_ hook: (@Sendable () async -> Void)?) {
+        moveJournalAwaitHook = hook
+    }
+
+    public func setRemovalTokenAwaitHook(_ hook: (@Sendable () async -> Void)?) {
+        removalTokenAwaitHook = hook
     }
     #endif
     private func configuredSaveLocation() -> PersistedLocation {
@@ -3233,7 +3381,7 @@ extension TransferCoordinator {
     }
 
     private func handleReannounce(_ recordID: TorrentRecordID) async -> EngineCommandResult {
-        guard records[recordID] != nil else {
+        guard records[recordID] != nil, !activeCommitRemovals.contains(recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: recordID))
         }
         guard systemConditions.canAttemptNetworkWork else {
@@ -3264,7 +3412,7 @@ extension TransferCoordinator {
     }
 
     private func handleEditTrackers(_ request: EditTrackersRequest) async -> EngineCommandResult {
-        guard let record = records[request.recordID] else {
+        guard let record = records[request.recordID], !activeCommitRemovals.contains(request.recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
         guard let requestedTiers = request.trackerTiers else {
@@ -3436,7 +3584,7 @@ extension TransferCoordinator {
     /// metainfo and frozen into the token row BEFORE the client may commit.
     /// Nothing is ever deleted at prepare time.
     private func handlePrepareRemoval(_ request: PrepareRemovalRequest) async -> EngineCommandResult {
-        guard let record = records[request.recordID] else {
+        guard let record = records[request.recordID], !activeCommitRemovals.contains(request.recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
         // Fail-closed admission: an unreadable token count must not be read as
@@ -3634,10 +3782,39 @@ extension TransferCoordinator {
             return .success(.removalResult(outcome))
         }
         guard tokenRecord.status == "pending" else {
+            pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
             return .failure(.invalidRequest(details: "removal token is no longer active"))
         }
         guard let recordID = UUID(uuidString: tokenRecord.recordID).map({ TorrentRecordID(rawValue: $0) }) else {
+            pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
             return .failure(.invalidRequest(details: "removal token references an invalid record"))
+        }
+        guard !activeCommitRemovals.contains(recordID) else {
+            return .failure(.invalidRequest(details: "removal commit already in flight"))
+        }
+        guard activeAdmissions[recordID] == nil else {
+            return .failure(.engineBusy(details: "admission in progress for record"))
+        }
+        activeCommitRemovals.insert(recordID)
+        defer {
+            activeCommitRemovals.remove(recordID)
+        }
+        #if DEBUG
+        if let moveJournalAwaitHook {
+            await moveJournalAwaitHook()
+        }
+        #endif
+        let inFlightMove: MoveJournalEntry?
+        do {
+            inFlightMove = try await persistence.moveJournal(recordID: recordID.rawValue.uuidString)
+        } catch {
+            let volumeIdentifier = records[recordID]?.saveLocation.volumeIdentifier
+            return .failure(Self.persistenceFault(
+                error, recordID: recordID, volumeIdentifier: volumeIdentifier
+            ))
+        }
+        if inFlightMove != nil {
+            return .failure(.engineBusy(details: "storage move already in progress for this record"))
         }
         guard let record = records[recordID] else {
             // Crash between removeTorrent and settle: the token is still
@@ -3666,13 +3843,52 @@ extension TransferCoordinator {
             pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
             return .success(.removalResult(outcome))
         }
-        pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
-
         var trashedItems: [TrashJournalEntry] = []
         var skippedSharedItems: [String] = []
         var failedItems: [RemovalItemFailure] = []
 
         if tokenRecord.deleteFiles {
+            // WP-26: Quiesce engine disk-I/O before any payload mutation.
+            // Persist and update in-memory record to paused state FIRST so any
+            // concurrent inspection or re-add attempt observes paused desired state.
+            if let current = records[recordID], current.desiredState != .paused {
+                do {
+                    try await persistence.updateTorrentState(torrentID: recordID.rawValue.uuidString, state: DesiredTorrentState.paused.rawValue)
+                } catch {
+                    log.error("commitRemoval: failed to persist paused state for \(recordID): \(String(describing: error))")
+                    return .failure(Self.persistenceFault(
+                        error, recordID: recordID, volumeIdentifier: current.saveLocation.volumeIdentifier
+                    ))
+                }
+                if let fresh = records[recordID] {
+                    records[recordID] = fresh.with(desiredState: .paused)
+                }
+            }
+
+            // Quiesce: pause the active engine handle to flush disk buffers and close open file handles
+            let engineIDToPause = records[recordID]?.engineID ?? record.engineID
+            if let engineIDToPause {
+                guard await ensureEngineStarted() else {
+                    return .failure(Self.engineFault(
+                        EngineFault.engineNotReady(details: "engine not running"),
+                        operation: "quiesce",
+                        recordID: recordID,
+                        fallback: "engine start failed before removal"
+                    ))
+                }
+                do {
+                    try await engine.pause(torrentID: engineIDToPause)
+                } catch {
+                    if Self.isRemovalTargetAlreadyGone(error) {
+                        log.info("commitRemoval: engine entry already absent during pause; continuing")
+                    } else {
+                        log.warning("commitRemoval: engine pause failed: \(String(describing: error))")
+                        return .failure(Self.engineFault(
+                            error, operation: "pause", recordID: recordID, fallback: "pause failed"
+                        ))
+                    }
+                }
+            }
             guard let manifest = try? JSONDecoder().decode(
                 RemovalManifest.self,
                 from: Data(tokenRecord.manifestJSON.utf8)
@@ -3684,9 +3900,10 @@ extension TransferCoordinator {
                     )
                 } catch {
                     return .failure(Self.persistenceFault(
-                        error, recordID: recordID, volumeIdentifier: record.saveLocation.volumeIdentifier
+                        error, recordID: recordID, volumeIdentifier: (records[recordID] ?? record).saveLocation.volumeIdentifier
                     ))
                 }
+                pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
                 return .failure(.invalidPayload(details: "removal manifest is unavailable"))
             }
             // Gate 4: load the durable per-item journal BEFORE mutating so a
@@ -3845,17 +4062,22 @@ extension TransferCoordinator {
         // Never asking the engine to delete files — the Trash already did,
         // item by item, journaled. A missing engine entry (e.g. after an
         // engine restart) is benign: the payload is gone either way.
-        if let engineID = record.engineID, await ensureEngineStarted() {
-            do {
-                try await engine.remove(torrentID: engineID)
-            } catch {
-                if Self.isRemovalTargetAlreadyGone(error) {
-                    log.info("commitRemoval: engine entry already absent; continuing")
-                } else {
-                    log.warning("commitRemoval: engine remove failed: \(String(describing: error))")
-                    return .failure(Self.engineFault(
-                        error, operation: "remove", recordID: recordID, fallback: "removal failed"
-                    ))
+        var engineIDsToRemove = Set<String>()
+        if let id = record.engineID { engineIDsToRemove.insert(id) }
+        if let id = records[recordID]?.engineID { engineIDsToRemove.insert(id) }
+        if !engineIDsToRemove.isEmpty, await ensureEngineStarted() {
+            for engineID in engineIDsToRemove {
+                do {
+                    try await engine.remove(torrentID: engineID)
+                } catch {
+                    if Self.isRemovalTargetAlreadyGone(error) {
+                        log.info("commitRemoval: engine entry already absent; continuing")
+                    } else {
+                        log.warning("commitRemoval: engine remove failed: \(String(describing: error))")
+                        return .failure(Self.engineFault(
+                            error, operation: "remove", recordID: recordID, fallback: "removal failed"
+                        ))
+                    }
                 }
             }
         }
@@ -3872,6 +4094,7 @@ extension TransferCoordinator {
         lastReannounceAt.removeValue(forKey: recordID)
         metadataPromotionBackoff.removeValue(forKey: recordID)
         bumpEngineRevision(change: .removed(recordID))
+        pendingRemovalTokens.removeValue(forKey: request.token.rawValue)
 
         // Fail-closed evidence cleanup: the settled token/journal rows are
         // kept until the drop is confirmed; a failure surfaces as a fault and
@@ -3894,7 +4117,10 @@ extension TransferCoordinator {
     /// logged but never surface — the settled outcome is the durable truth.
     private func finishCommittedRemoval(record: TransferRecord) async {
         let recordID = record.id
-        if let engineID = record.engineID {
+        var engineIDsToRemove = Set<String>()
+        if let id = record.engineID { engineIDsToRemove.insert(id) }
+        if let id = records[recordID]?.engineID { engineIDsToRemove.insert(id) }
+        for engineID in engineIDsToRemove {
             do {
                 try await engine.remove(torrentID: engineID)
             } catch {
@@ -3949,7 +4175,7 @@ extension TransferCoordinator {
     /// On success the record's save location is persisted, the journal row is
     /// dropped, and a force recheck validates the moved payload.
     private func handleMoveStorage(_ request: MoveStorageRequest) async -> EngineCommandResult {
-        guard let record = records[request.recordID] else {
+        guard let record = records[request.recordID], !activeCommitRemovals.contains(request.recordID) else {
             return .failure(EngineFault.recordNotFound(recordID: request.recordID))
         }
         let toPath = (request.destination.path as NSString).expandingTildeInPath

@@ -21,6 +21,8 @@ using torrentino::bridge::AddSpecification;
 using torrentino::bridge::AppliedTorrentLimits;
 using torrentino::bridge::BootReport;
 using torrentino::bridge::BridgeError;
+using torrentino::bridge::CommitMetadataOnlyResult;
+using torrentino::bridge::CommitMetadataOnlySpecification;
 using torrentino::bridge::EngineAlertDTO;
 using torrentino::bridge::EngineAlertKind;
 using torrentino::bridge::EngineBridge;
@@ -521,6 +523,18 @@ NSDictionary* resumeDataToJSON(const ResumeDataDTO& resume)
 	};
 }
 
+NSDictionary* commitMetadataOnlyResultToJSON(const CommitMetadataOnlyResult& result)
+{
+	NSMutableDictionary* dict = [NSMutableDictionary dictionary];
+	if (!result.torrent_id.empty()) {
+		dict[jsonKey("torrent-id")] = [NSString stringWithUTF8String:result.torrent_id.c_str()];
+	}
+	if (!result.effective_save_path.empty()) {
+		dict[jsonKey("effective-save-path")] = [NSString stringWithUTF8String:result.effective_save_path.c_str()];
+	}
+	return dict;
+}
+
 // Generic trampoline: runs `body`, converts any C++/ObjC exception into an
 // NSError in `outError` and returns nil. Without this no engine call can crash
 // or throw into Swift.
@@ -758,13 +772,15 @@ NSData* voidResultToData(const torrentino::bridge::Result<void>& result,
 		if (dict == nil) {
 			return nil;
 		}
-		const TorrentRecordID id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
-		std::vector<std::uint8_t> priorities;
-		if (!priorityVectorFromJSON(dict, priorities, error)) {
+		CommitMetadataOnlySpecification spec;
+		spec.torrent_id = std::string(stringValue(dict, "torrent-id", @"").UTF8String);
+		if (!priorityVectorFromJSON(dict, spec.file_priorities, error)) {
 			return nil;
 		}
-		const bool paused = boolValue(dict, "paused", false);
-		return voidResultToData(_engine->commitMetadataOnly(id, priorities, paused), error);
+		spec.paused = boolValue(dict, "paused", false);
+		spec.save_path = std::string(stringValue(dict, "save-path", @"").UTF8String);
+		auto result = _engine->commitMetadataOnly(spec);
+		return resultToData(result, commitMetadataOnlyResultToJSON, error);
 	}, error);
 }
 

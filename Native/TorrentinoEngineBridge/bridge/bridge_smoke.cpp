@@ -32,6 +32,8 @@ namespace {
 using namespace std::chrono_literals;
 using torrentino::bridge::AddResult;
 using torrentino::bridge::AddSpecification;
+using torrentino::bridge::CommitMetadataOnlyResult;
+using torrentino::bridge::CommitMetadataOnlySpecification;
 using torrentino::bridge::BootReport;
 using torrentino::bridge::BridgeError;
 using torrentino::bridge::EngineAlertDTO;
@@ -284,6 +286,10 @@ int main()
 		const auto pause = bridge.pause(add_result.torrent_id);
 		TH_REQUIRE(pause.is_ok(), "pause must succeed");
 		TH_REQUIRE(wait_for_alert(bridge, 10s, is_paused), "pause alert arrives");
+		// WP-26: Quiescence barrier idempotency regression:
+		// Pausing an ALREADY-paused torrent must boundedly complete and flush cache.
+		const auto pause_again = bridge.pause(add_result.torrent_id);
+		TH_REQUIRE(pause_again.is_ok(), "idempotent pause of already-paused torrent must succeed");
 
 		const auto resume = bridge.resume(add_result.torrent_id);
 		TH_REQUIRE(resume.is_ok(), "resume must succeed");
@@ -579,12 +585,20 @@ int main()
 			TH_REQUIRE((pre_flags & static_cast<std::uint64_t>(kPaused)) == 0,
 				"metadata-only add is unpaused regardless of spec.paused");
 
-			const auto untracked = bridge.commitMetadataOnly(std::string(64, '7'), {4, 0, 4}, true);
+			CommitMetadataOnlySpecification untracked_spec;
+			untracked_spec.torrent_id = std::string(64, '7');
+			untracked_spec.file_priorities = {4, 0, 4};
+			untracked_spec.paused = true;
+			const auto untracked = bridge.commitMetadataOnly(untracked_spec);
 			TH_REQUIRE(!untracked.is_ok(), "commit on an untracked id must fail closed");
 			TH_REQUIRE(untracked.error_code() == BridgeError::not_found,
 				"untracked commit maps to not_found");
 
-			const auto wrong_shape = bridge.commitMetadataOnly(meta_id, {4, 0}, true);
+			CommitMetadataOnlySpecification wrong_shape_spec;
+			wrong_shape_spec.torrent_id = meta_id;
+			wrong_shape_spec.file_priorities = {4, 0};
+			wrong_shape_spec.paused = true;
+			const auto wrong_shape = bridge.commitMetadataOnly(wrong_shape_spec);
 			TH_REQUIRE(!wrong_shape.is_ok(), "wrong-shape priority vector must fail closed");
 			TH_REQUIRE(wrong_shape.error_code() == BridgeError::invalid_argument,
 				"wrong-shape vector maps to invalid_argument");
@@ -595,7 +609,11 @@ int main()
 
 			// Success REQUIRES the exact read-back inside the same critical
 			// section; the guard clears only afterwards.
-			const auto committed = bridge.commitMetadataOnly(meta_id, {4, 0, 4}, true);
+			CommitMetadataOnlySpecification commit_spec;
+			commit_spec.torrent_id = meta_id;
+			commit_spec.file_priorities = {4, 0, 4};
+			commit_spec.paused = true;
+			const auto committed = bridge.commitMetadataOnly(commit_spec);
 			TH_REQUIRE(committed.is_ok(), "guarded commit [4,0,4] paused must pass the barrier");
 
 			std::int64_t post_flags = -1;
@@ -615,12 +633,20 @@ int main()
 				post_flags >= 0 && (post_flags & kPaused) != 0 ? 1 : 0,
 				skipped_allocated ? "true" : "false");
 
-			const auto recommitted = bridge.commitMetadataOnly(meta_id, {4, 0, 4}, true);
+			CommitMetadataOnlySpecification recommit_spec;
+			recommit_spec.torrent_id = meta_id;
+			recommit_spec.file_priorities = {4, 0, 4};
+			recommit_spec.paused = true;
+			const auto recommitted = bridge.commitMetadataOnly(recommit_spec);
 			TH_REQUIRE(!recommitted.is_ok() && recommitted.error_code() == BridgeError::not_found,
 				"double commit is rejected after promotion");
 
 			// A durable/normal handle never passes the temporary-tracking check.
-			const auto normal_handle = bridge.commitMetadataOnly(add_result.torrent_id, {4}, true);
+			CommitMetadataOnlySpecification normal_spec;
+			normal_spec.torrent_id = add_result.torrent_id;
+			normal_spec.file_priorities = {4};
+			normal_spec.paused = true;
+			const auto normal_handle = bridge.commitMetadataOnly(normal_spec);
 			TH_REQUIRE(!normal_handle.is_ok() && normal_handle.error_code() == BridgeError::not_found,
 				"commit on a normal handle is rejected");
 		}
@@ -659,7 +685,11 @@ int main()
 			TH_REQUIRE(mag_running, "metadata retrieval runs unpaused and unmanaged");
 			TH_REQUIRE(mag_zero_payload, "payload bytes stay zero before commit");
 
-			const auto premature = bridge.commitMetadataOnly(mag_id, {4}, false);
+			CommitMetadataOnlySpecification premature_spec;
+			premature_spec.torrent_id = mag_id;
+			premature_spec.file_priorities = {4};
+			premature_spec.paused = false;
+			const auto premature = bridge.commitMetadataOnly(premature_spec);
 			TH_REQUIRE(!premature.is_ok(), "premature commit without metainfo fails closed");
 			TH_REQUIRE(premature.error_code() == BridgeError::invalid_argument,
 				"premature commit maps to invalid_argument");
@@ -678,9 +708,163 @@ int main()
 				return is_removed(alert) && alert.torrent_id == mag_id;
 			}), "removed alert arrives for the temporary magnet");
 
-			const auto post_remove = bridge.commitMetadataOnly(mag_id, {4}, false);
+			CommitMetadataOnlySpecification post_remove_spec;
+			post_remove_spec.torrent_id = mag_id;
+			post_remove_spec.file_priorities = {4};
+			post_remove_spec.paused = false;
+			const auto post_remove = bridge.commitMetadataOnly(post_remove_spec);
 			TH_REQUIRE(!post_remove.is_ok() && post_remove.error_code() == BridgeError::not_found,
 				"removal cleans the metadata-only tracking");
+		}
+
+		// (3) WP-25 (WP25.D1 / WP25.D2 RC-2 fix): destination integrity and status save_path
+		{
+			const std::filesystem::path dir_a = workspace / "dest_wp25_a";
+			const std::filesystem::path dir_b = workspace / "dest_wp25_b";
+			const std::filesystem::path file_dest = workspace / "dest_wp25_regular.bin";
+			std::error_code fs_ec;
+			std::filesystem::create_directories(dir_a, fs_ec);
+			std::filesystem::create_directories(dir_b, fs_ec);
+			{
+				std::ofstream ofs(file_dest);
+				ofs << "regular file obstacle";
+			}
+
+			const std::filesystem::path meta_root = workspace / "meta_wp25";
+			std::filesystem::create_directories(meta_root, fs_ec);
+			const std::vector<char> meta_bytes = make_multi_file_torrent_file(meta_root);
+			TH_REQUIRE(!meta_bytes.empty(), "WP-25 multi-file torrent generation must succeed");
+
+			AddSpecification spec_a;
+			spec_a.torrent_file = meta_bytes;
+			spec_a.save_path = dir_a.string();
+			spec_a.metadata_only = true;
+			const auto added_a = bridge.add(spec_a);
+			TH_REQUIRE(added_a.is_ok(), "WP-25 metadata-only add at dir A must succeed");
+
+			const torrentino::bridge::TorrentRecordID torrent_id = added_a.value().torrent_id;
+
+			const auto orig_prios_res = bridge.filePriorities(torrent_id);
+			TH_REQUIRE(orig_prios_res.is_ok(), "original priorities must be readable");
+			const std::vector<std::uint8_t> original_prios = orig_prios_res.value();
+
+			// RC-2 verification: status alert must populate save_path == dir_a
+			std::string observed_path;
+			for (const EngineAlertDTO& alert : bridge.drainAlerts(0)) {
+				if (alert.torrent_id == torrent_id && !alert.save_path.empty()) {
+					observed_path = alert.save_path;
+				}
+			}
+			std::error_code canon_ec;
+			const std::string dir_a_canon = std::filesystem::weakly_canonical(dir_a, canon_ec).string();
+			const std::string observed_canon = std::filesystem::weakly_canonical(std::filesystem::path(observed_path), canon_ec).string();
+			TH_REQUIRE(!observed_path.empty(), "WP-25 D2/RC-2: status alert must populate non-empty save_path");
+			TH_REQUIRE(observed_canon == dir_a_canon, "WP-25 D2/RC-2: live status alert save_path must match dir A");
+
+			// Failure lane: destination is an existing regular file
+			CommitMetadataOnlySpecification fail_spec;
+			fail_spec.torrent_id = torrent_id;
+			fail_spec.file_priorities = {4, 0, 4};
+			fail_spec.paused = true;
+			fail_spec.save_path = file_dest.string();
+			const auto fail_result = bridge.commitMetadataOnly(fail_spec);
+			TH_REQUIRE(!fail_result.is_ok(), "commit to regular file destination must fail closed");
+			TH_REQUIRE(fail_result.error_code() == BridgeError::engine_failure
+				|| fail_result.error_code() == BridgeError::io
+				|| fail_result.error_code() == BridgeError::invalid_argument,
+				"commit to regular file maps to typed failure");
+
+			// Verify handle state after failure: path stays A, guard still set, paused/priorities intact
+			std::int64_t fail_flags = -1;
+			flagsFor(bridge, torrent_id, fail_flags);
+			TH_REQUIRE(fail_flags >= 0 && (fail_flags & static_cast<std::uint64_t>(kUploadMode)) != 0,
+				"failure keeps upload_mode guard set");
+			TH_REQUIRE(fail_flags >= 0 && (fail_flags & static_cast<std::uint64_t>(kPaused)) == 0,
+				"failure preserves actual original unpaused state");
+
+			const auto prios_after_fail = bridge.filePriorities(torrent_id);
+			TH_REQUIRE(prios_after_fail.is_ok(), "priorities must be readable after failed commit");
+			TH_REQUIRE(prios_after_fail.value() == original_prios,
+				"file priorities unchanged after failed commit");
+
+			std::string fail_path;
+			for (const EngineAlertDTO& alert : bridge.drainAlerts(0)) {
+				if (alert.torrent_id == torrent_id && !alert.save_path.empty()) {
+					fail_path = alert.save_path;
+				}
+			}
+			const std::string fail_canon = std::filesystem::weakly_canonical(std::filesystem::path(fail_path), canon_ec).string();
+			TH_REQUIRE(fail_canon == dir_a_canon, "handle save_path must remain at dir A after failed commit");
+			// Success lane: retry same handle with valid destination dir B and nontrivial priority vector
+			CommitMetadataOnlySpecification success_spec;
+			success_spec.torrent_id = torrent_id;
+			success_spec.file_priorities = {4, 0, 4};
+			success_spec.paused = true;
+			success_spec.save_path = dir_b.string();
+			const auto success_result = bridge.commitMetadataOnly(success_spec);
+			TH_REQUIRE(success_result.is_ok(), "retry commit to dir B must succeed");
+			const std::string dir_b_canon = std::filesystem::weakly_canonical(dir_b, canon_ec).string();
+			const std::string eff_canon = std::filesystem::weakly_canonical(std::filesystem::path(success_result.value().effective_save_path), canon_ec).string();
+			TH_REQUIRE(eff_canon == dir_b_canon, "effective_save_path must match dir B");
+
+			// Drain status alerts and assert reported save_path is dir B
+			std::string post_path;
+			for (const EngineAlertDTO& alert : bridge.drainAlerts(0)) {
+				if (alert.torrent_id == torrent_id && !alert.save_path.empty()) {
+					post_path = alert.save_path;
+				}
+			}
+			const std::string post_canon = std::filesystem::weakly_canonical(std::filesystem::path(post_path), canon_ec).string();
+			TH_REQUIRE(post_canon == dir_b_canon, "status alert must report dir B after successful convergence");
+
+			std::int64_t post_flags = -1;
+			flagsFor(bridge, torrent_id, post_flags);
+			TH_REQUIRE(post_flags >= 0 && (post_flags & static_cast<std::uint64_t>(kUploadMode)) == 0,
+				"upload_mode guard cleared only on full commit success");
+			TH_REQUIRE(post_flags >= 0 && (post_flags & static_cast<std::uint64_t>(kPaused)) != 0,
+				"requested pause state applied on success");
+
+			const auto prios_after_retry = bridge.filePriorities(torrent_id);
+			TH_REQUIRE(prios_after_retry.is_ok(), "priorities must be readable after successful commit");
+			const std::vector<std::uint8_t> expected_prios = {4, 0, 4};
+			TH_REQUIRE(prios_after_retry.value() == expected_prios,
+				"exact requested priorities applied after successful commit");
+
+			// Assert no payload file created under dir A in correct multi-file relative paths
+			const bool payload_in_a = std::filesystem::exists(dir_a / "meta_wp25" / "a.bin", fs_ec)
+				|| std::filesystem::exists(dir_a / "meta_wp25" / "b.bin", fs_ec)
+				|| std::filesystem::exists(dir_a / "meta_wp25" / "c.bin", fs_ec)
+				|| std::filesystem::exists(dir_a / "meta_wp25", fs_ec);
+			TH_REQUIRE(!payload_in_a, "no payload bytes may appear under dir A after commit to B");
+			// Clean up success handle
+			const auto prep_rem = bridge.prepareRemoval(torrent_id);
+			if (prep_rem.is_ok()) {
+				bridge.commitRemoval(prep_rem.value());
+			}
+
+			// Legacy lane: add another metadata-only handle, commit with empty save_path
+			AddSpecification legacy_spec;
+			legacy_spec.torrent_file = meta_bytes;
+			legacy_spec.save_path = dir_a.string();
+			legacy_spec.metadata_only = true;
+			const auto legacy_added = bridge.add(legacy_spec);
+			TH_REQUIRE(legacy_added.is_ok(), "legacy metadata-only add must succeed");
+			const auto legacy_id = legacy_added.value().torrent_id;
+
+			CommitMetadataOnlySpecification legacy_commit_spec;
+			legacy_commit_spec.torrent_id = legacy_id;
+			legacy_commit_spec.file_priorities = {4, 0, 4};
+			legacy_commit_spec.paused = true;
+			const auto legacy_committed = bridge.commitMetadataOnly(legacy_commit_spec);
+			TH_REQUIRE(legacy_committed.is_ok(), "legacy commit without save_path must succeed");
+			const std::string leg_canon = std::filesystem::weakly_canonical(
+				std::filesystem::path(legacy_committed.value().effective_save_path), canon_ec).string();
+			TH_REQUIRE(leg_canon == dir_a_canon, "legacy commit preserves existing handle save path");
+
+			const auto leg_prep = bridge.prepareRemoval(legacy_id);
+			if (leg_prep.is_ok()) {
+				bridge.commitRemoval(leg_prep.value());
+			}
 		}
 	}
 

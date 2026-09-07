@@ -23,6 +23,7 @@
 #include <libtorrent/torrent_status.hpp>
 #include <libtorrent/write_resume_data.hpp>
 
+#include <filesystem>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -40,7 +41,7 @@
 
 namespace torrentino::bridge {
 namespace {
-
+namespace fs = std::filesystem;
 namespace lt = libtorrent;
 
 using Clock = std::chrono::steady_clock;
@@ -584,6 +585,8 @@ struct EngineBridge::Impl {
 		handles_.clear();
 		metadata_only_.clear();
 		pending_.clear();
+		storage_move_completions_.clear();
+		cache_flush_completions_.clear();
 		alerts_seen_ = 0;
 		// The boot report must reflect what the engine actually runs with, so
 		// the configured peer-id prefix (not the default) is what gets reported.
@@ -695,12 +698,16 @@ struct EngineBridge::Impl {
 			handles_.clear();
 			metadata_only_.clear();
 			pending_.clear();
+			storage_move_completions_.clear();
+			cache_flush_completions_.clear();
 		} catch (...) {
 			// shutdown must never throw; a raw session leak at worst
 			session_.reset();
 			handles_.clear();
 			metadata_only_.clear();
 			pending_.clear();
+			storage_move_completions_.clear();
+			cache_flush_completions_.clear();
 		}
 	}
 
@@ -709,7 +716,8 @@ struct EngineBridge::Impl {
 	static void fill_progress_dto(const lt::torrent_handle& h, EngineAlertDTO& dto)
 	{
 		try {
-			const lt::torrent_status status = h.status(lt::torrent_handle::query_accurate_download_counters);
+			const lt::torrent_status status = h.status(
+				lt::torrent_handle::query_accurate_download_counters | lt::torrent_handle::query_save_path);
 			dto.progress = static_cast<double>(status.progress);
 			dto.state = static_cast<int>(status.state);
 			dto.download_rate = static_cast<std::int64_t>(status.download_payload_rate > 0 ? status.download_payload_rate : status.download_rate);
@@ -744,6 +752,20 @@ struct EngineBridge::Impl {
 		session_->pop_alerts(&scratch_);
 		for (const lt::alert* alert : scratch_) {
 			alerts_seen_++;
+			if (const auto* moved = lt::alert_cast<lt::storage_moved_alert>(alert)) {
+				storage_move_completions_.insert_or_assign(moved->handle, Result<void>::success());
+				wait_wake_.notify_all();
+			} else if (const auto* failed = lt::alert_cast<lt::storage_moved_failed_alert>(alert)) {
+				storage_move_completions_.insert_or_assign(
+					failed->handle,
+					Result<void>::failed(
+						BridgeError::io,
+						std::string("moveStorage: move_storage failed: ") + failed->error.message()));
+				wait_wake_.notify_all();
+			} else if (const auto* flushed = lt::alert_cast<lt::cache_flushed_alert>(alert)) {
+				cache_flush_completions_.insert_or_assign(flushed->handle, Result<void>::success());
+				wait_wake_.notify_all();
+			}
 			pending_.push_back(convertAlert(*alert));
 		}
 		for (const auto& [id, handle] : handles_) {
@@ -900,6 +922,10 @@ struct EngineBridge::Impl {
 		case lt::storage_moved_alert::alert_type:
 		case lt::storage_moved_failed_alert::alert_type:
 			// Consumed synchronously inside moveStorage; never batched.
+			dto.kind = EngineAlertKind::unknown;
+			return dto;
+		case lt::cache_flushed_alert::alert_type:
+			// Consumed synchronously inside pause; never batched.
 			dto.kind = EngineAlertKind::unknown;
 			return dto;
 		default:
@@ -1206,10 +1232,76 @@ struct EngineBridge::Impl {
 		}
 	}
 
+	Result<void> pauseLocked(const lt::torrent_handle& handle,
+		std::unique_lock<std::mutex>& lock,
+		const char* context = "pause")
+	{
+		if (!handle.is_valid()) {
+			return Result<void>::failed(BridgeError::invalid_argument,
+				std::string(context) + ": handle is invalid");
+		}
+		try {
+			// Ensure downloading/uploading is halted so no new disk tasks can be queued.
+			handle.pause();
+
+			// Torrents without metadata have no disk storage allocated and no open files.
+			// Quiescence is satisfied as soon as the handle is paused.
+			if (!handle.status().has_metadata) {
+				return Result<void>::success();
+			}
+
+			// Discard any stale alerts for this handle before issuing flush_cache.
+			pumpLocked();
+			cache_flush_completions_.erase(handle);
+
+			// Request disk cache flush and closure of all open file handles.
+			handle.flush_cache();
+
+			const Deadline deadline = Clock::now() + timeout_;
+			while (Clock::now() < deadline) {
+				if (stop_requested_.load()) {
+					return Result<void>::failed(BridgeError::stopped,
+						std::string(context) + ": pause aborted by shutdown");
+				}
+				pumpLocked();
+				auto it = cache_flush_completions_.find(handle);
+				if (it != cache_flush_completions_.end()) {
+					Result<void> res = std::move(it->second);
+					cache_flush_completions_.erase(it);
+					return res;
+				}
+				wait_wake_.wait_for(lock, std::min(Millis{50}, timeout_),
+					[this] { return stop_requested_.load(); });
+				it = cache_flush_completions_.find(handle);
+				if (it != cache_flush_completions_.end()) {
+					Result<void> res = std::move(it->second);
+					cache_flush_completions_.erase(it);
+					return res;
+				}
+			}
+			return Result<void>::failed(BridgeError::timeout,
+				std::string(context) + ": cache flush timed out");
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string(context) + " failed: " + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				std::string(context) + " failed: unknown exception");
+		}
+	}
+
 	Result<void> pause(const TorrentRecordID& id)
 	{
-		std::lock_guard<std::mutex> lock(mutex_);
-		return withHandleLocked(id, "pause", [](const lt::torrent_handle& h) { h.pause(); });
+		std::unique_lock<std::mutex> lock(mutex_);
+		const Result<void> started = requireStartedLocked();
+		if (!started.is_ok()) {
+			return started;
+		}
+		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		if (!handle.is_ok()) {
+			return Result<void>::failed(handle.error_code(), handle.error_message());
+		}
+		return pauseLocked(handle.value(), lock, "pause");
 	}
 
 	Result<void> resume(const TorrentRecordID& id)
@@ -1404,46 +1496,146 @@ struct EngineBridge::Impl {
 			"setFilePriorities");
 	}
 
-	// WP22.D7 (ADR-022): guarded promotion of a metadata-only handle. The
-	// whole sequence runs under one critical section: tracked-handle and
-	// metainfo verification, full priority vector with exact read-back,
-	// requested paused/running state, then upload_mode cleared LAST and the
-	// temporary tracking dropped. Any failure before the guard release keeps
-	// upload_mode set and the tracking intact, so a premature commit can
-	// never open the payload floodgate and a retry stays possible.
-	Result<void> commitMetadataOnly(const TorrentRecordID& id,
-		const std::vector<std::uint8_t>& priorities, const bool paused)
+	Result<void> moveStorageLocked(const lt::torrent_handle& handle,
+		const std::string& path,
+		std::unique_lock<std::mutex>& lock,
+		const char* context = "moveStorage")
 	{
-		if (const char* invalid = priority_vector_error(priorities)) {
+		if (path.empty()) {
 			return Result<void>::failed(BridgeError::invalid_argument,
+				std::string(context) + ": destination path is empty");
+		}
+		std::error_code fs_ec;
+		const fs::path p(path);
+		const fs::file_status st = fs::status(p, fs_ec);
+		if (!fs_ec && fs::exists(st) && !fs::is_directory(st)) {
+			return Result<void>::failed(BridgeError::io,
+				std::string(context) + ": destination is not a directory");
+		}
+		try {
+			// WP-10 safety: dont_replace adopts files that already exist at the
+			// destination and never overwrites them (destination wins).
+			storage_move_completions_.erase(handle);
+			handle.move_storage(path, lt::move_flags_t::dont_replace);
+			const Deadline deadline = Clock::now() + timeout_;
+			while (Clock::now() < deadline) {
+				if (stop_requested_.load()) {
+					return Result<void>::failed(BridgeError::stopped,
+						std::string(context) + ": storage move aborted by shutdown");
+				}
+				pumpLocked();
+				auto it = storage_move_completions_.find(handle);
+				if (it != storage_move_completions_.end()) {
+					Result<void> res = std::move(it->second);
+					storage_move_completions_.erase(it);
+					return res;
+				}
+				wait_wake_.wait_for(lock, std::min(Millis{50}, timeout_),
+					[this] { return stop_requested_.load(); });
+				it = storage_move_completions_.find(handle);
+				if (it != storage_move_completions_.end()) {
+					Result<void> res = std::move(it->second);
+					storage_move_completions_.erase(it);
+					return res;
+				}
+			}
+			return Result<void>::failed(BridgeError::timeout,
+				std::string(context) + ": storage move timed out");
+		} catch (const std::exception& e) {
+			return Result<void>::failed(BridgeError::engine_failure,
+				std::string(context) + " failed: " + e.what());
+		} catch (...) {
+			return Result<void>::failed(BridgeError::internal,
+				std::string(context) + " failed: unknown exception");
+		}
+	}
+
+	// WP22.D7 (ADR-022) / WP-25 (WP25.D1): guarded promotion of a metadata-only
+	// handle. The whole sequence runs under one critical section:
+	// 1. tracked-handle and metainfo verification
+	// 2. if save_path is specified and differs from live handle, bounded moveStorage
+	//    with exact read-back verification against requested canonical path BEFORE
+	//    priority or guard mutation (failure leaves tracking and guard intact)
+	// 3. full priority vector with exact read-back
+	// 4. requested paused/running state
+	// 5. upload_mode cleared LAST and temporary tracking dropped
+	// 6. return verified effective save path
+	Result<CommitMetadataOnlyResult> commitMetadataOnly(
+		const CommitMetadataOnlySpecification& spec)
+	{
+		if (const char* invalid = priority_vector_error(spec.file_priorities)) {
+			return Result<CommitMetadataOnlyResult>::failed(BridgeError::invalid_argument,
 				std::string("commitMetadataOnly: ") + invalid);
 		}
 
 		std::unique_lock<std::mutex> lock(mutex_);
 		const Result<void> started = requireStartedLocked();
 		if (!started.is_ok()) {
-			return started;
+			return Result<CommitMetadataOnlyResult>::failed(started.error_code(), started.error_message());
 		}
 		// Only handles still tracked as temporary may pass the guard;
 		// normal/durable handles are rejected before any engine state moves.
-		if (metadata_only_.find(id) == metadata_only_.end()) {
-			return Result<void>::failed(BridgeError::not_found,
+		if (metadata_only_.find(spec.torrent_id) == metadata_only_.end()) {
+			return Result<CommitMetadataOnlyResult>::failed(BridgeError::not_found,
 				"commitMetadataOnly: id is not a pending metadata-only torrent");
 		}
-		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		Result<lt::torrent_handle> handle = findHandleLocked(spec.torrent_id);
 		if (!handle.is_ok()) {
-			return Result<void>::failed(handle.error_code(), handle.error_message());
+			return Result<CommitMetadataOnlyResult>::failed(handle.error_code(), handle.error_message());
 		}
 
 		try {
+			std::string effective_save_path;
+			const std::string initial_save_path = handle.value().status(lt::torrent_handle::query_save_path).save_path;
+			if (!spec.save_path.empty()) {
+				const std::string expanded_req = expand_tilde(spec.save_path);
+				std::error_code ec;
+				const fs::path req_p(expanded_req);
+				const fs::file_status req_st = fs::status(req_p, ec);
+				if (!ec && fs::exists(req_st) && !fs::is_directory(req_st)) {
+					return Result<CommitMetadataOnlyResult>::failed(BridgeError::io,
+						"commitMetadataOnly: destination is not a directory");
+				}
+				const fs::path req_canon_p = fs::weakly_canonical(req_p, ec);
+				const std::string target_canonical = ec ? req_p.lexically_normal().string() : req_canon_p.string();
+
+				const fs::path cur_p(initial_save_path);
+				const fs::path cur_canon_p = fs::weakly_canonical(cur_p, ec);
+				const std::string current_canonical = ec ? cur_p.lexically_normal().string() : cur_canon_p.string();
+
+				if (current_canonical != target_canonical) {
+					const Result<void> moved = moveStorageLocked(
+						handle.value(), target_canonical, lock, "commitMetadataOnly");
+					if (!moved.is_ok()) {
+						return Result<CommitMetadataOnlyResult>::failed(
+							moved.error_code(), moved.error_message());
+					}
+					const std::string after_move_path = handle.value().status(lt::torrent_handle::query_save_path).save_path;
+					const fs::path after_p(after_move_path);
+					const fs::path after_canon_p = fs::weakly_canonical(after_p, ec);
+					const std::string after_canonical = ec ? after_p.lexically_normal().string() : after_canon_p.string();
+
+					if (after_move_path != target_canonical && after_canonical != target_canonical) {
+						return Result<CommitMetadataOnlyResult>::failed(BridgeError::io,
+							"commitMetadataOnly: save_path convergence failed after move");
+					}
+					effective_save_path = after_move_path;
+				} else {
+					effective_save_path = initial_save_path;
+				}
+			} else {
+				effective_save_path = initial_save_path;
+			}
+
 			const Result<void> applied = applyPriorityVectorLocked(
-				handle.value(), priorities, lock, "commitMetadataOnly");
+				handle.value(), spec.file_priorities, lock, "commitMetadataOnly");
 			if (!applied.is_ok()) {
-				return applied;
+				return Result<CommitMetadataOnlyResult>::failed(
+					applied.error_code(), applied.error_message());
 			}
 			// Apply the requested start state BEFORE releasing the guard so no
 			// window exists where the torrent runs with unselected priorities.
-			if (paused) {
+			if (spec.paused) {
 				handle.value().pause();
 			} else {
 				handle.value().resume();
@@ -1451,16 +1643,20 @@ struct EngineBridge::Impl {
 			// The race guard is released only after the exact read-back above
 			// proved the engine adopted the selection.
 			handle.value().unset_flags(lt::torrent_flags::upload_mode);
-			metadata_only_.erase(id);
-			return Result<void>::success();
+			metadata_only_.erase(spec.torrent_id);
+
+			CommitMetadataOnlyResult result;
+			result.torrent_id = spec.torrent_id;
+			result.effective_save_path = effective_save_path;
+			return Result<CommitMetadataOnlyResult>::ok(std::move(result));
 		} catch (const lt::system_error& e) {
-			return Result<void>::failed(BridgeError::engine_failure,
+			return Result<CommitMetadataOnlyResult>::failed(BridgeError::engine_failure,
 				std::string("commitMetadataOnly failed: ") + e.what());
 		} catch (const std::exception& e) {
-			return Result<void>::failed(BridgeError::engine_failure,
+			return Result<CommitMetadataOnlyResult>::failed(BridgeError::engine_failure,
 				std::string("commitMetadataOnly failed: ") + e.what());
 		} catch (...) {
-			return Result<void>::failed(BridgeError::internal,
+			return Result<CommitMetadataOnlyResult>::failed(BridgeError::internal,
 				"commitMetadataOnly failed: unknown exception");
 		}
 	}
@@ -1567,6 +1763,8 @@ struct EngineBridge::Impl {
 			// a removed metadata-only torrent can never be committed afterwards.
 			metadata_only_.erase(token.torrent_id);
 			handles_.erase(token.torrent_id);
+			storage_move_completions_.erase(handle.value());
+			cache_flush_completions_.erase(handle.value());
 
 			RemovalResult result;
 			result.torrent_id = token.torrent_id;
@@ -1598,49 +1796,8 @@ struct EngineBridge::Impl {
 			return Result<void>::failed(handle.error_code(), handle.error_message());
 		}
 
-		try {
-			// WP-10 safety: dont_replace adopts files that already exist at the
-			// destination and never overwrites them (destination wins).
-			handle.value().move_storage(path, lt::move_flags_t::dont_replace);
-			const Deadline deadline = Clock::now() + timeout_;
-			while (Clock::now() < deadline) {
-				if (stop_requested_.load()) {
-					return Result<void>::failed(BridgeError::stopped,
-						"storage move aborted by shutdown");
-				}
-				pumpLocked();
-				// storage_moved alerts are filtered out of pending_ by
-				// convertAlert, so they are only reachable through the raw
-				// scratch buffer here.
-				for (const lt::alert* a : scratch_) {
-					if (const auto* moved = lt::alert_cast<lt::storage_moved_alert>(a)) {
-						if (moved->handle == handle.value()) {
-							return Result<void>::success();
-						}
-					}
-					if (const auto* failed =
-						lt::alert_cast<lt::storage_moved_failed_alert>(a)) {
-						if (failed->handle == handle.value()) {
-							return Result<void>::failed(BridgeError::engine_failure,
-								std::string("move_storage failed: ")
-									+ failed->error.message());
-						}
-					}
-				}
-				wait_wake_.wait_for(lock, std::min(Millis{50}, timeout_),
-					[this] { return stop_requested_.load(); });
-			}
-			return Result<void>::failed(BridgeError::timeout,
-				"storage move timed out");
-		} catch (const std::exception& e) {
-			return Result<void>::failed(BridgeError::engine_failure,
-				std::string("moveStorage failed: ") + e.what());
-		} catch (...) {
-			return Result<void>::failed(BridgeError::internal,
-				"moveStorage failed: unknown exception");
-		}
+		return moveStorageLocked(handle.value(), path, lock, "moveStorage");
 	}
-
 	Result<ResumeDataDTO> requestResumeData(const TorrentRecordID& id)
 	{
 		// unique_lock so the wait loop can release the mutex while sleeping
@@ -1782,6 +1939,26 @@ struct EngineBridge::Impl {
 		return Result<lt::torrent_handle>::ok(it->second);
 	}
 
+	Result<std::vector<std::uint8_t>> filePriorities(const TorrentRecordID& id)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		const Result<void> started = requireStartedLocked();
+		if (!started.is_ok()) {
+			return Result<std::vector<std::uint8_t>>::failed(started.error_code(), started.error_message());
+		}
+		Result<lt::torrent_handle> handle = findHandleLocked(id);
+		if (!handle.is_ok()) {
+			return Result<std::vector<std::uint8_t>>::failed(handle.error_code(), handle.error_message());
+		}
+		const std::vector<lt::download_priority_t> prios = handle.value().get_file_priorities();
+		std::vector<std::uint8_t> out;
+		out.reserve(prios.size());
+		for (const auto p : prios) {
+			out.push_back(static_cast<std::uint8_t>(static_cast<std::uint8_t>(p)));
+		}
+		return Result<std::vector<std::uint8_t>>::ok(std::move(out));
+	}
+
 	// --- members -----------------------------------------------------------
 
 	std::atomic<bool> stop_requested_{false};
@@ -1801,6 +1978,8 @@ struct EngineBridge::Impl {
 	std::string default_download_dir_;
 	Millis timeout_{kDefaultTimeoutMs};
 	Clock::time_point started{Clock::now()};
+	std::map<lt::torrent_handle, Result<void>> storage_move_completions_;
+	std::map<lt::torrent_handle, Result<void>> cache_flush_completions_;
 };
 
 namespace detail {
@@ -1954,19 +2133,31 @@ Result<void> EngineBridge::setFilePriorities(const TorrentRecordID& id,
 	}
 }
 
-Result<void> EngineBridge::commitMetadataOnly(const TorrentRecordID& id,
-	const std::vector<std::uint8_t>& priorities, bool paused) noexcept
+Result<CommitMetadataOnlyResult> EngineBridge::commitMetadataOnly(
+	const CommitMetadataOnlySpecification& spec) noexcept
 {
 	try {
-		return impl_->commitMetadataOnly(id, priorities, paused);
+		return impl_->commitMetadataOnly(spec);
 	} catch (const std::exception& e) {
-		return Result<void>::failed(BridgeError::internal, e.what());
+		return Result<CommitMetadataOnlyResult>::failed(BridgeError::internal, e.what());
 	} catch (...) {
-		return Result<void>::failed(BridgeError::internal,
+		return Result<CommitMetadataOnlyResult>::failed(BridgeError::internal,
 			detail::internal_message("commitMetadataOnly: unknown exception"));
 	}
 }
 
+Result<std::vector<std::uint8_t>> EngineBridge::filePriorities(
+	const TorrentRecordID& id) noexcept
+{
+	try {
+		return impl_->filePriorities(id);
+	} catch (const std::exception& e) {
+		return Result<std::vector<std::uint8_t>>::failed(BridgeError::internal, e.what());
+	} catch (...) {
+		return Result<std::vector<std::uint8_t>>::failed(BridgeError::internal,
+			detail::internal_message("filePriorities: unknown exception"));
+	}
+}
 Result<void> EngineBridge::editTrackers(const TorrentRecordID& id,
 	const TrackerTiers& tracker_tiers) noexcept
 {

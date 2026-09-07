@@ -125,6 +125,22 @@ struct AddSpecification {
 	std::vector<std::uint8_t> file_priorities;
 };
 
+// WP-25 (WP25.D1): specification for guarded promotion of a metadata-only handle.
+struct CommitMetadataOnlySpecification {
+	TorrentRecordID torrent_id;
+	std::vector<std::uint8_t> file_priorities;
+	bool paused = false;
+	// WP25.D1: optional destination save path. If empty, the handle's existing
+	// save_path is preserved without relocation.
+	std::string save_path;
+};
+
+// WP-25 (WP25.D1): outcome of guarded promotion including verified effective save path.
+struct CommitMetadataOnlyResult {
+	TorrentRecordID torrent_id;
+	std::string effective_save_path;
+};
+
 struct BootReport {
 	std::string version;   // bridge + libtorrent versions
 	std::string peer_id;   // configured wire peer-id prefix (see above)
@@ -316,6 +332,9 @@ public:
 	/// loader. This is a read-only verifier and does not require a running
 	/// session or create an engine handle.
 	Result<IndependentTorrentIdentity> verifyTorrent(const std::vector<char>& torrent_file) noexcept;
+	// WP-26: Quiesces engine disk-I/O for the torrent. Pauses downloads/uploads
+	// and boundedly waits for cache_flushed_alert to ensure all disk write buffers
+	// have flushed and all open file handles are closed.
 	Result<void> pause(const TorrentRecordID& id) noexcept;
 	Result<void> resume(const TorrentRecordID& id) noexcept;
 	Result<void> requestRecheck(const TorrentRecordID& id) noexcept;
@@ -332,15 +351,18 @@ public:
 	// reports the requested selection as applied.
 	Result<void> setFilePriorities(const TorrentRecordID& id,
 		const std::vector<std::uint8_t>& priorities) noexcept;
-	// WP22.D7 (ADR-022): guarded promotion of a metadata-only handle. Under
-	// one critical section: the id must still be tracked as temporary and
-	// carry metainfo, the full priority vector is applied with an exact
-	// bounded get_file_priorities read-back, then the requested paused state
-	// is applied, then upload_mode is cleared LAST and temporary tracking is
-	// dropped. Any failure before the guard release leaves upload_mode set
-	// and returns a typed failure.
-	Result<void> commitMetadataOnly(const TorrentRecordID& id,
-		const std::vector<std::uint8_t>& priorities, bool paused) noexcept;
+	Result<std::vector<std::uint8_t>> filePriorities(const TorrentRecordID& id) noexcept;
+	// WP22.D7 (ADR-022) / WP-25 (WP25.D1): guarded promotion of a metadata-only
+	// handle. Under one critical section: the id must still be tracked as
+	// temporary and carry metainfo; if save_path is non-empty and differs from
+	// the handle's current location, storage is moved (dont_replace) and the
+	// resulting save_path is verified against the canonical target; the full
+	// priority vector is applied with an exact bounded get_file_priorities
+	// read-back; then the requested paused state is applied; then upload_mode is
+	// cleared LAST and temporary tracking is dropped. Any failure before guard
+	// release leaves upload_mode set, tracking intact, and returns a typed failure.
+	Result<CommitMetadataOnlyResult> commitMetadataOnly(
+		const CommitMetadataOnlySpecification& spec) noexcept;
 	Result<void> editTrackers(const TorrentRecordID& id, const TrackerTiers& tracker_tiers) noexcept;
 	// Reject-only compatibility stub; accepted edits use TrackerTiers.
 	Result<void> editTrackers(const TorrentRecordID& id, const std::vector<std::string>& trackers) noexcept;

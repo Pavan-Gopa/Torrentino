@@ -66,6 +66,11 @@ struct TrashService {
             root: manifest.payloadRootPath,
             absolutePath: absolute
         ) {
+            if case .missing = issue {
+                if entry.kind == .directory || entry.fileIdentity == nil {
+                    return .trashed(relativePath: entry.relativePath, sizeBytes: 0)
+                }
+            }
             return .failed(failure(from: issue, path: absolute))
         }
         switch entry.kind {
@@ -73,18 +78,28 @@ struct TrashService {
             if let issue = FileSafetyValidator.verifyFileIdentity(
                 absolutePath: absolute,
                 expectedSize: entry.sizeBytes,
-                expectedIdentity: entry.fileIdentity
+                expectedIdentity: entry.fileIdentity,
+                allowPartial: true
             ) {
+                if case .missing = issue, entry.fileIdentity == nil {
+                    return .trashed(relativePath: entry.relativePath, sizeBytes: 0)
+                }
                 return .failed(failure(from: issue, path: absolute))
             }
         case .directory:
             if let issue = FileSafetyValidator.verifyDirectoryIdentity(absolutePath: absolute) {
+                if case .missing = issue {
+                    return .trashed(relativePath: entry.relativePath, sizeBytes: 0)
+                }
                 return .failed(failure(from: issue, path: absolute))
             }
             // Gate 1: never trash a directory that still contains anything.
             // Manifest children were handled first (leaf-first ordering), so a
             // remaining entry is unmanifested (or shared) and must survive.
             if let issue = FileSafetyValidator.verifyDirectoryEmpty(absolutePath: absolute) {
+                if case .missing = issue {
+                    return .trashed(relativePath: entry.relativePath, sizeBytes: 0)
+                }
                 return .failed(failure(from: issue, path: absolute))
             }
         }
@@ -131,6 +146,16 @@ struct TrashService {
             return TrashItemFailure(
                 code: "not_empty",
                 message: "directory still contains items at \(path)"
+            )
+        case .permissionDenied(let foundAt):
+            return TrashItemFailure(
+                code: "permission_denied",
+                message: "permission denied at \(foundAt)"
+            )
+        case .unavailableRoot(let foundAt):
+            return TrashItemFailure(
+                code: "unavailable_root",
+                message: "payload root unavailable at \(foundAt)"
             )
         }
     }
