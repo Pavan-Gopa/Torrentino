@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Settings or dialog window to main.
     static let mainWindowTitle = "Torrentino"
     private var statusItem: NSStatusItem?
+    private var menuBarDownloads: MenuBarDownloadsController?
     private var fallbackMainWindowController: NSWindowController?
     private let creatorServiceRouter = CreatorServiceRouter()
 
@@ -91,6 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         self.statusItem = item
+        menuBarDownloads = MenuBarDownloadsController(
+            statusItem: item,
+            menu: menu,
+            baseImage: AppLogo.image,
+            torrents: AppContext.transfers.$torrents,
+            pause: { AppContext.transfers.pauseIDs($0) },
+            resume: { AppContext.transfers.resumeIDs($0) },
+            reveal: { AppContext.transfers.revealTorrentFolder($0) }
+        )
     }
 
     private func attachWindowDelegate() {
